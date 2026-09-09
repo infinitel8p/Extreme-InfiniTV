@@ -157,6 +157,16 @@ function writePersistedLocale(code: string | null): void {
   }
 }
 
+// Build-time stamp from the layouts; a version compare replaces diffing ~150KB of JSON.
+function getAppVersionStamp(): string | null {
+  try {
+    if (typeof document === "undefined") return null
+    return document.querySelector('meta[name="x-app-version"]')?.getAttribute("content") || null
+  } catch {
+    return null
+  }
+}
+
 function writeCachedMessages(
   code: string,
   messages: LocaleMessages,
@@ -170,9 +180,10 @@ function writeCachedMessages(
     }
     // Reuse the caller's stringified messages instead of re-serializing them
     const messagesJson = serializedMessages ?? JSON.stringify(messages)
+    const appVersion = getAppVersionStamp()
     localStorage.setItem(
       LOCALE_MESSAGES_STORAGE_KEY,
-      `{"code":${JSON.stringify(code)},"messages":${messagesJson}}`
+      `{"code":${JSON.stringify(code)},"appVersion":${JSON.stringify(appVersion)},"messages":${messagesJson}}`
     )
   } catch {
     /* ignore quota / privacy-mode errors */
@@ -200,7 +211,7 @@ function writePrepaintMessages(code: string, messages: LocaleMessages): void {
   }
 }
 
-function readCachedMessages(): { code: LocaleCode; messages: LocaleMessages } | null {
+function readCachedMessages(): { code: LocaleCode; messages: LocaleMessages; appVersion: string | null } | null {
   try {
     if (typeof localStorage === "undefined") return null
     const raw = localStorage.getItem(LOCALE_MESSAGES_STORAGE_KEY)
@@ -213,7 +224,11 @@ function readCachedMessages(): { code: LocaleCode; messages: LocaleMessages } | 
       parsed.messages &&
       typeof parsed.messages === "object"
     ) {
-      return { code: parsed.code, messages: parsed.messages as LocaleMessages }
+      return {
+        code: parsed.code,
+        messages: parsed.messages as LocaleMessages,
+        appVersion: typeof parsed.appVersion === "string" ? parsed.appVersion : null,
+      }
     }
   } catch {
     /* corrupt cache - bundled async loader will recover */
@@ -320,7 +335,13 @@ let _initPromise: Promise<void> | null = null
 // the bundled JSON against what was actually served, and only touch that one
 // locale.
 let seededLocaleCode: LocaleCode | null = null
-let seededMessages: LocaleMessages | null = null
+let seededAppVersion: string | null = null
+
+/** True when the cached locale should be reloaded from the bundle: a version mismatch, or no stamp recorded at all. */
+export function shouldRefreshLocaleCache(seededVersion: string | null, currentVersion: string | null): boolean {
+  if (!seededVersion || !currentVersion) return true
+  return seededVersion !== currentVersion
+}
 
 // Initialise i18n at app boot
 export function initI18n(): Promise<void> {
@@ -329,7 +350,7 @@ export function initI18n(): Promise<void> {
     if (cached && !cache.has(cached.code)) cache.set(cached.code, cached.messages)
     if (cached) {
       seededLocaleCode = cached.code
-      seededMessages = cached.messages
+      seededAppVersion = cached.appVersion
     }
     const code = detectLocale()
     _initPromise = setLocale(code === "en" ? "en" : code).then(() => {
@@ -347,17 +368,16 @@ export function initI18n(): Promise<void> {
 async function refreshSeededLocale(): Promise<void> {
   const code = seededLocaleCode
   if (!code || code === "en") return
+  // Dev builds keep one version across edits, so they always refresh.
+  if (!import.meta.env.DEV && !shouldRefreshLocaleCache(seededAppVersion, getAppVersionStamp())) return
   try {
     const fresh = await LOCALE_LOADERS[code]()
     // Always replace the in-memory entry so a later locale round-trip can't
     // resurrect the stale snapshot.
     cache.set(code, fresh)
-    const staleMessages = seededMessages
-    const freshMessagesJson = JSON.stringify(fresh)
-    const changed = !staleMessages || freshMessagesJson !== JSON.stringify(staleMessages)
-    if (changed && code === activeCode) {
+    if (code === activeCode) {
       activeMessages = fresh
-      writeCachedMessages(code, fresh, freshMessagesJson)
+      writeCachedMessages(code, fresh)
       writePrepaintMessages(code, fresh)
       if (typeof document !== "undefined") {
         applyI18nDOM()

@@ -343,15 +343,13 @@ describe("network log session persistence", () => {
     sessionStorage.clear()
   })
 
-  async function flushCoalescedTick(): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  }
-
   it("survives a simulated navigation via module re-import", async () => {
+    vi.useFakeTimers()
     const { recordNetLog } = await import("../src/scripts/lib/net-log")
     recordNetLog({ url: "https://x.test/1", status: 200 })
     recordNetLog({ url: "https://x.test/2", status: 200 })
-    await flushCoalescedTick()
+    vi.runAllTimers()
+    vi.useRealTimers()
 
     vi.resetModules()
     const { getNetworkLog } = await import("../src/scripts/lib/net-log")
@@ -365,7 +363,6 @@ describe("network log session persistence", () => {
   it("clears the persisted copy so a later import sees nothing", async () => {
     const { recordNetLog, clearNetworkLog } = await import("../src/scripts/lib/net-log")
     recordNetLog({ url: "https://x.test/1", status: 200 })
-    await flushCoalescedTick()
     clearNetworkLog()
 
     vi.resetModules()
@@ -411,16 +408,18 @@ describe("network log session persistence", () => {
   })
 
   it("keeps recording in memory when sessionStorage.setItem throws", async () => {
+    vi.useFakeTimers()
     const { recordNetLog, getNetworkLog } = await import("../src/scripts/lib/net-log")
     const setItemSpy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("QuotaExceededError")
     })
 
     expect(() => recordNetLog({ url: "https://x.test/1", status: 200 })).not.toThrow()
-    await flushCoalescedTick()
+    expect(() => vi.runAllTimers()).not.toThrow()
 
     expect(getNetworkLog().entries.length).toBe(1)
     setItemSpy.mockRestore()
+    vi.useRealTimers()
   })
 
   it("coalesces persistence writes to at most one setItem per tick for a burst of records", async () => {
@@ -435,6 +434,26 @@ describe("network log session persistence", () => {
     vi.runAllTimers()
     expect(setItemSpy).toHaveBeenCalledTimes(1)
 
+    setItemSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it("dispatches the change event immediately, ahead of the debounced session write", async () => {
+    vi.useFakeTimers()
+    const { recordNetLog } = await import("../src/scripts/lib/net-log")
+    const listener = vi.fn()
+    document.addEventListener(NET_LOG_EVENT, listener)
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem")
+
+    recordNetLog({ url: "https://x.test/1", status: 200 })
+    vi.advanceTimersByTime(0)
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(setItemSpy).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(2000)
+    expect(setItemSpy).toHaveBeenCalledTimes(1)
+
+    document.removeEventListener(NET_LOG_EVENT, listener)
     setItemSpy.mockRestore()
     vi.useRealTimers()
   })

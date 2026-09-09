@@ -228,9 +228,31 @@ function queueDispatch(): void {
   dispatchQueued = true
   setTimeout(() => {
     dispatchQueued = false
-    persistToSession(store.entries)
     dispatchNetLogEvent()
   }, 0)
+}
+
+const SESSION_PERSIST_DEBOUNCE_MS = 2000
+let sessionPersistTimer: ReturnType<typeof setTimeout> | null = null
+
+function schedulePersist(): void {
+  if (sessionPersistTimer) return
+  sessionPersistTimer = setTimeout(() => {
+    sessionPersistTimer = null
+    persistToSession(store.entries)
+  }, SESSION_PERSIST_DEBOUNCE_MS)
+}
+
+function flushPersist(): void {
+  if (sessionPersistTimer) {
+    clearTimeout(sessionPersistTimer)
+    sessionPersistTimer = null
+  }
+  persistToSession(store.entries)
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("pagehide", flushPersist)
 }
 
 export function recordNetLog(input: NetLogInput): void {
@@ -243,6 +265,7 @@ export function recordNetLog(input: NetLogInput): void {
     // Kind gating already happened above (the early return skips images unless opted in).
     if (isVerboseLogging()) log.debug("[xt:net]", formatNetLogLine(entry))
     queueDispatch()
+    schedulePersist()
   } catch {}
 }
 
@@ -257,6 +280,10 @@ export function getNetworkLog(): NetworkLogSnapshot {
 
 export function clearNetworkLog(): void {
   try {
+    if (sessionPersistTimer) {
+      clearTimeout(sessionPersistTimer)
+      sessionPersistTimer = null
+    }
     store.entries = []
     store.dropped = 0
     store.recorded = 0

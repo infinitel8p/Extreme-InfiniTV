@@ -329,11 +329,12 @@ async function ingestKind(
     const playlistFile = fileFor("playlist")
     if (!playlistFile) return []
     const text = await readStaged(playlistFile.step)
+    let parsed: ReturnType<typeof parseM3U> | undefined
     try {
       // Raw comma-joined list, matching the format catalog.js writes to the same key.
-      const { epgUrls } = parseM3U(text)
-      if (epgUrls.length && typeof localStorage !== "undefined") {
-        localStorage.setItem(`xt_m3u_epg:${context.pid}`, epgUrls.join(","))
+      parsed = parseM3U(text)
+      if (parsed.epgUrls.length && typeof localStorage !== "undefined") {
+        localStorage.setItem(`xt_m3u_epg:${context.pid}`, parsed.epgUrls.join(","))
       }
     } catch {}
     const rows = m3uToChannelList(
@@ -344,6 +345,7 @@ async function ingestKind(
       context.entry?.manifestType,
       context.entry?.drmScheme,
       context.entry?.licenseKey,
+      parsed?.entries,
     )
     setCached(context.pid, "m3u", rows, CHANNELS_TTL_MS)
     return rows

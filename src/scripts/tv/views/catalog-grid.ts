@@ -15,8 +15,7 @@ import {
   setHideWatched,
   isCompleted,
   getProgress,
-  getSeriesEpisodeProgress,
-  hasSeriesWatchedOverride,
+  getSeriesWatchedMap,
 } from "@/scripts/lib/preferences.js"
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { CANONICAL_GENRES, type GenreId } from "@/scripts/lib/genres.ts"
@@ -335,10 +334,8 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       function isWatched(row: CatalogRow): boolean {
         if (!activePlaylistId) return false
         if (kind === "vod") return isCompleted(activePlaylistId, "vod", row.id)
-        if (hasSeriesWatchedOverride(activePlaylistId, row.id)) return true
         // No total episode count here; only hide once every recorded episode is completed.
-        const progress = getSeriesEpisodeProgress(activePlaylistId, row.id)
-        return progress.completedIds.length > 0 && !progress.hasIncompleteEpisode
+        return getSeriesWatchedMap(activePlaylistId).has(row.id)
       }
 
       function vodProgressPercent(id: number): number | undefined {

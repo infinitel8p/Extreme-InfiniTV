@@ -212,6 +212,8 @@ export interface NativeVideoHoleVars {
   "--xt-video-r": string
 }
 
+const NATIVE_VIDEO_HOLE_PROPERTIES = ["--xt-video-x", "--xt-video-y", "--xt-video-w", "--xt-video-h", "--xt-video-r"] as const
+
 /** CSS-pixel hole geometry for the transparent webview cutout; see native-video-hole-contract.md. */
 export function cssRectToNativeVideoHoleVars(rect: {
   x: number
@@ -665,7 +667,7 @@ export async function createMpvEmbeddedHandle(
 
   // Sole choke point for hole/placeholder changes: every trigger below just updates state and calls this.
   function applySurface(): void {
-    const cssRect = cssRectOf(container)
+    const cssRect = cssRectWithCachedRadius()
     const hasValidBounds = cssRect.width > 0 && cssRect.height > 0
     const loading = hasLoadedSource && !revealed
     const result = computeMpvSurface({ nativeState, revealed, pageBounds: hasValidBounds, loading })
@@ -918,29 +920,52 @@ export async function createMpvEmbeddedHandle(
 
   // See native-video-hole-contract.md: the webview must cut a transparent hole for the video below it.
   // Owner stamp: a stale handle's dispose() can't clear a hole it no longer owns.
+  // Vars live on the hole owner (never <html>), so a resize only recalcs that subtree's style.
+  let lastHoleOwner: HTMLElement | null = null
   function clearNativeVideoHole(): void {
     // Resetting on an already-closed hole re-pushes bounds and loops through xt:mpv-surface.
     if (document.documentElement.getAttribute("data-native-video-owner") === sessionId) {
       document.documentElement.removeAttribute("data-native-video")
       document.documentElement.removeAttribute("data-native-video-owner")
+      if (lastHoleOwner) {
+        for (const property of NATIVE_VIDEO_HOLE_PROPERTIES) lastHoleOwner.style.removeProperty(property)
+        lastHoleOwner = null
+      }
       resetBoundsCache()
     }
   }
   function publishNativeVideoHole(cssRect: { x: number; y: number; width: number; height: number; radius?: string }): void {
-    document.documentElement.setAttribute("data-native-video", "on")
-    document.documentElement.setAttribute("data-native-video-owner", sessionId)
+    const root = document.documentElement
+    if (root.getAttribute("data-native-video") !== "on") root.setAttribute("data-native-video", "on")
+    if (root.getAttribute("data-native-video-owner") !== sessionId) root.setAttribute("data-native-video-owner", sessionId)
+    const owner = container.closest<HTMLElement>(".xt-video-hole") ?? document.body
+    if (owner !== lastHoleOwner) {
+      if (lastHoleOwner) for (const property of NATIVE_VIDEO_HOLE_PROPERTIES) lastHoleOwner.style.removeProperty(property)
+      lastHoleOwner = owner
+    }
     const vars = cssRectToNativeVideoHoleVars(cssRect)
     for (const [property, value] of Object.entries(vars)) {
-      document.documentElement.style.setProperty(property, value)
+      owner.style.setProperty(property, value)
     }
   }
 
   let rafHandle: number | null = null
   let lastCssBounds: Bounds | null = null
   let lastPushedBounds: Bounds | null = null
+  // getComputedStyle forces a full style recalc; the radius only changes on the resets below.
+  let cachedContainerRadius: string | null = null
+  function cssRectWithCachedRadius(): { x: number; y: number; width: number; height: number; radius: string } {
+    const rect = container.getBoundingClientRect()
+    if (cachedContainerRadius == null) {
+      const style = window.getComputedStyle(container)
+      cachedContainerRadius = style.borderRadius || style.borderTopLeftRadius
+    }
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, radius: cachedContainerRadius }
+  }
   function resetBoundsCache(): void {
     lastCssBounds = null
     lastPushedBounds = null
+    cachedContainerRadius = null
   }
   function scheduleBoundsPush(): void {
     if (disposed || rafHandle != null) return
@@ -951,7 +976,7 @@ export async function createMpvEmbeddedHandle(
   }
   function pushBounds(): void {
     if (disposed || !container.isConnected) return
-    const cssRect = cssRectOf(container)
+    const cssRect = cssRectWithCachedRadius()
     if (cssRect.width <= 0 || cssRect.height <= 0) return
     const cssBounds = cssRectToPhysicalBounds(cssRect, 1)
     const boundsChanged = !boundsEqual(cssBounds, lastCssBounds)

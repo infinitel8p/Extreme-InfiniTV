@@ -128,6 +128,11 @@ export function createHero(root: HTMLElement): HeroHandle {
   let currentBackdropKey = ""
   let backdropGeneration = 0
   let currentTextSignature = ""
+  // Lite tier reuses one layer/image in place instead of layering a crossfade.
+  let liteLayer: HTMLDivElement | null = null
+  let liteFlatBg: HTMLDivElement | null = null
+  let liteImg: HTMLImageElement | null = null
+  let liteImgKind: "poster" | "logo" | "backdrop" | "banner" | undefined
   let textSwapAnimation: Animation | null = null
   let textSwapTimerId = 0
   const kenBurnsByLayer = new Map<HTMLElement, Animation>()
@@ -215,6 +220,57 @@ export function createHero(root: HTMLElement): HeroHandle {
     return { layer, images: [img], realBackdropImg: imageKind === "banner" ? null : img }
   }
 
+  /** Reuses one layer/image across calls: swap `src` in place, no new DOM, no crossfade, no decode(). */
+  function setLiteBackdrop(
+    imageUrl: string,
+    imageKind: "poster" | "logo" | "backdrop" | "banner" | undefined
+  ): void {
+    if (!liteLayer) {
+      liteLayer = document.createElement("div")
+      liteLayer.className = "absolute inset-0"
+      backdropWrap.appendChild(liteLayer)
+    }
+
+    if (imageKind === "logo") {
+      if (!liteFlatBg) {
+        liteFlatBg = document.createElement("div")
+        liteFlatBg.className = "absolute inset-0 bg-surface-2"
+        liteLayer.appendChild(liteFlatBg)
+      }
+      liteFlatBg.hidden = false
+      if (!liteImg || liteImgKind !== "logo") {
+        liteImg?.remove()
+        liteImg = document.createElement("img")
+        liteImg.alt = ""
+        liteImg.loading = "lazy"
+        liteImg.decoding = "async"
+        liteImg.className = "absolute right-[6%] top-1/2 max-h-[55%] max-w-[42%] -translate-y-1/2 object-contain"
+        liteLayer.appendChild(liteImg)
+        liteImgKind = "logo"
+      }
+      liteImg.dataset.backdropUrl = imageUrl
+      mountCachedImage(liteImg, imageUrl, "logo")
+      return
+    }
+
+    if (liteFlatBg) liteFlatBg.hidden = true
+    if (!liteImg || liteImgKind === "logo") {
+      liteImg?.remove()
+      liteImg = document.createElement("img")
+      liteImg.alt = ""
+      liteImg.loading = "lazy"
+      liteImg.decoding = "async"
+      liteLayer.appendChild(liteImg)
+    }
+    liteImg.className =
+      imageKind === "banner"
+        ? "absolute inset-0 h-full w-full object-cover object-right"
+        : "absolute inset-0 h-full w-full object-cover"
+    liteImg.dataset.backdropUrl = imageUrl
+    liteImgKind = imageKind
+    mountCachedImage(liteImg, imageUrl, imageKind === "poster" ? "poster" : "backdrop-hero")
+  }
+
   function setBackdrop(
     imageUrl: string | null | undefined,
     imageKind: "poster" | "logo" | "backdrop" | "banner" | undefined
@@ -222,10 +278,14 @@ export function createHero(root: HTMLElement): HeroHandle {
     const key = backdropKeyFor(imageUrl, imageKind)
     if (key === currentBackdropKey) return
     currentBackdropKey = key
-    const generation = ++backdropGeneration
 
     if (!imageUrl) {
+      backdropGeneration++
       for (const layer of Array.from(backdropWrap.children) as HTMLElement[]) removeLayer(layer)
+      liteLayer = null
+      liteFlatBg = null
+      liteImg = null
+      liteImgKind = undefined
       clearAmbient(section)
       return
     }
@@ -234,6 +294,13 @@ export function createHero(root: HTMLElement): HeroHandle {
     void applyAmbient(section, imageUrl, {
       kind: imageKind === "backdrop" || imageKind === "banner" ? "backdrop-hero" : "poster",
     })
+
+    if (memoryConservative()) {
+      setLiteBackdrop(imageUrl, imageKind)
+      return
+    }
+
+    const generation = ++backdropGeneration
 
     if (!motionAllowed()) {
       for (const layer of Array.from(backdropWrap.children) as HTMLElement[]) removeLayer(layer)
@@ -373,6 +440,10 @@ export function createHero(root: HTMLElement): HeroHandle {
     backdropGeneration++
     currentBackdropKey = ""
     for (const layer of Array.from(backdropWrap.children) as HTMLElement[]) removeLayer(layer)
+    liteLayer = null
+    liteFlatBg = null
+    liteImg = null
+    liteImgKind = undefined
     clearAmbient(section)
     setCta(undefined)
     activateButton.hidden = true

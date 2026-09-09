@@ -130,6 +130,21 @@ html[data-tv-ui] .tv-edge-mask::before {
   pointer-events: none;
   box-shadow: inset 0 0 0 1px var(--color-bg);
 }
+html[data-tv-ui][data-tv-effects="lite"] .tv-edge-mask::before {
+  content: none;
+}
+
+/* Lite / perf mode: rail still expands, but without the width transition and shadow. */
+html[data-tv-ui][data-perf-mode="on"] .tv-rail-surface,
+html[data-tv-ui][data-tv-effects="lite"] .tv-rail-surface {
+  transition: none;
+}
+html[data-tv-ui][data-perf-mode="on"] .tv-rail-surface:hover,
+html[data-tv-ui][data-tv-effects="lite"] .tv-rail-surface:hover,
+html[data-tv-ui][data-perf-mode="on"] .tv-rail-surface:focus-within,
+html[data-tv-ui][data-tv-effects="lite"] .tv-rail-surface:focus-within {
+  box-shadow: none;
+}
 
 /* focus.ts keepFocusedInView() toggles this class before translating the track. */
 .tv-keep-in-view-animated {

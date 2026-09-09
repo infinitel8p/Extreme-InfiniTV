@@ -229,8 +229,8 @@ function initSpatialNavForMain(): void {
   })
   // Registered through focus.ts so every later view section stays ahead of it.
   registerMainFocusSection({
-    selector:
-      "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
+    selector: "a, button, input, textarea, select, [tabindex]:not([tabindex='-1'])",
+    root: document.getElementById("tv-main") || document.body,
     leaveFor: isRtl ? { right: `@${NAV_SECTION_ID}`, up: "", down: "" } : { left: `@${NAV_SECTION_ID}`, up: "", down: "" },
     navigableFilter: (elem: Element) => {
       if (elem.closest("#tv-nav")) return false
@@ -348,15 +348,21 @@ function restoreFocus(): void {
   window.addEventListener("keydown", noteInteraction, true)
   window.addEventListener("pointerdown", noteInteraction, true)
 
+  // One querySelector per frame, not per MutationObserver batch.
+  let pendingRestoreFrame: number | null = null
   const observer = new MutationObserver(() => {
-    const appeared = main.querySelector<HTMLElement>(storedSelector)
-    if (!appeared) return
-    stopRestoreWait()
-    const active = document.activeElement
-    // A view autofocusing its own first row is not the user moving on.
-    const userMovedOn =
-      userInteracted && active instanceof HTMLElement && main.contains(active) && active !== focusAtWaitStart
-    if (!userMovedOn) appeared.focus()
+    if (pendingRestoreFrame != null) return
+    pendingRestoreFrame = requestAnimationFrame(() => {
+      pendingRestoreFrame = null
+      const appeared = main.querySelector<HTMLElement>(storedSelector)
+      if (!appeared) return
+      stopRestoreWait()
+      const active = document.activeElement
+      // A view autofocusing its own first row is not the user moving on.
+      const userMovedOn =
+        userInteracted && active instanceof HTMLElement && main.contains(active) && active !== focusAtWaitStart
+      if (!userMovedOn) appeared.focus()
+    })
   })
   observer.observe(main, { childList: true, subtree: true })
 
@@ -369,6 +375,10 @@ function restoreFocus(): void {
 
   cancelRestoreWait = () => {
     observer.disconnect()
+    if (pendingRestoreFrame != null) {
+      cancelAnimationFrame(pendingRestoreFrame)
+      pendingRestoreFrame = null
+    }
     window.clearTimeout(timeoutId)
     window.removeEventListener("keydown", noteInteraction, true)
     window.removeEventListener("pointerdown", noteInteraction, true)
@@ -408,10 +418,12 @@ function mountFocusMemory(): void {
     const active = document.activeElement
     const focusKeyEl = active instanceof Element ? active.closest<HTMLElement>("[data-focus-key]") : null
     // Leaving via the rail must not overwrite a still-useful key.
-    if (!focusKeyEl || !document.getElementById("tv-main")?.contains(focusKeyEl)) return
-    try {
-      sessionStorage.setItem(focusKeyStorageKey(), focusKeyEl.dataset.focusKey || "")
-    } catch {}
+    if (focusKeyEl && document.getElementById("tv-main")?.contains(focusKeyEl)) {
+      try {
+        sessionStorage.setItem(focusKeyStorageKey(), focusKeyEl.dataset.focusKey || "")
+      } catch {}
+    }
+    lastMainFocused = null
   })
 
   document.addEventListener(TV_VIEW_MOUNTED_EVENT, (event) => {

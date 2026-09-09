@@ -26,7 +26,7 @@ import {
   isLanguageGroupingExplicitlyEnabled,
   type CatalogGroupingIndex,
 } from "@/scripts/lib/language-groups.ts"
-import { buildLanguageChips, setLanguageChipsOffset } from "@/scripts/lib/entry-card.ts"
+import { buildLanguageChips, setLanguageChipsOffset, LANGUAGE_CHIPS_CLASS } from "@/scripts/lib/entry-card.ts"
 import {
   loadProgrammes,
   getProgrammesSync,
@@ -79,8 +79,10 @@ const CATALOG_WARMED_EVENT = "xt:catalog-warmed"
 const CATALOG_WARMING_START_EVENT = "xt:catalog-warming-start"
 const CATALOG_WARMING_PROGRESS_EVENT = "xt:catalog-warming-progress"
 
-const RAIL_ITEM_LIMIT = 20
+const RAIL_ITEM_LIMIT_FULL = 20
+const RAIL_ITEM_LIMIT_LITE = 12
 const HERO_FOCUS_DEBOUNCE_MS = 80
+const HERO_FOCUS_DEBOUNCE_MS_LITE = 350
 const VERTICAL_OFFSET_RATIO = 0.4
 const CONTINUE_WATCHING_LIVE_CHANNEL_LIMIT = 5
 const CONTINUE_WATCHING_LIVE_CHANNEL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
@@ -227,13 +229,14 @@ function decorateRailChips(
   items: CardItem[],
   chipInfoByFocusKey: Map<string, ChipInfoRecord>
 ): void {
+  if (!chipInfoByFocusKey.size) return
   const cards = rail.el.querySelectorAll<HTMLElement>("[data-focus-key]")
   cards.forEach((card, index) => {
     const item = items[index]
     const info = item && chipInfoByFocusKey.get(cardFocusKey(item.railId, item.kind as CardKind, item.id))
     if (!info) return
     const posterWrap = card.querySelector<HTMLElement>("[data-poster-wrap]")
-    if (!posterWrap) return
+    if (!posterWrap || posterWrap.querySelector(`.${LANGUAGE_CHIPS_CLASS}`)) return
     const chip = buildLanguageChips(info.tags, info.variantCount, getActiveLocale(), info.displayTag)
     if (!chip) return
     posterWrap.appendChild(chip)
@@ -439,7 +442,7 @@ function mergeContinueWatchingRows(progressRows: any[], liveRecents: LiveRecentE
     ...recentLiveChannels.map((row) => ({ source: "live" as const, row, ts: row.ts || 0 })),
   ]
   merged.sort((a, b) => b.ts - a.ts)
-  return merged.slice(0, RAIL_ITEM_LIMIT)
+  return merged.slice(0, railItemLimit())
 }
 
 function buildContinueWatchingItems(
@@ -452,7 +455,7 @@ function buildContinueWatchingItems(
   onBackdropResolved: (focusKey: string) => void,
   onLiveNowNextResolved: (focusKey: string) => void
 ): CardItem[] {
-  const progressRows = getContinueWatching(playlistId, RAIL_ITEM_LIMIT) as any[]
+  const progressRows = getContinueWatching(playlistId, railItemLimit()) as any[]
   const liveRecents = getRecents(playlistId, "live") as LiveRecentEntry[]
   const merged = mergeContinueWatchingRows(progressRows, liveRecents)
 
@@ -618,7 +621,7 @@ function buildFavoritesItems(
   const raw = (getGlobalFavorites(playlistId) as Array<{ kind: "live" | "vod" | "series"; id: number }>).filter(
     (entry) => filterKind === "all" || entry.kind === filterKind
   )
-  const shown = raw.slice(0, RAIL_ITEM_LIMIT)
+  const shown = raw.slice(0, railItemLimit())
   const wantedIds = (wantedKind: string) =>
     new Set<number>(shown.filter((entry) => entry.kind === wantedKind).map((entry) => Number(entry.id)))
   const vodRows = (getCached(playlistId, "vod")?.data || []) as CatalogRow[]
@@ -734,7 +737,7 @@ function buildWatchlistItems(
   }
   rows.sort((left, right) => right.ts - left.ts)
 
-  const shown = rows.slice(0, RAIL_ITEM_LIMIT)
+  const shown = rows.slice(0, railItemLimit())
   const wantedIds = (wantedKind: "vod" | "series") =>
     new Set<number>(shown.filter((row) => row.kind === wantedKind).map((row) => row.id))
   const vodById = pickRowsById(vodRows, wantedIds("vod"))
@@ -793,16 +796,16 @@ interface NewestEntry {
   ts: number
 }
 
-/** Keeps the RAIL_ITEM_LIMIT newest rows in one pass; sorting a 20k catalog for 20 cards was the mount cost. */
-function collectNewest(rows: CatalogRow[], kind: "vod" | "series", newest: NewestEntry[]): void {
+/** Keeps the railItemLimit() newest rows in one pass; sorting a 20k catalog for a handful of cards was the mount cost. */
+function collectNewest(rows: CatalogRow[], kind: "vod" | "series", newest: NewestEntry[], limit: number): void {
   for (const row of rows) {
     const ts = row?.added || 0
     if (!row?.id || ts <= 0) continue
-    if (newest.length === RAIL_ITEM_LIMIT && ts <= newest[newest.length - 1].ts) continue
+    if (newest.length === limit && ts <= newest[newest.length - 1].ts) continue
     let index = newest.length
     while (index > 0 && newest[index - 1].ts < ts) index--
     newest.splice(index, 0, { kind, row, ts })
-    if (newest.length > RAIL_ITEM_LIMIT) newest.pop()
+    if (newest.length > limit) newest.pop()
   }
 }
 
@@ -823,8 +826,9 @@ function buildRecentlyAddedItems(
   const seriesRows = wantSeries ? ((getCached(playlistId, "series")?.data || []) as CatalogRow[]) : []
 
   const newest: Array<{ kind: "vod" | "series"; row: CatalogRow; ts: number }> = []
-  collectNewest(vodRows, "vod", newest)
-  collectNewest(seriesRows, "series", newest)
+  const limit = railItemLimit()
+  collectNewest(vodRows, "vod", newest, limit)
+  collectNewest(seriesRows, "series", newest, limit)
 
   const items: CardItem[] = []
   for (const entry of newest) {
@@ -936,6 +940,11 @@ function shuffle<T>(items: T[]): T[] {
   return shuffled
 }
 
+/** Lite tier keeps fewer rows resident (progress writes, favorites/watchlist maps, catalog scans). */
+function railItemLimit(): number {
+  return memoryConservative() ? RAIL_ITEM_LIMIT_LITE : RAIL_ITEM_LIMIT_FULL
+}
+
 /** Eager posters are resident decoded bitmaps; lite never eager-loads any. */
 function eagerCardCount(): number {
   return memoryConservative() ? 0 : RAIL_EAGER_CARD_COUNT
@@ -951,7 +960,8 @@ function railEagerCount(top: number, viewportHeight: number): number {
 
 function scheduleIdle(fn: () => void): void {
   if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(fn, { timeout: 2000 })
+    // A forced timeout fires the callback mid-input on a slow device; lite tier waits for real idle.
+    window.requestIdleCallback(fn, memoryConservative() ? undefined : { timeout: 2000 })
   } else {
     setTimeout(fn, 500)
   }
@@ -1039,8 +1049,9 @@ const view: TvView = {
     let firstHeroItem: HeroItem | null = null
     let anyItems = false
     let renderedRailWithItems = false
+    const prepaintRailLimit = memoryConservative() ? 1 : PREPAINT_RAIL_LIMIT
 
-    for (const strip of strips.slice(0, PREPAINT_RAIL_LIMIT)) {
+    for (const strip of strips.slice(0, prepaintRailLimit)) {
       const railTitle = t(RAIL_TITLE_KEY[strip.id])
       const rail = createRail({ title: railTitle, focusSectionId: `tv-home-rail:${strip.id}` })
       const heroBuilders = new Map<string, () => HeroItem>()
@@ -1120,9 +1131,12 @@ const view: TvView = {
     let isRailCardFocused = false
     let rebuildTimer: ReturnType<typeof setTimeout> | null = null
     let rebuildIdleHandle: number | null = null
+    let playbackPollTimer: ReturnType<typeof setTimeout> | null = null
+    let rebuildPending = false
     let hasRebuiltOnce = false
 
     const REBUILD_DEBOUNCE_MS = 250
+    const PLAYBACK_ACTIVE_POLL_MS = 2000
 
     function cancelScheduledRebuild(): void {
       if (rebuildTimer) {
@@ -1135,14 +1149,30 @@ const view: TvView = {
         }
         rebuildIdleHandle = null
       }
+      if (playbackPollTimer) {
+        clearTimeout(playbackPollTimer)
+        playbackPollTimer = null
+      }
+      rebuildPending = false
+    }
+
+    // Progress writes every 5s during playback; one slow poll consumes the flag once it ends.
+    function pollUntilPlaybackIdle(): void {
+      playbackPollTimer = null
+      if (destroyed || !rebuildPending) return
+      if (isPlaybackActive()) {
+        playbackPollTimer = setTimeout(pollUntilPlaybackIdle, PLAYBACK_ACTIVE_POLL_MS)
+        return
+      }
+      rebuildPending = false
+      runRebuildWhenIdle()
     }
 
     function runRebuildWhenIdle(): void {
       if (destroyed) return
-      // A background playback session may still be feeding this mounted view progress
-      // ticks; defer rather than drop the rebuild, and re-check once it settles.
       if (isPlaybackActive()) {
-        rebuildTimer = setTimeout(runRebuildWhenIdle, REBUILD_DEBOUNCE_MS)
+        rebuildPending = true
+        if (!playbackPollTimer) playbackPollTimer = setTimeout(pollUntilPlaybackIdle, PLAYBACK_ACTIVE_POLL_MS)
         return
       }
       const run = () => {
@@ -1222,6 +1252,22 @@ const view: TvView = {
       if (lastFocusKey === focusKey) updateHeroForFocusKey(focusKey)
     }
 
+    // xmltv counterpart of onLiveNowNextResolved: a programme refresh only touches the meta line.
+    function patchLiveCardMetaFromXmltv(): void {
+      if (destroyed || liveEpgSource === "short-epg" || !activePlaylistId) return
+      const liveFocusKeys = [...heroBuilders.keys()].filter((key) => key.includes(":live:"))
+      if (!liveFocusKeys.length) return
+      const wantedIds = new Set(liveFocusKeys.map((key) => Number(key.split(":").pop())))
+      const channelById = pickRowsById(readCachedLiveChannels(activePlaylistId) as LiveChannelRow[], wantedIds)
+      for (const focusKey of liveFocusKeys) {
+        const channel = channelById.get(Number(focusKey.split(":").pop()))
+        if (!channel) continue
+        const meta = track.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focusKey)}"] [data-card-meta]`)
+        if (meta) meta.textContent = currentProgrammeFor(channel, activePlaylistId)?.title || ""
+      }
+      if (lastFocusKey && liveFocusKeys.includes(lastFocusKey)) updateHeroForFocusKey(lastFocusKey)
+    }
+
     // Idle-content rotation: ticks only while nothing in the rails holds focus (initial
     // mount, focus on the nav rail, focus on the hero itself). A focused rail card pauses
     // it and drives the hero itself, same as before this rotation existed.
@@ -1265,7 +1311,7 @@ const view: TvView = {
     }
     document.addEventListener("visibilitychange", onVisibilityChange)
 
-    // Hero-update and both prefetch passes ride the same 80ms settle - a fast key-repeat
+    // Hero-update and both prefetch passes ride the same settle debounce - a fast key-repeat
     // burst across several cards would otherwise fire the prefetch pair once per card.
     const onFocusInDebounced = debounce((focusKeyEl: HTMLElement) => {
       updateHeroForFocusKey(focusKeyEl.dataset.focusKey || "")
@@ -1275,7 +1321,7 @@ const view: TvView = {
         prefetchNeighbourHeroBackdrops(focusKeyEl)
         warmAdjacentRailImages(focusKeyEl)
       }
-    }, HERO_FOCUS_DEBOUNCE_MS)
+    }, memoryConservative() ? HERO_FOCUS_DEBOUNCE_MS_LITE : HERO_FOCUS_DEBOUNCE_MS)
 
     function onFocusIn(event: FocusEvent): void {
       const target = event.target
@@ -1283,8 +1329,10 @@ const view: TvView = {
       // Focusing the hero itself, or anything outside the rail track (e.g. the nav rail),
       // counts as idle - only a focused rail card drives the hero directly.
       const isTrackCard = !!focusKeyEl && track.contains(focusKeyEl) && focusKeyEl.dataset.focusKey !== HERO_FOCUS_KEY
-      isRailCardFocused = isTrackCard
-      applyHeroRotationState()
+      if (isTrackCard !== isRailCardFocused) {
+        isRailCardFocused = isTrackCard
+        applyHeroRotationState()
+      }
       if (isTrackCard) onFocusInDebounced(focusKeyEl!)
     }
 
@@ -1363,7 +1411,7 @@ const view: TvView = {
           window: epgLoadWindow(),
           epgMode: "now-next",
         }).then(() => {
-          if (!destroyed) scheduleRebuildAllRails()
+          if (!destroyed) patchLiveCardMetaFromXmltv()
         })
       }, EPG_NOW_NEXT_REFRESH_MS)
     }
@@ -1515,6 +1563,10 @@ const view: TvView = {
       })
     }
 
+    function onEpgLoaded(): void {
+      patchLiveCardMetaFromXmltv()
+    }
+
     function onHubStripsChanged(): void {
       strips = computeStrips()
       initRailSkeletons()
@@ -1533,7 +1585,7 @@ const view: TvView = {
     document.addEventListener("xt:recents-changed", onCatalogChanged)
     document.addEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
     document.addEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
-    document.addEventListener(EPG_LOADED_EVENT, onCatalogChanged)
+    document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
     document.addEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
     document.addEventListener(TV_EPG_SOURCE_CHANGED_EVENT, onEpgSourceChanged)
     document.addEventListener(HUB_STRIPS_EVENT, onHubStripsChanged)
@@ -1625,7 +1677,7 @@ const view: TvView = {
       document.removeEventListener("xt:recents-changed", onCatalogChanged)
       document.removeEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
       document.removeEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
-      document.removeEventListener(EPG_LOADED_EVENT, onCatalogChanged)
+      document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
       document.removeEventListener(TV_EPG_SOURCE_CHANGED_EVENT, onEpgSourceChanged)
       document.removeEventListener(HUB_STRIPS_EVENT, onHubStripsChanged)

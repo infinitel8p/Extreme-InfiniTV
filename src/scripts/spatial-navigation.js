@@ -90,7 +90,12 @@
   /*****************/
   /* Core Function */
   /*****************/
-  function getRect(elem) {
+  // Optional per-keypress Map: one getBoundingClientRect per element across both navigate passes.
+  function getRect(elem, rectCache) {
+    if (rectCache) {
+      var cached = rectCache.get(elem)
+      if (cached) return cached
+    }
     var cr = elem.getBoundingClientRect()
     var rect = {
       left: cr.left,
@@ -107,6 +112,7 @@
     }
     rect.center.left = rect.center.right = rect.center.x
     rect.center.top = rect.center.bottom = rect.center.y
+    if (rectCache) rectCache.set(elem, rect)
     return rect
   }
 
@@ -259,14 +265,14 @@
     return destPriority.group
   }
 
-  function navigate(target, direction, candidates, config) {
+  function navigate(target, direction, candidates, config, rectCache) {
     if (!target || !direction || !candidates || !candidates.length) {
       return null
     }
 
     var rects = []
     for (var i = 0; i < candidates.length; i++) {
-      var rect = getRect(candidates[i])
+      var rect = getRect(candidates[i], rectCache)
       if (rect) {
         rects.push(rect)
       }
@@ -275,7 +281,7 @@
       return null
     }
 
-    var targetRect = getRect(target)
+    var targetRect = getRect(target, rectCache)
     if (!targetRect) {
       return null
     }
@@ -552,10 +558,14 @@
     ) {
       return false
     }
-    if (
-      (elem.offsetWidth <= 0 && elem.offsetHeight <= 0) ||
-      elem.hasAttribute("disabled")
-    ) {
+    if (elem.hasAttribute("disabled")) {
+      return false
+    }
+    var hasNavigableFilter =
+      typeof _sections[sectionId].navigableFilter === "function" ||
+      typeof GlobalConfig.navigableFilter === "function"
+    // A navigableFilter already answers visibility; skip the extra layout read then.
+    if (!hasNavigableFilter && elem.offsetWidth <= 0 && elem.offsetHeight <= 0) {
       return false
     }
     if (
@@ -799,39 +809,38 @@
     return false
   }
 
-  // Candidates from every section that isn't rooted to a specific subtree (root === null,
-  // e.g. a document-wide catch-all like the classic UI's "main" or the TV shell's "main"),
-  // minus whatever a rooted section already claims - a broad unrooted selector otherwise
-  // re-matches the same elements a scoped rail/grid section already returned.
+  // Earlier-registered sections claim elements before the catch-all "main" (registered last)
+  // measures them, so each element pays for isNavigable() once.
   function collectOtherNavigableElements(excludeSectionId) {
-    var scopedElements = []
-    var unscopedIds = []
+    var combined = []
+    var claimed = typeof Set === "function" ? new Set() : null
 
     for (var id in _sections) {
       if (id === excludeSectionId || _sections[id].disabled) continue
-      if (_sections[id].root) {
-        scopedElements = scopedElements.concat(getSectionNavigableElements(id))
-      } else {
-        unscopedIds.push(id)
-      }
-    }
+      var section = _sections[id]
+      var candidateElements = parseSelector(section.selector, section.root)
 
-    if (!unscopedIds.length) return scopedElements
-
-    var scopedSet = scopedElements.length && typeof Set === "function" ? new Set(scopedElements) : null
-
-    var combined = scopedElements
-    for (var i = 0; i < unscopedIds.length; i++) {
-      var unscopedElements = getSectionNavigableElements(unscopedIds[i])
-      if (scopedSet) {
-        unscopedElements = unscopedElements.filter(function (elem) {
-          return !scopedSet.has(elem)
+      if (claimed) {
+        candidateElements = candidateElements.filter(function (elem) {
+          return !claimed.has(elem)
         })
-      } else if (scopedElements.length) {
-        unscopedElements = exclude(unscopedElements.slice(), scopedElements)
+      } else if (combined.length) {
+        candidateElements = exclude(candidateElements.slice(), combined)
       }
-      combined = combined.concat(unscopedElements)
+
+      var navigableElements = candidateElements.filter(function (elem) {
+        return isNavigable(elem, id)
+      })
+
+      if (claimed) {
+        for (var i = 0; i < candidateElements.length; i++) {
+          claimed.add(candidateElements[i])
+        }
+      }
+
+      combined = combined.concat(navigableElements)
     }
+
     return combined
   }
 
@@ -850,6 +859,8 @@
 
     var config = extend({}, GlobalConfig, _sections[currentSectionId])
     var next
+    // Shared by both navigate() passes of this keypress.
+    var rectCache = typeof Map === "function" ? new Map() : null
 
     if (config.restrict == "self-only" || config.restrict == "self-first") {
       // self-only never looks past its own section; self-first only pays for the
@@ -860,7 +871,8 @@
         currentFocusedElement,
         direction,
         exclude(currentSectionNavigableElements, currentFocusedElement),
-        config
+        config,
+        rectCache
       )
 
       if (!next && config.restrict == "self-first") {
@@ -868,7 +880,8 @@
           currentFocusedElement,
           direction,
           collectOtherNavigableElements(currentSectionId),
-          config
+          config,
+          rectCache
         )
       }
     } else {
@@ -876,7 +889,8 @@
         currentFocusedElement,
         direction,
         exclude(collectOtherNavigableElements(), currentFocusedElement),
-        config
+        config,
+        rectCache
       )
     }
 

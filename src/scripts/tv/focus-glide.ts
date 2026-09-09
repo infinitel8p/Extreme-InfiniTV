@@ -1,9 +1,9 @@
 // TV gliding focus ring: follows focus with a smoothed rAF loop instead of a static outline.
 
-import { motionAllowed } from "@/scripts/tv/motion"
+import { motionAllowed, heavyEffectsAllowed } from "@/scripts/tv/motion"
 import { PERF_MODE_EVENT } from "@/scripts/lib/app-settings.js"
-import { applyAmbient, clearAmbient } from "@/scripts/tv/ambient-color"
 import type { ImgKind } from "@/scripts/lib/img-scale"
+import type * as AmbientColorModule from "@/scripts/tv/ambient-color"
 
 interface GlideRect {
   left: number
@@ -50,6 +50,16 @@ let previousViewRoot: Element | null = null
 
 const radiusCache = new WeakMap<HTMLElement, number>()
 
+// Deferred so a low-tier TV that never attaches never pulls provider-fetch into the boot chunk.
+let ambientColorModule: typeof AmbientColorModule | null = null
+function loadAmbientColor(): Promise<typeof AmbientColorModule> {
+  if (ambientColorModule) return Promise.resolve(ambientColorModule)
+  return import("@/scripts/tv/ambient-color").then((module) => {
+    ambientColorModule = module
+    return module
+  })
+}
+
 function getRadius(element: HTMLElement): number {
   const cached = radiusCache.get(element)
   if (cached !== undefined) return cached
@@ -67,8 +77,6 @@ function ensureGlideEl(): HTMLDivElement {
   element.id = "tv-focus-glide"
   element.setAttribute("aria-hidden", "true")
   element.dataset.visible = "false"
-  // Registers the ambient custom property before tv.css's ::after glow relies on --tv-ambient-glow.
-  clearAmbient(element, { vars: ["--tv-ambient-glow"] })
   document.body.appendChild(element)
   glideEl = element
   return element
@@ -87,11 +95,13 @@ function resolveAmbientSource(target: HTMLElement): { imageUrl: string; kind: Im
 function updateAmbientGlow(target: HTMLElement): void {
   const source = resolveAmbientSource(target)
   const element = ensureGlideEl()
-  if (!source) {
-    clearAmbient(element, { vars: ["--tv-ambient-glow"] })
-    return
-  }
-  void applyAmbient(element, source.imageUrl, { vars: ["--tv-ambient-glow"], kind: source.kind })
+  void loadAmbientColor().then((module) => {
+    if (!source) {
+      module.clearAmbient(element, { vars: ["--tv-ambient-glow"] })
+      return
+    }
+    void module.applyAmbient(element, source.imageUrl, { vars: ["--tv-ambient-glow"], kind: source.kind })
+  })
 }
 
 /** Maps a focused element to the element whose rect the ring should draw around. */
@@ -155,7 +165,7 @@ function hideRing(): void {
   delete document.documentElement.dataset.tvGlide
   if (glideEl) {
     glideEl.dataset.visible = "false"
-    clearAmbient(glideEl, { vars: ["--tv-ambient-glow"] })
+    ambientColorModule?.clearAmbient(glideEl, { vars: ["--tv-ambient-glow"] })
   }
 }
 
@@ -366,7 +376,7 @@ function detach(): void {
 }
 
 function syncAttachment(): void {
-  if (motionAllowed()) attach()
+  if (heavyEffectsAllowed()) attach()
   else detach()
 }
 

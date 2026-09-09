@@ -94,36 +94,9 @@ async function fetchLiveCategoryMap(playlistId, dns) {
   return parseCategoriesToMap(data)
 }
 
-export function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestType, drmScheme, licenseKey) {
+/** Builds the channel list from already-parsed M3U entries, for callers that parsed once upstream. */
+export function channelListFromEntries(entries) {
   const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
-  const isDirectStream = typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)
-  const isDashSource = isDirectStream && manifestType === "mpd"
-  if (isDirectStream && (isHlsStreamManifest(text) || isDashSource)) {
-    const name = t("stream.directStream") || "Live stream"
-    return [{
-      id: 1,
-      name,
-      category: fallbackCategory,
-      categories: [fallbackCategory],
-      logo: logo || null,
-      tvgId: undefined,
-      chno: undefined,
-      tvgShift: null,
-      norm: normalize(`${name} ${fallbackCategory}`),
-      url: sourceUrl,
-      isRadio: false,
-      catchup: null,
-      catchupDays: null,
-      catchupSource: null,
-      catchupCorrection: null,
-      userAgent: streamHeaders?.userAgent || null,
-      referer: streamHeaders?.referer || null,
-      manifestType: isDashSource ? "mpd" : null,
-      drmScheme: drmScheme || null,
-      licenseKey: licenseKey || null,
-    }]
-  }
-  const { entries } = parseM3U(text)
   const out = []
   let idSeq = 1
   for (const entry of entries) {
@@ -154,6 +127,40 @@ export function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestT
     })
   }
   return out
+}
+
+/** @param {import("@/scripts/lib/m3u-parser.ts").M3UEntry[]} [preParsedEntries] skips the internal parseM3U call when the caller already parsed `text`. */
+export function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestType, drmScheme, licenseKey, preParsedEntries) {
+  const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
+  const isDirectStream = typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)
+  const isDashSource = isDirectStream && manifestType === "mpd"
+  if (isDirectStream && (isHlsStreamManifest(text) || isDashSource)) {
+    const name = t("stream.directStream") || "Live stream"
+    return [{
+      id: 1,
+      name,
+      category: fallbackCategory,
+      categories: [fallbackCategory],
+      logo: logo || null,
+      tvgId: undefined,
+      chno: undefined,
+      tvgShift: null,
+      norm: normalize(`${name} ${fallbackCategory}`),
+      url: sourceUrl,
+      isRadio: false,
+      catchup: null,
+      catchupDays: null,
+      catchupSource: null,
+      catchupCorrection: null,
+      userAgent: streamHeaders?.userAgent || null,
+      referer: streamHeaders?.referer || null,
+      manifestType: isDashSource ? "mpd" : null,
+      drmScheme: drmScheme || null,
+      licenseKey: licenseKey || null,
+    }]
+  }
+  const entries = preParsedEntries || parseM3U(text).entries
+  return channelListFromEntries(entries)
 }
 
 /** Build the source pools a custom playlist's channels resolve against, hydrating each referenced entry's own live catalog through the normal cached path. */
@@ -233,11 +240,12 @@ export async function ensureLive(creds, playlistId, opts = {}) {
         if (!r.ok) throw new HttpRetryError(r.status, `M3U ${r.status}`)
         text = await streamingText(r, onBytes)
       }
+      let parsed
       try {
+        parsed = parseM3U(text)
         // Comma-joined; epg-data.js splits it back apart on read.
-        const { epgUrls } = parseM3U(text)
-        if (epgUrls.length && typeof localStorage !== "undefined") {
-          localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrls.join(","))
+        if (parsed.epgUrls.length && typeof localStorage !== "undefined") {
+          localStorage.setItem(`xt_m3u_epg:${playlistId}`, parsed.epgUrls.join(","))
         }
       } catch {}
       return m3uToChannelList(
@@ -247,7 +255,8 @@ export async function ensureLive(creds, playlistId, opts = {}) {
         entryForPlaylist?.logo,
         entryForPlaylist?.manifestType,
         entryForPlaylist?.drmScheme,
-        entryForPlaylist?.licenseKey
+        entryForPlaylist?.licenseKey,
+        parsed?.entries
       )
     }
     const catMap = await fetchLiveCategoryMap(playlistId, dns)

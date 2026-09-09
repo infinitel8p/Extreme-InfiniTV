@@ -4,7 +4,8 @@ import { t } from "@/scripts/lib/i18n"
 import { registerFocusSection, keepFocusedInView, remPx, invalidateKeepInViewLayout } from "@/scripts/tv/focus"
 import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
 import { motionAllowed, TV_EASE, memoryConservative } from "@/scripts/tv/motion"
-import { warmImageUrl } from "@/scripts/tv/prefetch"
+import { warmCachedImageUrl } from "@/scripts/tv/prefetch"
+import type { ImgKind } from "@/scripts/lib/img-scale.ts"
 import { createCard, updateCard, cardEntryKey, registerCardLongPress, type CardItem } from "./card"
 
 const RAIL_LEFT_OFFSET_REM = 1
@@ -83,6 +84,10 @@ export function createRail(options: RailOptions): RailHandle {
     orderedCards.forEach((card, index) => cardIndexByElement.set(card, index))
   }
 
+  function prefetchImgKind(card: HTMLElement): ImgKind {
+    return card.dataset.focusKey?.includes(":live:") ? "logo" : "poster"
+  }
+
   function onFocusIn(event: FocusEvent): void {
     const target = event.target
     const focusedCard = target instanceof HTMLElement ? target.closest<HTMLElement>("[data-focus-key]") : null
@@ -92,8 +97,8 @@ export function createRail(options: RailOptions): RailHandle {
     for (let offset = 1; offset <= PREFETCH_RADIUS; offset++) {
       const before = orderedCards[centerIndex - offset]
       const after = orderedCards[centerIndex + offset]
-      if (before) warmImageUrl(before.dataset.prefetchUrl)
-      if (after) warmImageUrl(after.dataset.prefetchUrl)
+      if (before) warmCachedImageUrl(before.dataset.prefetchUrl, prefetchImgKind(before))
+      if (after) warmCachedImageUrl(after.dataset.prefetchUrl, prefetchImgKind(after))
     }
   }
   const prefetchOnFocus = !memoryConservative()

@@ -370,11 +370,37 @@ struct SurfaceSnapshot {
     pip_hwnd: Option<isize>,
     surface_hwnd: isize,
     metrics: VideoMetrics,
+    placement: VideoPlacement,
 }
 
 #[cfg(target_os = "windows")]
 fn surface_snapshot_matches(previous: &Option<SurfaceSnapshot>, current: &SurfaceSnapshot) -> bool {
     previous.as_ref() == Some(current)
+}
+
+/// What a snapshot change requires redoing; a plain resize skips the mpv IPC entirely.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SurfaceChanges {
+    topology: bool,
+    pointer_mode: bool,
+    placement: bool,
+    surface_event: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn surface_change_set(previous: &Option<SurfaceSnapshot>, current: &SurfaceSnapshot) -> SurfaceChanges {
+    let Some(previous) = previous else {
+        return SurfaceChanges { topology: true, pointer_mode: true, placement: true, surface_event: true };
+    };
+    SurfaceChanges {
+        topology: previous.state != current.state
+            || previous.pip_hwnd != current.pip_hwnd
+            || previous.surface_hwnd != current.surface_hwnd,
+        pointer_mode: matches!(previous.state, SurfaceState::Pip) != matches!(current.state, SurfaceState::Pip),
+        placement: previous.placement != current.placement,
+        surface_event: previous.state != current.state || previous.pip != current.pip,
+    }
 }
 
 /// The frontend's desired surface state; `derive_surface_state` turns this into a `SurfaceState`.
@@ -1188,33 +1214,43 @@ fn position_surface(hwnd_value: isize, x: i32, y: i32, width: i32, height: i32) 
 
 /// The Win32 half of `apply_surface`: reparent, fill the parent's client rect, z-order,
 /// visibility. Runs on the main thread; mpv's own window ops otherwise hang from a worker thread.
+/// `topology_changed` gates reparent/z-order/visibility; the fill-rect call always runs.
 #[cfg(target_os = "windows")]
 fn apply_surface_win32(
     main_hwnd_value: isize,
     surface_value: isize,
     state: SurfaceState,
     pip_hwnd_value: Option<isize>,
+    topology_changed: bool,
 ) -> Result<(), String> {
     match state {
         SurfaceState::Pip => {
             let pip_hwnd_value =
                 pip_hwnd_value.ok_or_else(|| "OTHER:pip surface state with no popup window".to_string())?;
             let pip_hwnd = HWND(pip_hwnd_value as *mut core::ffi::c_void);
-            reparent_child(surface_value, pip_hwnd)?;
+            if topology_changed {
+                reparent_child(surface_value, pip_hwnd)?;
+            }
             // The border is non-client area (WM_NCCALCSIZE), so the client rect is the video rect.
             if let Some((client_width, client_height)) = client_size(pip_hwnd) {
                 position_surface(surface_value, 0, 0, client_width.max(1), client_height.max(1))?;
             }
-            set_window_visibility(surface_value, true);
+            if topology_changed {
+                set_window_visibility(surface_value, true);
+            }
         }
         SurfaceState::Hidden | SurfaceState::Embedded | SurfaceState::Fullscreen => {
             let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
-            reparent_child(surface_value, main_hwnd)?;
+            if topology_changed {
+                reparent_child(surface_value, main_hwnd)?;
+            }
             if let Some((client_width, client_height)) = client_size(main_hwnd) {
                 position_surface(surface_value, 0, 0, client_width, client_height)?;
             }
-            send_to_bottom(surface_value);
-            set_window_visibility(surface_value, !matches!(state, SurfaceState::Hidden));
+            if topology_changed {
+                send_to_bottom(surface_value);
+                set_window_visibility(surface_value, !matches!(state, SurfaceState::Hidden));
+            }
         }
     }
     Ok(())
@@ -1309,33 +1345,7 @@ async fn apply_surface_locked(app: &AppHandle, session: &Arc<MpvSession>) -> Res
     let read_hwnd_value = if matches!(state, SurfaceState::Pip) { pip_hwnd_value } else { Some(main_hwnd_value) };
     let client_size_read = read_hwnd_value.and_then(|value| client_size(HWND(value as *mut core::ffi::c_void)));
 
-    let snapshot = SurfaceSnapshot {
-        state,
-        bounds,
-        pip: session.target.pip(),
-        client_size: client_size_read,
-        pip_hwnd: pip_hwnd_value,
-        surface_hwnd: surface_value,
-        metrics,
-    };
-    if surface_snapshot_matches(&session.last_applied.lock().unwrap_or_else(|poison| poison.into_inner()), &snapshot) {
-        return Ok(());
-    }
-
-    run_on_main_thread_and_wait(app, move || {
-        apply_surface_win32(main_hwnd_value, surface_value, state, pip_hwnd_value)
-    })
-    .await??;
-
-    let ipc_for_pointer_mode = session.ipc.clone();
-    let session_id_for_log = session.session_id.clone();
     let in_pip = matches!(state, SurfaceState::Pip);
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = apply_pointer_mode(&ipc_for_pointer_mode, in_pip).await {
-            log::warn!("[mpv-embed] session {session_id_for_log} failed to apply pointer mode: {error}");
-        }
-    });
-
     let placement = if in_pip {
         VideoPlacement::CENTERED
     } else {
@@ -1347,21 +1357,60 @@ async fn apply_surface_locked(app: &AppHandle, session: &Arc<MpvSession>) -> Res
             _ => VideoPlacement::CENTERED,
         }
     };
-    if let Err(error) = apply_placement(&session.ipc, placement).await {
-        log::warn!("[mpv-embed] session {} failed to apply video placement: {error}", session.session_id);
+
+    let snapshot = SurfaceSnapshot {
+        state,
+        bounds,
+        pip: session.target.pip(),
+        client_size: client_size_read,
+        pip_hwnd: pip_hwnd_value,
+        surface_hwnd: surface_value,
+        metrics,
+        placement,
+    };
+    let previous_snapshot = *session.last_applied.lock().unwrap_or_else(|poison| poison.into_inner());
+    if surface_snapshot_matches(&previous_snapshot, &snapshot) {
+        return Ok(());
+    }
+    let changes = surface_change_set(&previous_snapshot, &snapshot);
+
+    run_on_main_thread_and_wait(app, move || {
+        apply_surface_win32(main_hwnd_value, surface_value, state, pip_hwnd_value, changes.topology)
+    })
+    .await??;
+
+    if changes.pointer_mode {
+        let ipc_for_pointer_mode = session.ipc.clone();
+        let session_id_for_log = session.session_id.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = apply_pointer_mode(&ipc_for_pointer_mode, in_pip).await {
+                log::warn!("[mpv-embed] session {session_id_for_log} failed to apply pointer mode: {error}");
+            }
+        });
     }
 
-    emit_surface_event(app, session, state);
+    if changes.placement {
+        if let Err(error) = apply_placement(&session.ipc, placement).await {
+            log::warn!("[mpv-embed] session {} failed to apply video placement: {error}", session.session_id);
+        }
+    }
+
+    if changes.surface_event {
+        emit_surface_event(app, session, state);
+    }
     *session.last_applied.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(snapshot);
     Ok(())
 }
 
 /// One task per session, woken by bounds/visibility/fullscreen/PiP/resize/video-metric changes.
 /// Holds a `Weak` ref so it can't keep the session alive by itself: once the session drops,
-/// `placement_tx` closes, `changed()` errors, and the loop ends on its own.
+/// `placement_tx` closes, `changed()` errors, and the loop ends on its own. A burst of wakes
+/// (every WM_SIZE of a drag) coalesces into one apply per 16ms.
 #[cfg(target_os = "windows")]
 async fn run_surface_updates(app: AppHandle, session: Weak<MpvSession>, mut trigger_rx: tokio::sync::watch::Receiver<()>) {
     while trigger_rx.changed().await.is_ok() {
+        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+        let _ = trigger_rx.borrow_and_update();
         let Some(session) = session.upgrade() else { return };
         if let Err(error) = apply_surface(&app, &session).await {
             log::warn!("[mpv-embed] session {} failed to apply surface: {error}", session.session_id);
@@ -1777,7 +1826,7 @@ fn schedule_surface_teardown(app: &AppHandle, session: &MpvSession) {
     if let Some(surface_value) = resolve_mpv_window(session) {
         let main_hwnd_value = session.parent_hwnd;
         if let Err(error) = app.run_on_main_thread(move || {
-            let _ = apply_surface_win32(main_hwnd_value, surface_value, SurfaceState::Hidden, None);
+            let _ = apply_surface_win32(main_hwnd_value, surface_value, SurfaceState::Hidden, None, true);
             if let Some(pip_hwnd_value) = pip_hwnd_value {
                 destroy_pip_window(pip_hwnd_value);
             }
@@ -3319,6 +3368,7 @@ mod tests {
             pip_hwnd: None,
             surface_hwnd: 42,
             metrics: VideoMetrics::default(),
+            placement: VideoPlacement::CENTERED,
         };
         assert!(!surface_snapshot_matches(&None, &snapshot));
         assert!(surface_snapshot_matches(&Some(snapshot), &snapshot));
@@ -3326,6 +3376,101 @@ mod tests {
         let mut changed = snapshot;
         changed.client_size = Some((1280, 720));
         assert!(!surface_snapshot_matches(&Some(snapshot), &changed));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn surface_change_set_reapplies_everything_with_no_previous_snapshot() {
+        let snapshot = SurfaceSnapshot {
+            state: SurfaceState::Embedded,
+            bounds: Some(Bounds { x: 0, y: 0, width: 100, height: 100, radius: 0 }),
+            pip: None,
+            client_size: Some((640, 360)),
+            pip_hwnd: None,
+            surface_hwnd: 42,
+            metrics: VideoMetrics::default(),
+            placement: VideoPlacement::CENTERED,
+        };
+        let changes = surface_change_set(&None, &snapshot);
+        assert_eq!(
+            changes,
+            SurfaceChanges { topology: true, pointer_mode: true, placement: true, surface_event: true }
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn surface_change_set_skips_everything_but_geometry_on_a_plain_resize() {
+        let previous = SurfaceSnapshot {
+            state: SurfaceState::Embedded,
+            bounds: Some(Bounds { x: 0, y: 0, width: 100, height: 100, radius: 0 }),
+            pip: None,
+            client_size: Some((640, 360)),
+            pip_hwnd: None,
+            surface_hwnd: 42,
+            metrics: VideoMetrics::default(),
+            placement: VideoPlacement::CENTERED,
+        };
+        let mut resized = previous;
+        resized.bounds = Some(Bounds { x: 0, y: 0, width: 200, height: 200, radius: 0 });
+        resized.client_size = Some((800, 600));
+        // Placement unchanged: the resize didn't move the box relative to the client area.
+        let changes = surface_change_set(&Some(previous), &resized);
+        assert_eq!(
+            changes,
+            SurfaceChanges { topology: false, pointer_mode: false, placement: false, surface_event: false }
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn surface_change_set_flags_placement_and_surface_event_independently_of_topology() {
+        let previous = SurfaceSnapshot {
+            state: SurfaceState::Embedded,
+            bounds: Some(Bounds { x: 0, y: 0, width: 100, height: 100, radius: 0 }),
+            pip: None,
+            client_size: Some((640, 360)),
+            pip_hwnd: None,
+            surface_hwnd: 42,
+            metrics: VideoMetrics::default(),
+            placement: VideoPlacement::CENTERED,
+        };
+        let mut placement_moved = previous;
+        placement_moved.placement = VideoPlacement { zoom: 1.0, pan_x: 0.0, pan_y: 0.0 };
+        let changes = surface_change_set(&Some(previous), &placement_moved);
+        assert_eq!(
+            changes,
+            SurfaceChanges { topology: false, pointer_mode: false, placement: true, surface_event: false }
+        );
+
+        let mut pip_toggled = previous;
+        pip_toggled.pip = Some(PipGeometry { x: 0, y: 0, width: 360, height: 202 });
+        let changes = surface_change_set(&Some(previous), &pip_toggled);
+        assert_eq!(
+            changes,
+            SurfaceChanges { topology: false, pointer_mode: false, placement: false, surface_event: true }
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn surface_change_set_flags_topology_and_pointer_mode_when_entering_pip() {
+        let previous = SurfaceSnapshot {
+            state: SurfaceState::Embedded,
+            bounds: Some(Bounds { x: 0, y: 0, width: 100, height: 100, radius: 0 }),
+            pip: None,
+            client_size: Some((640, 360)),
+            pip_hwnd: None,
+            surface_hwnd: 42,
+            metrics: VideoMetrics::default(),
+            placement: VideoPlacement::CENTERED,
+        };
+        let mut entered_pip = previous;
+        entered_pip.state = SurfaceState::Pip;
+        entered_pip.pip_hwnd = Some(7);
+        let changes = surface_change_set(&Some(previous), &entered_pip);
+        assert!(changes.topology);
+        assert!(changes.pointer_mode);
     }
 
     #[cfg(target_os = "windows")]

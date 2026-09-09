@@ -315,7 +315,14 @@ function sampleTint(bitmap: ImageBitmap): RgbColor | null {
   }
 }
 
+/** html[data-tv-effects="lite"] gate, checked inline: lib files never import from src/scripts/tv/. */
+function isTvLiteEffectsTier(): boolean {
+  return typeof document !== "undefined" && document.documentElement.dataset.tvEffects === "lite"
+}
+
 async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<{ blob: Blob; tint: RgbColor | null }> {
+  // Lite tier stores the original blob: no decode, tint sample or WebP re-encode.
+  if (isTvLiteEffectsTier()) return { blob: originalBlob, tint: null }
   let bitmap: ImageBitmap
   try {
     bitmap = await createImageBitmap(originalBlob)
