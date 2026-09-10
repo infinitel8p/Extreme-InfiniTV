@@ -369,9 +369,9 @@ function renderChannelRow(channel, programmesForRow) {
   info.type = "button"
   info.className =
     "shrink-0 sticky left-0 z-10 bg-bg flex items-center gap-2 px-3 border-r border-line " +
-    "text-left cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-accent"
+    "text-left cursor-pointer outline-none hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent"
   info.style.width = `${CHANNEL_COL_WIDTH}px`
-  info.title = t("epg.watchNow")
+  info.title = channel.name
   info.setAttribute("aria-label", `${channel.name} - ${t("epg.watchNow")}`)
   info.addEventListener("click", () => navigateToLive(channel.id))
 
