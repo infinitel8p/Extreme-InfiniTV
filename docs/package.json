@@ -14,7 +14,7 @@
     "@astrojs/mdx": "^7.0.7",
     "@fontsource-variable/geist": "5.2.9",
     "@tailwindcss/vite": "^4.3.3",
-    "astro": "^7.2.4",
+    "astro": "^7.2.8",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3"
   },
