@@ -420,6 +420,7 @@
   "epg.loading": "Carregando guia…",
   "epg.now": "Agora",
   "epg.next": "A seguir",
+  "epg.watchNow": "Assistir agora",
   "search.placeholder": "Pesquisar tudo…",
   "search.empty": "Digite para pesquisar canais, filmes e séries.",
   "search.noResults": "Sem resultados para \"{query}\".",

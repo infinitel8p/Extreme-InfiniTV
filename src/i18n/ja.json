@@ -420,6 +420,7 @@
   "epg.loading": "番組表を読み込み中…",
   "epg.now": "放送中",
   "epg.next": "次の番組",
+  "epg.watchNow": "今すぐ視聴",
   "search.placeholder": "なんでも検索…",
   "search.empty": "入力するとチャンネル、映画、シリーズを検索できます。",
   "search.noResults": "「{query}」の結果はありません。",

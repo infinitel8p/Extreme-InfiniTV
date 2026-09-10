@@ -420,6 +420,7 @@
   "epg.loading": "正在加载节目指南…",
   "epg.now": "正在播出",
   "epg.next": "下一个",
+  "epg.watchNow": "立即观看",
   "search.placeholder": "搜索任何内容…",
   "search.empty": "输入即可搜索频道、电影和剧集。",
   "search.noResults": "没有「{query}」的结果。",

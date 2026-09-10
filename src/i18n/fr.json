@@ -420,6 +420,7 @@
   "epg.loading": "Chargement du programme…",
   "epg.now": "En cours",
   "epg.next": "Ensuite",
+  "epg.watchNow": "Regarder maintenant",
   "search.placeholder": "Rechercher partout…",
   "search.empty": "Tapez pour rechercher dans les chaînes, films et séries.",
   "search.noResults": "Aucun résultat pour « {query} ».",

@@ -420,6 +420,7 @@
   "epg.loading": "Programmagids laden…",
   "epg.now": "Nu",
   "epg.next": "Volgende",
+  "epg.watchNow": "Nu kijken",
   "search.placeholder": "Zoek alles…",
   "search.empty": "Typ om te zoeken in kanalen, films en series.",
   "search.noResults": "Geen resultaten voor \"{query}\".",

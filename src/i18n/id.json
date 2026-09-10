@@ -420,6 +420,7 @@
   "epg.loading": "Memuat panduan acara…",
   "epg.now": "Sekarang",
   "epg.next": "Selanjutnya",
+  "epg.watchNow": "Tonton sekarang",
   "search.placeholder": "Cari apa saja…",
   "search.empty": "Ketik untuk mencari di saluran, film, dan serial.",
   "search.noResults": "Tidak ada hasil untuk \"{query}\".",

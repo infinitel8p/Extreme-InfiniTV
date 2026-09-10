@@ -420,6 +420,7 @@
   "epg.loading": "جارٍ تحميل دليل البرامج…",
   "epg.now": "الآن",
   "epg.next": "التالي",
+  "epg.watchNow": "شاهد الآن",
   "search.placeholder": "ابحث عن أي شيء…",
   "search.empty": "اكتب للبحث في القنوات والأفلام والمسلسلات.",
   "search.noResults": "لا توجد نتائج لـ \"{query}\".",

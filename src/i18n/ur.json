@@ -420,6 +420,7 @@
   "epg.loading": "پروگرام گائیڈ لوڈ ہو رہا ہے…",
   "epg.now": "ابھی",
   "epg.next": "اگلا",
+  "epg.watchNow": "ابھی دیکھیں",
   "search.placeholder": "کچھ بھی تلاش کریں…",
   "search.empty": "چینلز، فلموں اور سیریز میں تلاش کے لیے ٹائپ کریں۔",
   "search.noResults": "\"{query}\" کے لیے کوئی نتیجہ نہیں۔",

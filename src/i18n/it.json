@@ -420,6 +420,7 @@
   "epg.loading": "Caricamento guida…",
   "epg.now": "In onda",
   "epg.next": "A seguire",
+  "epg.watchNow": "Guarda ora",
   "search.placeholder": "Cerca tutto…",
   "search.empty": "Digita per cercare tra canali, film e serie.",
   "search.noResults": "Nessun risultato per \"{query}\".",

@@ -26,7 +26,7 @@ import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
 import { channelSupportsCatchup, isCatchupPlayable } from "@/scripts/lib/catchup.ts"
 import {
   ensureLoaded as ensurePrefsLoaded,
-  getFavorites,
+  getFavoritesOrdered,
   getRecents,
   getChannelEpgOverride,
   setChannelEpgOverride,
@@ -90,6 +90,10 @@ const picker = mountCategoryPicker({
   // counts every entry — not just ones with a tvg-id. The schedule grid
   // continues to drop tvg-id-less rows downstream.
   getItems: () => allChannels,
+  onSyncToggle: () => {
+    syncCategoryTitle()
+    applyCategory()
+  },
 })
 
 function setStatus(text) {
@@ -308,6 +312,10 @@ function updateDayLabel() {
       }).format(new Date(viewStart))
 }
 
+function navigateToLive(channelId) {
+  window.location.href = `/livetv?channel=${encodeURIComponent(String(channelId))}`
+}
+
 function navigateToCatchup(channelId, startDisplayMs, stopDisplayMs, title, catchupId) {
   const startUtc = displayedToUtcMs(activePlaylistId, startDisplayMs)
   const stopUtc = displayedToUtcMs(activePlaylistId, stopDisplayMs)
@@ -357,10 +365,15 @@ function renderChannelRow(channel, programmesForRow) {
   row.style.height = `${ROW_HEIGHT}px`
 
   // Sticky channel info column.
-  const info = document.createElement("div")
+  const info = document.createElement("button")
+  info.type = "button"
   info.className =
-    "shrink-0 sticky left-0 z-10 bg-bg flex items-center gap-2 px-3 border-r border-line"
+    "shrink-0 sticky left-0 z-10 bg-bg flex items-center gap-2 px-3 border-r border-line " +
+    "text-left cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-accent"
   info.style.width = `${CHANNEL_COL_WIDTH}px`
+  info.title = t("epg.watchNow")
+  info.setAttribute("aria-label", `${channel.name} - ${t("epg.watchNow")}`)
+  info.addEventListener("click", () => navigateToLive(channel.id))
 
   const logo = document.createElement("div")
   logo.className =
@@ -774,8 +787,13 @@ function pickChannels(cachedChannels) {
   const activeCat = picker.getActiveCat()
   let filtered
   if (activeCat === CAT_FAVORITES && activePlaylistId) {
-    const favs = getFavorites(activePlaylistId, "live")
-    filtered = cachedChannels.filter((channel) => favs.has(channel.id))
+    const byId = new Map(cachedChannels.map((channel) => [channel.id, channel]))
+    const orderedFavIds = getFavoritesOrdered(activePlaylistId, "live")
+    filtered = []
+    for (const favId of orderedFavIds) {
+      const channel = byId.get(favId)
+      if (channel) filtered.push(channel)
+    }
   } else if (activeCat === CAT_RECENTS && activePlaylistId) {
     const byId = new Map(cachedChannels.map((channel) => [channel.id, channel]))
     const recents = getRecents(activePlaylistId, "live")

@@ -420,6 +420,7 @@
   "epg.loading": "Ładowanie programu TV…",
   "epg.now": "Teraz",
   "epg.next": "Następny",
+  "epg.watchNow": "Oglądaj teraz",
   "search.placeholder": "Szukaj wszystkiego…",
   "search.empty": "Wpisz, aby przeszukać kanały, filmy i seriale.",
   "search.noResults": "Brak wyników dla \"{query}\".",

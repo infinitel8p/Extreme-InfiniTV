@@ -420,6 +420,7 @@
   "epg.loading": "Loading programme guide…",
   "epg.now": "Now",
   "epg.next": "Next",
+  "epg.watchNow": "Watch now",
   "search.placeholder": "Search anything…",
   "search.empty": "Type to search across channels, movies, and series.",
   "search.noResults": "No results for \"{query}\".",

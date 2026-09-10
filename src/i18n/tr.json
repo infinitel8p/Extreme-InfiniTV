@@ -420,6 +420,7 @@
   "epg.loading": "Yayın rehberi yükleniyor…",
   "epg.now": "Şimdi",
   "epg.next": "Sonraki",
+  "epg.watchNow": "Şimdi izle",
   "search.placeholder": "Her şeyi arayın…",
   "search.empty": "Kanallar, filmler ve diziler arasında arama yapmak için yazın.",
   "search.noResults": "\"{query}\" için sonuç yok.",

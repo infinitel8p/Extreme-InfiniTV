@@ -420,6 +420,7 @@
   "epg.loading": "Programmführer wird geladen…",
   "epg.now": "Jetzt",
   "epg.next": "Danach",
+  "epg.watchNow": "Jetzt ansehen",
   "search.placeholder": "Alles durchsuchen…",
   "search.empty": "Tippe, um Sender, Filme und Serien zu durchsuchen.",
   "search.noResults": "Keine Ergebnisse für „{query}“.",
