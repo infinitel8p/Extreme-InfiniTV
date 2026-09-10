@@ -386,6 +386,12 @@ pub fn run() {
                     if let Err(error) = main_window.set_shadow(true) {
                         log::warn!("[window] set_shadow(true) failed: {error}");
                     }
+                    #[cfg(target_os = "linux")]
+                    if let Err(error) = main_window.with_webview(|platform_webview| {
+                        compositing::apply_webview_features(&platform_webview.inner());
+                    }) {
+                        log::warn!("[compositing] with_webview failed: {error}");
+                    }
                     if let Err(error) = main_window.show() {
                         log::warn!("[window] show() failed: {error}");
                     }

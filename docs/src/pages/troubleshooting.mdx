@@ -140,8 +140,11 @@ See [TMDb metadata](./tmdb-metadata/) for getting a key and what enrichment adds
 Some Linux GPU drivers (Raspberry Pi's V3D, Nvidia's proprietary driver, and most virtual machines) don't get along with WebKitGTK's default DMA-BUF renderer - symptoms range from a garbled/striped screen to an immediate crash with `EGL_BAD_PARAMETER`. The app detects known-risky hardware automatically and switches to a safe rendering mode, but you can also control it yourself:
 
 - **Settings > Appearance > Rendering** lets you force Auto, Faster, or Safe. Faster runs as a one-time trial after restarting - confirm it in the prompt that appears, or it reverts on its own the next time you launch.
-- Safe mode applies a different fix per hardware: Raspberry Pi gets `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, while Nvidia's proprietary driver and virtual machines get `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
-- Do not set `WEBKIT_DISABLE_DMABUF_RENDERER=1` on a Raspberry Pi yourself: on WebKitGTK 2.52 it fixes the garbled screen but crashes on every page navigation. Only `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` is safe there.
+- Auto turns on safe mode for Raspberry Pi, Nvidia's proprietary driver, virtual machines, and any AppImage run - AppImages bundle their own libraries and hit this class of bug more often.
+- On WebKitGTK 2.44 and newer, safe mode always sets `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`; `WEBKIT_DISABLE_DMABUF_RENDERER=1` is only used on older WebKitGTK. Do not set `WEBKIT_DISABLE_DMABUF_RENDERER=1` yourself on WebKitGTK 2.44 through 2.52 - it fixes the garbled screen but crashes the app with a SIGSEGV in WebKit's `AcceleratedBackingStore` on every page navigation; this was fixed upstream in WebKitGTK 2.54.
+- When Nvidia's proprietary driver is detected the app also sets `__NV_DISABLE_EXPLICIT_SYNC=1`, which stops the Wayland "explicit sync" disconnects on KDE and GNOME.
+- Page view transitions are turned off automatically below WebKitGTK 2.54, since the same navigation crash can be triggered by a transition too.
+- On Arch-family and Fedora systems with a recent Mesa, the AppImage's bundled libraries can fail to initialize EGL. Prefer the `.deb` build or the Snap there, or run the AppImage with `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` set yourself.
 - If the app won't get far enough to reach Settings, run it once with `--safe-rendering` on the command line - this immediately resets the saved setting to Safe (picking the correct variable for your hardware) before anything else runs.
 
 ## MKV or AVI file won't play
