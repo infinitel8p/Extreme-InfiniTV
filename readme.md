@@ -60,11 +60,17 @@
 ## Screenshots
 
 <p align="center">
+  <a href="https://github.com/user-attachments/assets/d64e41f5-564f-4c2f-bff2-8a769ad23ec9">
+    <img src="docs/media/extreme-infinitv-promo.webp" alt="Extreme InfiniTV promo tour: Live TV with programme guide, movies and series grids, detail pages, and casting to a TV" width="780"/>
+  </a>
+</p>
+
+<p align="center">
   <img src="docs/src/assets/screenshots/Desktop/home.png" alt="Extreme InfiniTV home screen showing Live TV, Movies, and Series tiles with Continue Watching strip" width="780"/>
 </p>
 
 <details>
-<summary>More screenshots (Live TV, EPG, Movies, Series, Android TV, mobile)</summary>
+<summary>More screenshots (Live TV, EPG, Movies, Series, Android TV, casting, mobile)</summary>
 
 **Desktop**
 
@@ -78,6 +84,12 @@
 | | | |
 |---|---|---|
 | <img src="docs/src/assets/screenshots/Android-TV/tv.png" alt="Android TV home screen with an artwork hero and a favorites rail"/> | <img src="docs/src/assets/screenshots/Android-TV/tv-live.png" alt="Live TV on Android TV with channel tiles and a programme panel"/> | <img src="docs/src/assets/screenshots/Android-TV/tv-movies.png" alt="Movies grid on the Android TV interface with ratings and language pills"/> |
+
+**Casting to Android TV (pair once, play from your phone or desktop)**
+
+| | |
+|---|---|
+| <img src="docs/media/casting-pairing-1920x1080.png" alt="Android TV receiver showing its LAN address and six-digit pair code next to a phone's Play on TV dialog"/> | <img src="docs/media/casting-playing-1920x1080.png" alt="A movie playing on the TV while the phone shows the cast remote with seek, volume, and stop casting controls"/> |
 
 **Phone (portrait, touch)**
 
