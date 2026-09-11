@@ -412,6 +412,8 @@
   "epg.tomorrow": "Tomorrow",
   "epg.previousDay": "Previous day",
   "epg.nextDay": "Next day",
+  "epg.earlier": "Earlier",
+  "epg.later": "Later",
   "epg.timezoneTitle": "EPG time zone",
   "epg.timezoneHelper": "Some providers ship XMLTV with timestamps already shifted to the server's local time, so EPG times look off. Auto-detect picks the offset where the most channels have a programme airing right now.",
   "epg.timezoneAutoDetect": "Auto-detect",

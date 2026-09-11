@@ -412,6 +412,8 @@
   "epg.tomorrow": "明天",
   "epg.previousDay": "前一天",
   "epg.nextDay": "后一天",
+  "epg.earlier": "更早",
+  "epg.later": "更晚",
   "epg.timezoneTitle": "EPG 时区",
   "epg.timezoneHelper": "某些提供商发送的 XMLTV 时间戳已偏移到服务器本地时间，导致 EPG 时间显示错误。自动检测会选择当前最多频道有节目播出的偏移量。",
   "epg.timezoneAutoDetect": "自动检测",

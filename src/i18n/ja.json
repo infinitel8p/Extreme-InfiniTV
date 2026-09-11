@@ -412,6 +412,8 @@
   "epg.tomorrow": "明日",
   "epg.previousDay": "前の日",
   "epg.nextDay": "次の日",
+  "epg.earlier": "前へ",
+  "epg.later": "後へ",
   "epg.timezoneTitle": "EPG タイムゾーン",
   "epg.timezoneHelper": "一部のプロバイダーは XMLTV をすでにサーバーのローカル時刻にシフトして配信するため、EPG の時刻がずれて見えます。自動検出は、現在最も多くのチャンネルで番組が放送中になるオフセットを選びます。",
   "epg.timezoneAutoDetect": "自動検出",

@@ -1519,7 +1519,9 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
 
       let offsetMin = 0
       if (epgMode === "now-next") {
-        offsetMin = anySourceHasExplicitTimezones ? 0 : nowNextOffsetGuess
+        offsetMin = offsetIsAuto
+          ? (anySourceHasExplicitTimezones ? 0 : nowNextOffsetGuess)
+          : Number(setting) || 0
       } else if (offsetIsAuto) {
         const preferredOffset = readInferredOffsetSetting(playlistId)
         offsetMin = resolveAutoOffsetMin(

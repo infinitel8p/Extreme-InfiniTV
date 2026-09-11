@@ -412,6 +412,8 @@
   "epg.tomorrow": "Domani",
   "epg.previousDay": "Giorno precedente",
   "epg.nextDay": "Giorno successivo",
+  "epg.earlier": "Prima",
+  "epg.later": "Dopo",
   "epg.timezoneTitle": "Fuso orario EPG",
   "epg.timezoneHelper": "Alcuni provider inviano XMLTV con timestamp già spostati sull'ora locale del server, quindi gli orari dell'EPG sembrano sballati. Il rilevamento automatico sceglie l'offset in cui il maggior numero di canali ha un programma in onda ora.",
   "epg.timezoneAutoDetect": "Rilevamento automatico",

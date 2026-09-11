@@ -412,6 +412,8 @@
   "epg.tomorrow": "Yarın",
   "epg.previousDay": "Önceki gün",
   "epg.nextDay": "Sonraki gün",
+  "epg.earlier": "Daha erken",
+  "epg.later": "Daha geç",
   "epg.timezoneTitle": "EPG saat dilimi",
   "epg.timezoneHelper": "Bazı sağlayıcılar XMLTV'yi sunucunun yerel saatine kaydırılmış zaman damgalarıyla gönderir, bu yüzden EPG saatleri yanlış görünür. Otomatik algılama, en çok kanalın şu anda yayında olan bir programa sahip olduğu kaymayı seçer.",
   "epg.timezoneAutoDetect": "Otomatik algıla",

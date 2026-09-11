@@ -360,11 +360,8 @@ document.addEventListener(EPG_LOADED_EVENT, (e) => {
   if (!detail || detail.playlistId !== activePlaylistId) return
   refreshNowSlots()
   refreshDiscordPresenceProgramme()
-  // For M3U sources the side panel can't use get_short_epg; it pulls from
-  // the just-loaded XMLTV state. Refresh it now that data is available.
-  if (currentlyPlayingId && hasDirectUrl(currentlyPlayingId)) {
-    paintSidePanelFromXmltv(currentlyPlayingId)
-  }
+  // Offset is only known once this fires; repaint so the panel picks up the shift.
+  if (currentlyPlayingId) paintEpgSidePanel(currentlyPlayingId)
   if (radioModeChannelId != null) paintRadioNowPlaying(radioModeChannelId)
 })
 
@@ -372,6 +369,7 @@ document.addEventListener(EPG_OFFSET_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   ensureEpgLoaded()
+  if (currentlyPlayingId) paintEpgSidePanel(currentlyPlayingId)
 })
 
 const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
@@ -5457,11 +5455,11 @@ epgPanel?.addEventListener(
 )
 
 /** Whether the entry starting at `entryStartMs` is the one actually mounted right now, accounting for an active catch-up/timeshift session. */
-function isEpgEntryPlaying(entryStartMs, entryStopMs, isLive, isM3uSource) {
+function isEpgEntryPlaying(entryStartMs, entryStopMs, isLive, timesAreDisplayed) {
   if (catchupSession) {
     if (catchupSession.channelId !== epgListChannelId) return false
-    const entryStartUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStartMs) : entryStartMs
-    const entryStopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStopMs) : entryStopMs
+    const entryStartUtcMs = timesAreDisplayed ? displayedToUtcMs(activePlaylistId, entryStartMs) : entryStartMs
+    const entryStopUtcMs = timesAreDisplayed ? displayedToUtcMs(activePlaylistId, entryStopMs) : entryStopMs
     return entryStartUtcMs <= catchupSession.startUtcMs && catchupSession.startUtcMs < entryStopUtcMs
   }
   return isLive && currentlyPlayingId === epgListChannelId
@@ -5496,8 +5494,8 @@ async function loadEPG(streamId) {
     const now = Date.now()
     epgListData = items
       .map((it) => ({
-        start: Number(it.start_timestamp || it.start) * 1000,
-        stop: Number(it.stop_timestamp || it.end) * 1000,
+        start: utcToDisplayedMs(activePlaylistId, Number(it.start_timestamp || it.start) * 1000),
+        stop: utcToDisplayedMs(activePlaylistId, Number(it.stop_timestamp || it.end) * 1000),
         title: maybeB64ToUtf8(it.title || it.title_raw || t("programme.untitled")),
         desc: maybeB64ToUtf8(it.description || it.description_raw || ""),
       }))
@@ -5507,7 +5505,7 @@ async function loadEPG(streamId) {
     epgList.innerHTML = epgListData
       .map((p, idx) => {
         const isLive = p.start <= now && now < p.stop
-        const isPlaying = isEpgEntryPlaying(p.start, p.stop, isLive, false)
+        const isPlaying = isEpgEntryPlaying(p.start, p.stop, isLive, true)
         const start = fmtTime(p.start / 1000)
         const end = fmtTime(p.stop / 1000)
         const title = escapeHtml(p.title)
@@ -5565,8 +5563,8 @@ function computeEpgSidePanelWindow(programmes, pastPages, supportsCatchup) {
   return { past, upcoming }
 }
 
-/** Shared side-panel renderer for past + upcoming rows; isM3uSource marks entry times as display-shifted XMLTV rather than true UTC. */
-function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, isNewChannelPaint }) {
+/** Shared side-panel renderer for past + upcoming rows; timesAreDisplayed marks entry times as display-shifted rather than raw provider UTC. */
+function renderEpgSidePanelRows(past, upcoming, { timesAreDisplayed, canLoadEarlier, isNewChannelPaint }) {
   const combined = [...past, ...upcoming]
   epgListData = combined
   const now = Date.now()
@@ -5581,7 +5579,7 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
   const rowsHtml = combined
     .map((programme, idx) => {
       const isLive = programme.start <= now && now < programme.stop
-      const isPlaying = isEpgEntryPlaying(programme.start, programme.stop, isLive, isM3uSource)
+      const isPlaying = isEpgEntryPlaying(programme.start, programme.stop, isLive, timesAreDisplayed)
       if (isPlaying) playingIndex = idx
       if (isLive) liveIndex = idx
       const isPast = programme.stop <= now
@@ -5683,7 +5681,7 @@ function paintSidePanelFromXmltv(streamId) {
 
   const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
   const canLoadEarlier = supportsCatchup && epgSidePanelPastPages < maxPastPages
-  renderEpgSidePanelRows(past, upcoming, { isM3uSource: true, canLoadEarlier, isNewChannelPaint })
+  renderEpgSidePanelRows(past, upcoming, { timesAreDisplayed: true, canLoadEarlier, isNewChannelPaint })
 }
 
 // ----------------------------
@@ -5726,13 +5724,13 @@ async function fetchXtreamFullEpgAction(action, streamId) {
   }
 }
 
-/** Fresh cached full-table entries, or null (used to skip the loading placeholder on remount repaints). */
+/** Fresh cached full-table entries (raw provider UTC), or null (used to skip the loading placeholder on remount repaints). */
 function peekXtreamFullEpgCache(channel) {
   const cached = xtreamFullEpgCache.get(`${activePlaylistId}:${channel.id}`)
   return cached && Date.now() - cached.at < XTREAM_FULL_EPG_CACHE_TTL_MS ? cached.entries : null
 }
 
-/** Full-table Xtream EPG (`get_simple_date_table`, falling back to the `get_simple_data_table` spelling), windowed and cached per playlist+channel. */
+/** Full-table Xtream EPG (`get_simple_date_table`, falling back to the `get_simple_data_table` spelling), windowed and cached per playlist+channel. Cached entries stay in raw provider UTC so an offset change can re-render without a refetch. */
 async function fetchXtreamFullEpg(channel) {
   const cacheKey = `${activePlaylistId}:${channel.id}`
   const cached = xtreamFullEpgCache.get(cacheKey)
@@ -5744,8 +5742,9 @@ async function fetchXtreamFullEpg(channel) {
     if (!listings) return null
     const normalized = normalizeXtreamFullEpgListings(listings)
     const now = Date.now()
-    const windowStartMs = now - catchupWindowDays(channel) * 24 * 60 * 60 * 1000
-    const windowEndMs = now + 36 * 60 * 60 * 1000
+    // Bounds shifted into raw provider space to match the cached entries.
+    const windowStartMs = displayedToUtcMs(activePlaylistId, now - catchupWindowDays(channel) * 24 * 60 * 60 * 1000)
+    const windowEndMs = displayedToUtcMs(activePlaylistId, now + 36 * 60 * 60 * 1000)
     const windowed = normalized.filter(
       (entry) => entry.startUtcMs >= windowStartMs && entry.startUtcMs <= windowEndMs
     )
@@ -5760,11 +5759,11 @@ async function fetchXtreamFullEpg(channel) {
   }
 }
 
-/** Maps cached full-table listings to the {start, stop, title, desc, hasArchive} shape renderEpgSidePanelRows expects. */
+/** Maps cached full-table listings (raw provider UTC) to the {start, stop, title, desc, hasArchive} shape renderEpgSidePanelRows expects, shifted into display space. */
 function xtreamListingsToProgrammes(listings) {
   return listings.map((listing) => ({
-    start: listing.startUtcMs,
-    stop: listing.stopUtcMs,
+    start: utcToDisplayedMs(activePlaylistId, listing.startUtcMs),
+    stop: utcToDisplayedMs(activePlaylistId, listing.stopUtcMs),
     title: listing.title,
     desc: listing.description,
     hasArchive: listing.hasArchive,
@@ -5775,7 +5774,7 @@ function renderXtreamEpgEntries(channel, programmes, isNewChannelPaint) {
   const { past, upcoming } = computeEpgSidePanelWindow(programmes, epgSidePanelPastPages, true)
   const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
   const canLoadEarlier = epgSidePanelPastPages < maxPastPages
-  renderEpgSidePanelRows(past, upcoming, { isM3uSource: false, canLoadEarlier, isNewChannelPaint })
+  renderEpgSidePanelRows(past, upcoming, { timesAreDisplayed: true, canLoadEarlier, isNewChannelPaint })
 }
 
 /** Xtream variant of paintSidePanelFromXmltv: fetches the full EPG table for catch-up-capable channels; falls back to loadEPG's short list when the table is unavailable. */
@@ -5867,11 +5866,9 @@ epgList?.addEventListener("click", async (e) => {
   const now = Date.now()
   const isLive = entry.start <= now && now < entry.stop
   const isEnded = entry.stop <= now
-  // XMLTV panel entries carry display-shifted times; short-EPG and full-table entries are already UTC.
-  // rawStart/rawStop recover the true XMLTV time so catch-up math never sees the tvg-shift correction.
-  const isM3uSource = hasDirectUrl(epgListChannelId)
-  const startUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.rawStart ?? entry.start) : entry.start
-  const stopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.rawStop ?? entry.stop) : entry.stop
+  // rawStart/rawStop (M3U) skip the tvg-shift so catch-up math sees true XMLTV time.
+  const startUtcMs = displayedToUtcMs(activePlaylistId, entry.rawStart ?? entry.start)
+  const stopUtcMs = displayedToUtcMs(activePlaylistId, entry.rawStop ?? entry.stop)
   // has_archive narrows catch-up eligibility when sent; it never widens past the channel-level window check.
   const archiveKnownPlayable = entry.hasArchive == null ? true : entry.hasArchive
 

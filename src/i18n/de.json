@@ -412,6 +412,8 @@
   "epg.tomorrow": "Morgen",
   "epg.previousDay": "Vorheriger Tag",
   "epg.nextDay": "Nächster Tag",
+  "epg.earlier": "Früher",
+  "epg.later": "Später",
   "epg.timezoneTitle": "EPG-Zeitzone",
   "epg.timezoneHelper": "Einige Anbieter liefern XMLTV mit Zeitstempeln, die bereits auf die Server-Lokalzeit verschoben wurden - dadurch wirken die EPG-Zeiten verschoben. Die Auto-Erkennung wählt den Versatz, bei dem aktuell die meisten Sender ein Programm laufen haben.",
   "epg.timezoneAutoDetect": "Automatisch erkennen",

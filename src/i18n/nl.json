@@ -412,6 +412,8 @@
   "epg.tomorrow": "Morgen",
   "epg.previousDay": "Vorige dag",
   "epg.nextDay": "Volgende dag",
+  "epg.earlier": "Eerder",
+  "epg.later": "Later",
   "epg.timezoneTitle": "EPG-tijdzone",
   "epg.timezoneHelper": "Sommige providers leveren XMLTV met tijdstempels die al naar de lokale tijd van de server zijn verschoven, waardoor EPG-tijden er verkeerd uitzien. Automatische detectie kiest de offset waarbij de meeste kanalen op dit moment een uitzending hebben.",
   "epg.timezoneAutoDetect": "Automatisch detecteren",

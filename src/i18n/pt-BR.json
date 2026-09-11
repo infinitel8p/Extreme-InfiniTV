@@ -412,6 +412,8 @@
   "epg.tomorrow": "Amanhã",
   "epg.previousDay": "Dia anterior",
   "epg.nextDay": "Próximo dia",
+  "epg.earlier": "Mais cedo",
+  "epg.later": "Mais tarde",
   "epg.timezoneTitle": "Fuso horário do EPG",
   "epg.timezoneHelper": "Alguns provedores entregam XMLTV com timestamps já deslocados para o fuso local do servidor, fazendo os horários do EPG parecerem errados. A detecção automática escolhe o deslocamento em que o maior número de canais tem um programa no ar agora.",
   "epg.timezoneAutoDetect": "Detectar automaticamente",

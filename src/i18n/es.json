@@ -412,6 +412,8 @@
   "epg.tomorrow": "Mañana",
   "epg.previousDay": "Día anterior",
   "epg.nextDay": "Día siguiente",
+  "epg.earlier": "Antes",
+  "epg.later": "Después",
   "epg.timezoneTitle": "Zona horaria del EPG",
   "epg.timezoneHelper": "Algunos proveedores envían XMLTV con marcas de tiempo ya desplazadas a la hora local del servidor, por lo que las horas del EPG se ven mal. La detección automática elige el desfase con el que la mayoría de los canales tienen un programa al aire ahora mismo.",
   "epg.timezoneAutoDetect": "Detectar automáticamente",

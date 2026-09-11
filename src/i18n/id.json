@@ -412,6 +412,8 @@
   "epg.tomorrow": "Besok",
   "epg.previousDay": "Hari sebelumnya",
   "epg.nextDay": "Hari berikutnya",
+  "epg.earlier": "Lebih awal",
+  "epg.later": "Lebih lambat",
   "epg.timezoneTitle": "Zona waktu EPG",
   "epg.timezoneHelper": "Beberapa penyedia mengirim XMLTV dengan stempel waktu sudah digeser ke waktu lokal server, sehingga waktu EPG terlihat salah. Deteksi otomatis memilih offset di mana paling banyak saluran memiliki acara yang sedang tayang.",
   "epg.timezoneAutoDetect": "Deteksi otomatis",

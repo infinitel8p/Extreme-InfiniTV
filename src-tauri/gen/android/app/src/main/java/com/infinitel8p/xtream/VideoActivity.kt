@@ -36,6 +36,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -89,6 +90,12 @@ class VideoActivity : AppCompatActivity() {
     // DefaultTimeBar defaults to a 20-step key increment, so a 100-minute movie steps 5
     // minutes per D-pad press; pin a fixed 15s step instead.
     private const val TIME_BAR_KEY_INCREMENT_MS = 15_000L
+
+    // media3 default rebuffer threshold (5s) is the black gap on channel switch.
+    private const val LOAD_CONTROL_MIN_BUFFER_MS = 15_000
+    private const val LOAD_CONTROL_MAX_BUFFER_MS = 50_000
+    private const val LOAD_CONTROL_BUFFER_FOR_PLAYBACK_MS = 1_000
+    private const val LOAD_CONTROL_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 1_500
 
     // Live retune: same-url backoff, then hop to the next backup url.
     private val LIVE_RETUNE_BACKOFF_MS = longArrayOf(1_000L, 2_000L, 4_000L)
@@ -145,6 +152,12 @@ class VideoActivity : AppCompatActivity() {
   private var channels: List<ChannelLite> = emptyList()
   private var currentChannelIndex: Int = -1
   private var channelAdapter: ChannelListAdapter? = null
+
+  // Per-switch rebuilds cost a fresh OkHttp client and a cold DNS cache.
+  private var cachedMediaSourceFactory: MediaSource.Factory? = null
+  private var cachedFactoryUa: String? = null
+  private var cachedFactoryReferer: String? = null
+  private var cachedFactoryDns: String? = null
 
   private data class SelectedTracks(
     val audioLang: String?,
@@ -406,6 +419,10 @@ class VideoActivity : AppCompatActivity() {
     progressHandler.postDelayed(progressTick, PROGRESS_INTERVAL_MS)
   }
 
+  private fun updateControllerTitle(title: String) {
+    controllerTitleView?.text = title
+  }
+
   private fun initializeFromIntent(intent: Intent) {
     mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_VOD
     contentKey = intent.getStringExtra(EXTRA_CONTENT_KEY) ?: ""
@@ -419,7 +436,7 @@ class VideoActivity : AppCompatActivity() {
     subLangPref = intent.getStringExtra(EXTRA_SUB_LANG) ?: ""
     subEnabledPref = intent.getBooleanExtra(EXTRA_SUB_ENABLED, false)
     applyTvOverscanPadding(intent.getIntExtra(EXTRA_TV_OVERSCAN_PERCENT, 0))
-    controllerTitleView?.text = initialTitle
+    updateControllerTitle(initialTitle)
 
     if (mode == MODE_LIVE) {
       cancelLiveRetune()
@@ -622,8 +639,18 @@ class VideoActivity : AppCompatActivity() {
 
   private fun initializePlayer() {
     val view = playerView ?: return
+    val loadControl = DefaultLoadControl.Builder()
+      .setBufferDurationsMs(
+        LOAD_CONTROL_MIN_BUFFER_MS,
+        LOAD_CONTROL_MAX_BUFFER_MS,
+        LOAD_CONTROL_BUFFER_FOR_PLAYBACK_MS,
+        LOAD_CONTROL_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+      )
+      .setPrioritizeTimeOverSizeThresholds(true)
+      .build()
     val player = ExoPlayer.Builder(this)
-      .setMediaSourceFactory(buildMediaSourceFactory(defaultUa, defaultReferer, defaultDns))
+      .setMediaSourceFactory(mediaSourceFactoryFor(defaultUa, defaultReferer, defaultDns))
+      .setLoadControl(loadControl)
       .build()
     exoPlayer = player
     view.player = player
@@ -757,6 +784,19 @@ class VideoActivity : AppCompatActivity() {
       depth++
     }
     return 0
+  }
+
+  private fun mediaSourceFactoryFor(ua: String, referer: String, dns: String): MediaSource.Factory {
+    val cached = cachedMediaSourceFactory
+    if (cached != null && cachedFactoryUa == ua && cachedFactoryReferer == referer && cachedFactoryDns == dns) {
+      return cached
+    }
+    val factory = buildMediaSourceFactory(ua, referer, dns)
+    cachedMediaSourceFactory = factory
+    cachedFactoryUa = ua
+    cachedFactoryReferer = referer
+    cachedFactoryDns = dns
+    return factory
   }
 
   private fun buildMediaSourceFactory(ua: String, referer: String, dns: String): MediaSource.Factory {
@@ -1066,8 +1106,9 @@ class VideoActivity : AppCompatActivity() {
     val ua = channel.ua.ifBlank { defaultUa }
     val ref = channel.referer.ifBlank { defaultReferer }
     val url = urlOverride ?: channel.streamUrl
+    updateControllerTitle(channel.name)
     try {
-      val factory = buildMediaSourceFactory(ua, ref, defaultDns)
+      val factory = mediaSourceFactoryFor(ua, ref, defaultDns)
       val item = buildMediaItem(url, channel.name, channel.logo)
       val src = factory.createMediaSource(item)
       player.setMediaSource(src)

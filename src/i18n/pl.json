@@ -412,6 +412,8 @@
   "epg.tomorrow": "Jutro",
   "epg.previousDay": "Poprzedni dzień",
   "epg.nextDay": "Następny dzień",
+  "epg.earlier": "Wcześniej",
+  "epg.later": "Później",
   "epg.timezoneTitle": "Strefa czasowa EPG",
   "epg.timezoneHelper": "Niektórzy dostawcy przesyłają XMLTV ze znacznikami czasu już przesuniętymi do czasu lokalnego serwera, więc godziny EPG wyglądają niepoprawnie. Automatyczne wykrywanie wybiera przesunięcie, dla którego najwięcej kanałów ma teraz emitowany program.",
   "epg.timezoneAutoDetect": "Wykryj automatycznie",
