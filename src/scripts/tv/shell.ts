@@ -2,7 +2,7 @@
 
 import { navigate } from "astro:transitions/client"
 import { initI18n, t, LOCALE_EVENT, applyI18nDOM } from "@/scripts/lib/i18n"
-import { mountBackHandler } from "@/scripts/lib/back-handler"
+import { mountBackHandler, handleBack } from "@/scripts/lib/back-handler"
 import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
 import { initConnectivity } from "@/scripts/lib/connectivity.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
@@ -10,13 +10,18 @@ import { initUiSounds } from "@/scripts/lib/ui-sounds"
 import { initHaptics } from "@/scripts/lib/haptics"
 import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
 import { registerMainFocusSection, NAV_SECTION_ID } from "@/scripts/tv/focus"
+import { isElementVisibleForNav } from "@/scripts/lib/nav-visibility"
 import { mountTvFocusGlide } from "@/scripts/tv/focus-glide"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
-import { renderPlaylistRow } from "@/scripts/lib/playlist-rows.js"
+import { getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
+import { renderTvPlaylistRow } from "@/scripts/tv/ui/playlist-row"
+import { createActionSheet, type ActionSheetHandle } from "@/scripts/tv/ui/action-sheet"
 import { ICON_X, ICON_PLAYLIST_ADD } from "@/scripts/lib/icons"
 import { mountTvRouter, TV_VIEW_MOUNTED_EVENT } from "@/scripts/tv/router"
-import { tvNavActiveHref } from "@/scripts/lib/tv-routes"
+import { tvNavActiveHref, normalizePathname } from "@/scripts/lib/tv-routes"
 import { mountTvWarmupIndicator } from "@/scripts/tv/ui/warmup-indicator"
+import { mountRootFontSizeSync } from "@/scripts/tv/root-font-size"
+import { mountExternalProgressRecorder } from "@/scripts/lib/external-progress"
 
 function syncNavActiveState(): void {
   const activeHref = tvNavActiveHref(location.pathname)
@@ -76,18 +81,34 @@ function ensurePlaylistDialog(): HTMLDialogElement {
   return dialog
 }
 
+let playlistActionSheet: ActionSheetHandle | null = null
+
+function ensurePlaylistActionSheet(): ActionSheetHandle {
+  if (!playlistActionSheet) playlistActionSheet = createActionSheet("tv-playlist-actions")
+  return playlistActionSheet
+}
+
 async function openPlaylistDialog(): Promise<void> {
   const dialog = ensurePlaylistDialog()
   const listEl = dialog.querySelector<HTMLElement>("#tv-playlist-dialog-list")
-  if (listEl) {
+  const actionSheet = ensurePlaylistActionSheet()
+
+  async function renderList(): Promise<void> {
+    if (!listEl) return
     listEl.replaceChildren()
     const [entries, active] = await Promise.all([getEntries(), getActiveEntry()])
+    if (!entries.length) {
+      const empty = document.createElement("p")
+      empty.className = "px-4 py-4 text-xs text-fg-3"
+      empty.textContent = getPlaylistListEmptyCopy()
+      listEl.appendChild(empty)
+      return
+    }
     for (const entry of entries) {
       listEl.appendChild(
-        renderPlaylistRow({
+        renderTvPlaylistRow({
           entry,
           isActive: active?._id === entry._id,
-          density: "compact",
           onAfterSelect: async () => {
             dialog.close()
             try {
@@ -96,11 +117,43 @@ async function openPlaylistDialog(): Promise<void> {
               location.reload()
             }
           },
+          onAfterChange: (changedEntryId, change) => renderListAndRefocus(changedEntryId, change),
+          actionSheet,
+          onBeforeNavigate: () => dialog.close(),
         })
       )
     }
   }
+
+  async function renderListAndRefocus(changedEntryId: string, change: "refresh" | "remove"): Promise<void> {
+    if (!listEl) return
+    const rowsBefore = Array.from(listEl.querySelectorAll<HTMLElement>("[data-entry-id]"))
+    const removedIndex = rowsBefore.findIndex((row) => row.dataset.entryId === changedEntryId)
+    await renderList()
+    if (change === "refresh") {
+      const row = listEl.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(changedEntryId)}"]`)
+      const target = row?.querySelector<HTMLElement>('[data-role="main"]')
+      if (target) {
+        target.focus()
+        return
+      }
+    }
+    const rowsAfter = Array.from(listEl.querySelectorAll<HTMLElement>("[data-entry-id]"))
+    const successorRow = rowsAfter[Math.min(removedIndex, rowsAfter.length - 1)]
+    const successorTarget = successorRow?.querySelector<HTMLElement>('[data-role="main"]')
+    if (successorTarget) {
+      successorTarget.focus()
+      return
+    }
+    dialog.querySelector<HTMLElement>("a[href='/tv/login']")?.focus()
+  }
+
+  await renderList()
   if (typeof dialog.showModal === "function") dialog.showModal()
+  const focusTarget =
+    listEl?.querySelector<HTMLElement>('[data-tv-row-active="true"]') ||
+    listEl?.querySelector<HTMLElement>('[data-role="main"]')
+  focusTarget?.focus()
 }
 
 function mountNavPlaylistDialog(): void {
@@ -116,10 +169,7 @@ function isNavigableElement(elem: Element): boolean {
   const fullscreenEl = document.fullscreenElement
   if (fullscreenEl && !fullscreenEl.contains(elem)) return false
   if (elem.closest("[inert]")) return false
-  const rect = elem.getBoundingClientRect()
-  if (rect.right <= 0 || rect.bottom <= 0) return false
-  if (getComputedStyle(elem).visibility !== "visible") return false
-  return true
+  return isElementVisibleForNav(elem)
 }
 
 const VERTICAL_KEYS: Record<string, true> = { ArrowUp: true, ArrowDown: true, PageUp: true, PageDown: true }
@@ -180,8 +230,8 @@ function initSpatialNavForMain(): void {
   })
   // Registered through focus.ts so every later view section stays ahead of it.
   registerMainFocusSection({
-    selector:
-      "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
+    selector: "a, button, input, textarea, select, [tabindex]:not([tabindex='-1'])",
+    root: document.getElementById("tv-main") || document.body,
     leaveFor: isRtl ? { right: `@${NAV_SECTION_ID}`, up: "", down: "" } : { left: `@${NAV_SECTION_ID}`, up: "", down: "" },
     navigableFilter: (elem: Element) => {
       if (elem.closest("#tv-nav")) return false
@@ -224,23 +274,6 @@ function scheduleBackgroundWarmup(): void {
         return import("@/scripts/lib/catalog.js").then((mod) => mod.warmupActive(entry._id))
       })
       .catch(() => {})
-  })
-}
-
-function mountPrefetchOnFocus(): void {
-  const prefetched = new Set<string>()
-  document.addEventListener("focusin", (event) => {
-    const target = event.target
-    if (!(target instanceof Element)) return
-    const anchor = target.closest<HTMLAnchorElement>("a[href^='/tv']")
-    if (!anchor || !anchor.href || prefetched.has(anchor.href)) return
-    prefetched.add(anchor.href)
-    try {
-      const link = document.createElement("link")
-      link.rel = "prefetch"
-      link.href = anchor.href
-      document.head.appendChild(link)
-    } catch {}
   })
 }
 
@@ -316,15 +349,21 @@ function restoreFocus(): void {
   window.addEventListener("keydown", noteInteraction, true)
   window.addEventListener("pointerdown", noteInteraction, true)
 
+  // One querySelector per frame, not per MutationObserver batch.
+  let pendingRestoreFrame: number | null = null
   const observer = new MutationObserver(() => {
-    const appeared = main.querySelector<HTMLElement>(storedSelector)
-    if (!appeared) return
-    stopRestoreWait()
-    const active = document.activeElement
-    // A view autofocusing its own first row is not the user moving on.
-    const userMovedOn =
-      userInteracted && active instanceof HTMLElement && main.contains(active) && active !== focusAtWaitStart
-    if (!userMovedOn) appeared.focus()
+    if (pendingRestoreFrame != null) return
+    pendingRestoreFrame = requestAnimationFrame(() => {
+      pendingRestoreFrame = null
+      const appeared = main.querySelector<HTMLElement>(storedSelector)
+      if (!appeared) return
+      stopRestoreWait()
+      const active = document.activeElement
+      // A view autofocusing its own first row is not the user moving on.
+      const userMovedOn =
+        userInteracted && active instanceof HTMLElement && main.contains(active) && active !== focusAtWaitStart
+      if (!userMovedOn) appeared.focus()
+    })
   })
   observer.observe(main, { childList: true, subtree: true })
 
@@ -337,6 +376,10 @@ function restoreFocus(): void {
 
   cancelRestoreWait = () => {
     observer.disconnect()
+    if (pendingRestoreFrame != null) {
+      cancelAnimationFrame(pendingRestoreFrame)
+      pendingRestoreFrame = null
+    }
     window.clearTimeout(timeoutId)
     window.removeEventListener("keydown", noteInteraction, true)
     window.removeEventListener("pointerdown", noteInteraction, true)
@@ -376,10 +419,12 @@ function mountFocusMemory(): void {
     const active = document.activeElement
     const focusKeyEl = active instanceof Element ? active.closest<HTMLElement>("[data-focus-key]") : null
     // Leaving via the rail must not overwrite a still-useful key.
-    if (!focusKeyEl || !document.getElementById("tv-main")?.contains(focusKeyEl)) return
-    try {
-      sessionStorage.setItem(focusKeyStorageKey(), focusKeyEl.dataset.focusKey || "")
-    } catch {}
+    if (focusKeyEl && document.getElementById("tv-main")?.contains(focusKeyEl)) {
+      try {
+        sessionStorage.setItem(focusKeyStorageKey(), focusKeyEl.dataset.focusKey || "")
+      } catch {}
+    }
+    lastMainFocused = null
   })
 
   document.addEventListener(TV_VIEW_MOUNTED_EVENT, (event) => {
@@ -395,11 +440,40 @@ function mountFocusMemory(): void {
   })
 }
 
+const DESKTOP_BACK_KEYS: ReadonlySet<string> = new Set(["Escape", "Backspace", "BrowserBack", "GoBack"])
+
+function isEditableBackTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest("input, textarea, [contenteditable='true'], [contenteditable='']")
+}
+
+// playback.ts owns Escape while the host is visible.
+function isPlayerHostVisible(): boolean {
+  const host = document.getElementById("tv-player-host")
+  return !!host && !host.classList.contains("hidden")
+}
+
+// Real TVs route BACK through MainActivity; this is the desktop keyboard path.
+function mountDesktopBackKey(): void {
+  document.addEventListener("keydown", (event) => {
+    if (document.documentElement.dataset.tv === "1") return
+    if (event.defaultPrevented || !DESKTOP_BACK_KEYS.has(event.key)) return
+    if (isEditableBackTarget(event.target)) return
+    if (event.target instanceof Element && event.target.closest("dialog[open]")) return
+    if (isPlayerHostVisible()) return
+    event.preventDefault()
+    if (handleBack()) return
+    if (normalizePathname(location.pathname) !== "/tv" && history.length > 1) history.back()
+  })
+}
+
 export function bootTvShell(): void {
+  mountRootFontSizeSync()
   void initI18n()
   mountBackHandler()
+  mountDesktopBackKey()
   mountTvInputGuard()
   initConnectivity()
+  mountExternalProgressRecorder()
   initUiSounds()
   initHaptics()
   initPlaylistAccent()
@@ -411,7 +485,6 @@ export function bootTvShell(): void {
   mountAmbientHandoffRefresh()
   mountNavSync()
   mountNavPlaylistDialog()
-  mountPrefetchOnFocus()
   mountCloseDialogsOnSwap()
   mountFocusMemory()
   mountTvWarmupIndicator()

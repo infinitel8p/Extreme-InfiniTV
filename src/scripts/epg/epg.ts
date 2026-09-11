@@ -26,7 +26,7 @@ import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
 import { channelSupportsCatchup, isCatchupPlayable } from "@/scripts/lib/catchup.ts"
 import {
   ensureLoaded as ensurePrefsLoaded,
-  getFavorites,
+  getFavoritesOrdered,
   getRecents,
   getChannelEpgOverride,
   setChannelEpgOverride,
@@ -44,12 +44,15 @@ const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
 
 const PX_PER_HOUR = 200
-const HOURS_VISIBLE = 6
 const ROW_HEIGHT = Math.max(44, Math.round(64 * getDensityFactor()))
 const CHANNEL_COL_WIDTH = 240
 const MAX_CHANNELS = 150
-const DAY_MS = 24 * 60 * 60 * 1000
+const HOUR_MS = 60 * 60 * 1000
+const HALF_HOUR_MS = 30 * 60 * 1000
+// Day-offset label math only; calendar nav uses addDays.
+const DAY_APPROX_MS = 24 * HOUR_MS
 const CATCHUP_LOOKBACK_DAYS = 7
+const SCRUB_HOURS = 3
 
 // ----------------------------
 // UI refs
@@ -61,6 +64,8 @@ const bodyEl = document.getElementById("epg-body")
 const titleEl = document.getElementById("epg-title")
 const refreshBtn = document.getElementById("epg-refresh")
 const nowBtn = document.getElementById("epg-now")
+const earlierBtn = document.getElementById("epg-earlier")
+const laterBtn = document.getElementById("epg-later")
 const prevDayBtn = document.getElementById("epg-prev-day")
 const nextDayBtn = document.getElementById("epg-next-day")
 const dayLabelEl = document.getElementById("epg-day-label")
@@ -78,7 +83,8 @@ let channels = []
 let allChannels = []
 /** @type {Map<string, Array<{start:number,stop:number,title:string,desc:string}>>} channel id (tvg-id, lower-cased) → sorted programmes */
 const programmes = new Map()
-let viewStart = 0
+// Local midnight of the currently displayed rail day.
+let viewDayStart = 0
 
 const picker = mountCategoryPicker({
   kind: "epg",
@@ -90,6 +96,10 @@ const picker = mountCategoryPicker({
   // counts every entry — not just ones with a tvg-id. The schedule grid
   // continues to drop tvg-id-less rows downstream.
   getItems: () => allChannels,
+  onSyncToggle: () => {
+    syncCategoryTitle()
+    applyCategory()
+  },
 })
 
 function setStatus(text) {
@@ -268,44 +278,77 @@ function hideStatus() {
 // ----------------------------
 // Render
 // ----------------------------
-function roundHalfHourFloor(ts) {
-  const half = 30 * 60 * 1000
-  return Math.floor(ts / half) * half
+function startOfDay(ts) {
+  const day = new Date(ts)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
 }
 
-function startOfHour(ts) {
-  const hour = 60 * 60 * 1000
-  return Math.floor(ts / hour) * hour
+// Calendar-day arithmetic (not +/- 86400000ms) so DST-shifted 23h/25h days land right.
+function addDays(dayStart, delta) {
+  const day = new Date(dayStart)
+  day.setDate(day.getDate() + delta)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
 }
 
-// Bounds match the catch-up window: up to 7 days back, up to 12h of upcoming
-// schedule ahead of now.
-function clampViewStart(ts) {
-  const now = Date.now()
-  const min = startOfHour(now - CATCHUP_LOOKBACK_DAYS * DAY_MS)
-  const max = now + 12 * 60 * 60 * 1000
-  return Math.max(min, Math.min(max, ts))
+function dayLengthMs(dayStart) {
+  return addDays(dayStart, 1) - dayStart
+}
+
+// 7 days back to 36h ahead, matching the retained EPG window.
+function minViewDayStart() {
+  return addDays(startOfDay(Date.now()), -CATCHUP_LOOKBACK_DAYS)
+}
+
+function maxViewDayStart() {
+  return startOfDay(Date.now() + 36 * HOUR_MS)
+}
+
+function clampDayStart(ts) {
+  return Math.max(minViewDayStart(), Math.min(maxViewDayStart(), ts))
 }
 
 function isViewingToday() {
-  const now = new Date()
-  const viewed = new Date(viewStart)
-  return (
-    now.getFullYear() === viewed.getFullYear() &&
-    now.getMonth() === viewed.getMonth() &&
-    now.getDate() === viewed.getDate()
-  )
+  return viewDayStart === startOfDay(Date.now())
+}
+
+function dayOffsetFromToday() {
+  return Math.round((viewDayStart - startOfDay(Date.now())) / DAY_APPROX_MS)
 }
 
 function updateDayLabel() {
   if (!dayLabelEl) return
-  dayLabelEl.textContent = isViewingToday()
-    ? t("epg.today")
-    : new Intl.DateTimeFormat(getActiveLocale(), {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-      }).format(new Date(viewStart))
+  const offset = dayOffsetFromToday()
+  dayLabelEl.textContent =
+    offset === 0
+      ? t("epg.today")
+      : offset === -1
+      ? t("epg.yesterday")
+      : offset === 1
+      ? t("epg.tomorrow")
+      : new Intl.DateTimeFormat(getActiveLocale(), {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+        }).format(new Date(viewDayStart))
+}
+
+function updateDayNavState() {
+  const atMin = viewDayStart <= minViewDayStart()
+  const atMax = viewDayStart >= maxViewDayStart()
+  if (prevDayBtn instanceof HTMLButtonElement) {
+    prevDayBtn.disabled = atMin
+    prevDayBtn.setAttribute("aria-disabled", String(atMin))
+  }
+  if (nextDayBtn instanceof HTMLButtonElement) {
+    nextDayBtn.disabled = atMax
+    nextDayBtn.setAttribute("aria-disabled", String(atMax))
+  }
+}
+
+function navigateToLive(channelId) {
+  window.location.href = `/livetv?channel=${encodeURIComponent(String(channelId))}`
 }
 
 function navigateToCatchup(channelId, startDisplayMs, stopDisplayMs, title, catchupId) {
@@ -327,25 +370,30 @@ function fmtTime(ts) {
 }
 
 function timeToX(ts) {
-  return ((ts - viewStart) / (60 * 60 * 1000)) * PX_PER_HOUR
+  return ((ts - viewDayStart) / HOUR_MS) * PX_PER_HOUR
+}
+
+function dayWidthPx() {
+  return (dayLengthMs(viewDayStart) / HOUR_MS) * PX_PER_HOUR
 }
 
 function renderTimeHeader() {
   if (!headerInner) return
   headerInner.replaceChildren()
-  headerInner.style.width = `${HOURS_VISIBLE * PX_PER_HOUR}px`
+  const width = dayWidthPx()
+  headerInner.style.width = `${width}px`
 
-  // Half-hour ticks across the visible window.
-  for (let i = 0; i <= HOURS_VISIBLE * 2; i++) {
-    const ts = viewStart + i * 30 * 60 * 1000
+  // Half-hour ticks across the whole rail day (23-25 half-hour steps on DST-shift days).
+  const dayEnd = viewDayStart + dayLengthMs(viewDayStart)
+  for (let ts = viewDayStart; ts <= dayEnd; ts += HALF_HOUR_MS) {
     const tick = document.createElement("div")
-    const isHour = i % 2 === 0
+    const isHour = Math.round((ts - viewDayStart) / HALF_HOUR_MS) % 2 === 0
     tick.className =
       "absolute top-0 bottom-0 flex items-end pb-1 select-none " +
       (isHour
         ? "border-l border-line text-fg-2 text-xs tabular-nums px-1.5 font-medium"
         : "border-l border-line/40 text-fg-3 text-2xs tabular-nums px-1.5")
-    tick.style.left = `${(i * 30 * PX_PER_HOUR) / 60}px`
+    tick.style.left = `${timeToX(ts)}px`
     tick.textContent = fmtTime(ts)
     headerInner.appendChild(tick)
   }
@@ -357,10 +405,15 @@ function renderChannelRow(channel, programmesForRow) {
   row.style.height = `${ROW_HEIGHT}px`
 
   // Sticky channel info column.
-  const info = document.createElement("div")
+  const info = document.createElement("button")
+  info.type = "button"
   info.className =
-    "shrink-0 sticky left-0 z-10 bg-bg flex items-center gap-2 px-3 border-r border-line"
+    "shrink-0 sticky left-0 z-10 bg-bg flex items-center gap-2 px-3 border-r border-line " +
+    "text-left cursor-pointer outline-none hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent"
   info.style.width = `${CHANNEL_COL_WIDTH}px`
+  info.title = channel.name
+  info.setAttribute("aria-label", `${channel.name} - ${t("epg.watchNow")}`)
+  info.addEventListener("click", () => navigateToLive(channel.id))
 
   const logo = document.createElement("div")
   logo.className =
@@ -425,27 +478,31 @@ function renderChannelRow(channel, programmesForRow) {
   // Programme track - relative-positioned host for absolute cells.
   const track = document.createElement("div")
   track.className = "epg-track relative shrink-0"
-  track.style.width = `${HOURS_VISIBLE * PX_PER_HOUR}px`
+  const trackWidth = dayWidthPx()
+  track.style.width = `${trackWidth}px`
 
   // Background grid (half-hour stripes) for visual rhythm.
-  for (let i = 1; i <= HOURS_VISIBLE * 2; i++) {
+  const dayEnd = viewDayStart + dayLengthMs(viewDayStart)
+  let tickIdx = 0
+  for (let ts = viewDayStart + HALF_HOUR_MS; ts < dayEnd; ts += HALF_HOUR_MS) {
+    tickIdx++
     const line = document.createElement("div")
     line.className =
       "absolute top-0 bottom-0 w-px " +
-      (i % 2 === 0 ? "bg-line" : "bg-line/40")
-    line.style.left = `${(i * 30 * PX_PER_HOUR) / 60}px`
+      (tickIdx % 2 === 0 ? "bg-line" : "bg-line/40")
+    line.style.left = `${timeToX(ts)}px`
     track.appendChild(line)
   }
 
-  const visEnd = viewStart + HOURS_VISIBLE * 60 * 60 * 1000
+  const visEnd = dayEnd
 
   const nowMs = Date.now()
   const canChannelCatchup = channelSupportsCatchup(channel)
 
   for (const p of programmesForRow) {
-    if (p.stop <= viewStart || p.start >= visEnd) continue
+    if (p.stop <= viewDayStart || p.start >= visEnd) continue
     const left = Math.max(0, timeToX(p.start))
-    const right = Math.min(timeToX(p.stop), HOURS_VISIBLE * PX_PER_HOUR)
+    const right = Math.min(timeToX(p.stop), trackWidth)
     const width = Math.max(2, right - left)
     const isLive = p.start <= nowMs && p.stop > nowMs
     const isPast = p.stop <= nowMs
@@ -517,8 +574,9 @@ function renderNowLine() {
   if (!bodyEl) return
   // Remove old indicator if any.
   bodyEl.querySelector("[data-now-line]")?.remove()
+  if (!isViewingToday()) return
   const x = timeToX(Date.now())
-  if (x < 0 || x > HOURS_VISIBLE * PX_PER_HOUR) return
+  if (x < 0 || x > dayWidthPx()) return
   const line = document.createElement("div")
   line.dataset.nowLine = ""
   line.className =
@@ -730,8 +788,8 @@ function render() {
   if (!gridEl || !bodyEl || !headerInner) return
   hideStatus()
 
-  // Width of the grid content (channel col + visible time)
-  const totalWidth = CHANNEL_COL_WIDTH + HOURS_VISIBLE * PX_PER_HOUR
+  // Width of the grid content (channel col + full rail day)
+  const totalWidth = CHANNEL_COL_WIDTH + dayWidthPx()
   // Apply width to the inner sliding rail in case CSS hasn't.
   bodyEl.style.minWidth = `${totalWidth}px`
   headerInner.parentElement.style.minWidth = `${totalWidth}px`
@@ -774,8 +832,13 @@ function pickChannels(cachedChannels) {
   const activeCat = picker.getActiveCat()
   let filtered
   if (activeCat === CAT_FAVORITES && activePlaylistId) {
-    const favs = getFavorites(activePlaylistId, "live")
-    filtered = cachedChannels.filter((channel) => favs.has(channel.id))
+    const byId = new Map(cachedChannels.map((channel) => [channel.id, channel]))
+    const orderedFavIds = getFavoritesOrdered(activePlaylistId, "live")
+    filtered = []
+    for (const favId of orderedFavIds) {
+      const channel = byId.get(favId)
+      if (channel) filtered.push(channel)
+    }
   } else if (activeCat === CAT_RECENTS && activePlaylistId) {
     const byId = new Map(cachedChannels.map((channel) => [channel.id, channel]))
     const recents = getRecents(activePlaylistId, "live")
@@ -971,12 +1034,13 @@ async function init() {
   allChannels = cached
   picker.rerender()
 
-  viewStart = roundHalfHourFloor(Date.now() - 30 * 60 * 1000)
+  viewDayStart = startOfDay(Date.now())
   updateDayLabel()
+  updateDayNavState()
   showLoadingSkeleton(t("epg.loadingFull"))
   programmes.clear()
   try {
-    const state = await loadProgrammes(activePlaylistId, creds, { force: true })
+    const state = await loadProgrammes(activePlaylistId, creds)
     if (!state) throw new Error("EPG fetch failed")
     for (const [k, v] of state.programmes) programmes.set(k, v)
   } catch (e) {
@@ -1004,6 +1068,38 @@ async function init() {
   }
 
   render()
+  scrollToNow(false)
+}
+
+// ----------------------------
+// Rail scrolling
+// ----------------------------
+function shouldReduceMotion() {
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+  const perfMode = document.documentElement.getAttribute("data-perf-mode") === "on"
+  return !!reduce || perfMode
+}
+
+function clampScrollLeft(x) {
+  if (!gridEl) return Math.max(0, x)
+  const max = Math.max(0, gridEl.scrollWidth - gridEl.clientWidth)
+  return Math.max(0, Math.min(max, x))
+}
+
+function scrollGridTo(x, smooth) {
+  if (!gridEl) return
+  const target = clampScrollLeft(x)
+  if (smooth && !shouldReduceMotion()) {
+    try {
+      gridEl.scrollTo({ left: target, behavior: "smooth" })
+      return
+    } catch {}
+  }
+  gridEl.scrollLeft = target
+}
+
+function scrollToNow(smooth) {
+  scrollGridTo(timeToX(Date.now() - HALF_HOUR_MS), smooth)
 }
 
 refreshBtn?.addEventListener("click", () => {
@@ -1014,32 +1110,66 @@ refreshBtn?.addEventListener("click", () => {
 
 nowBtn?.addEventListener("click", () => {
   if (!gridEl) return
-  viewStart = roundHalfHourFloor(Date.now() - 30 * 60 * 1000)
+  viewDayStart = startOfDay(Date.now())
   updateDayLabel()
+  updateDayNavState()
   if (programmes.size && channels.length) render()
-  // Centre the now-line about a third in from the left of the visible width.
-  const visible = gridEl.clientWidth || 0
-  const target = Math.max(
-    0,
-    CHANNEL_COL_WIDTH + timeToX(Date.now()) - Math.max(120, visible / 3)
-  )
-  try {
-    gridEl.scrollTo({ left: target, behavior: "smooth" })
-  } catch {
-    gridEl.scrollLeft = target
-  }
+  scrollToNow(true)
 })
 
 prevDayBtn?.addEventListener("click", () => {
-  viewStart = clampViewStart(viewStart - DAY_MS)
+  if (!gridEl || (prevDayBtn as HTMLButtonElement).disabled) return
+  const priorScroll = gridEl.scrollLeft
+  const next = clampDayStart(addDays(viewDayStart, -1))
+  if (next === viewDayStart) return
+  viewDayStart = next
   updateDayLabel()
+  updateDayNavState()
   if (programmes.size && channels.length) render()
+  gridEl.scrollLeft = priorScroll
 })
 
 nextDayBtn?.addEventListener("click", () => {
-  viewStart = clampViewStart(viewStart + DAY_MS)
+  if (!gridEl || (nextDayBtn as HTMLButtonElement).disabled) return
+  const priorScroll = gridEl.scrollLeft
+  const next = clampDayStart(addDays(viewDayStart, 1))
+  if (next === viewDayStart) return
+  viewDayStart = next
   updateDayLabel()
+  updateDayNavState()
   if (programmes.size && channels.length) render()
+  gridEl.scrollLeft = priorScroll
+})
+
+earlierBtn?.addEventListener("click", () => {
+  if (!gridEl) return
+  if (gridEl.scrollLeft <= 0) {
+    const prev = clampDayStart(addDays(viewDayStart, -1))
+    if (prev === viewDayStart) return
+    viewDayStart = prev
+    updateDayLabel()
+    updateDayNavState()
+    if (programmes.size && channels.length) render()
+    scrollGridTo(Number.MAX_SAFE_INTEGER, false)
+    return
+  }
+  scrollGridTo(gridEl.scrollLeft - SCRUB_HOURS * PX_PER_HOUR, true)
+})
+
+laterBtn?.addEventListener("click", () => {
+  if (!gridEl) return
+  const maxScroll = Math.max(0, gridEl.scrollWidth - gridEl.clientWidth)
+  if (gridEl.scrollLeft >= maxScroll) {
+    const next = clampDayStart(addDays(viewDayStart, 1))
+    if (next === viewDayStart) return
+    viewDayStart = next
+    updateDayLabel()
+    updateDayNavState()
+    if (programmes.size && channels.length) render()
+    scrollGridTo(0, false)
+    return
+  }
+  scrollGridTo(gridEl.scrollLeft + SCRUB_HOURS * PX_PER_HOUR, true)
 })
 
 document.addEventListener(EPG_OFFSET_EVENT, (e) => {

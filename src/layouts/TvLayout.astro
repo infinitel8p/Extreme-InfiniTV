@@ -11,6 +11,7 @@ import {
   IconCast,
 } from "@tabler/icons-svelte"
 import pkg from "../../package.json"
+import WebViewFloorNotice from "@/components/WebViewFloorNotice.astro"
 import { CLASSIC_ROUTE_TABLE, tvNavActiveHref } from "@/scripts/lib/tv-routes"
 import "@/styles/global.css"
 import "@/styles/tv.css"
@@ -48,26 +49,47 @@ const navItems = [
       (function () {
         document.documentElement.dataset.tvUi = "1"
 
-        var isTv = false
+        var realTv = false
         try {
-          if (new URLSearchParams(location.search).get("tv") === "1") localStorage.setItem("xt_force_tv", "1")
-          isTv =
-            localStorage.getItem("xt_is_tv") === "1" ||
-            (window.AndroidDeviceInfo && window.AndroidDeviceInfo.isTv && window.AndroidDeviceInfo.isTv() === true) ||
-            localStorage.getItem("xt_force_tv") === "1"
+          realTv = !!(window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function" && window.AndroidDeviceInfo.isTv() === true)
         } catch (e) {}
+        var detectedTv = false
+        try {
+          detectedTv = localStorage.getItem("xt_is_tv") === "1" || realTv
+        } catch (e) {}
+
+        // Mirrors resolveUiMode in ui-mode.ts
+        try {
+          if (new URLSearchParams(location.search).get("tv") === "1") localStorage.setItem("xt_ui_mode", "tv")
+          if (localStorage.getItem("xt_force_tv") === "1" && localStorage.getItem("xt_ui_mode") === null) {
+            localStorage.setItem("xt_ui_mode", "tv")
+          }
+          localStorage.removeItem("xt_force_tv")
+        } catch (e) {}
+        var storedUiMode = null
+        try { storedUiMode = localStorage.getItem("xt_ui_mode") } catch (e) {}
+        var uiMode = (storedUiMode === "tv" || storedUiMode === "desktop") ? storedUiMode : "auto"
+        var isTv = realTv || uiMode === "tv" || (uiMode === "auto" && detectedTv)
+
         if (!isTv) {
           // Mirrors classicRouteFor in tv-routes.ts
           var classicPath = location.pathname.replace(/\/+$/, "")
           if (classicPath === "") classicPath = "/"
           var classicTarget = classicRouteTable[classicPath] || "/"
-          if (classicTarget === "/movies/detail" || classicTarget === "/series/detail" || classicTarget === "/search") {
+          if (
+            classicTarget === "/movies/detail" ||
+            classicTarget === "/series/detail" ||
+            classicTarget === "/search" ||
+            classicTarget === "/login"
+          ) {
             classicTarget += location.search
           }
           location.replace(classicTarget)
           return
         }
-        document.documentElement.dataset.tv = "1"
+        if (detectedTv) {
+          document.documentElement.dataset.tv = "1"
+        }
 
         try {
           if (
@@ -85,8 +107,63 @@ const navItems = [
           if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1
           document.documentElement.style.setProperty("--xt-font-scale", String(fontScale))
 
-          if (localStorage.getItem("xt_perf_mode") === "1") {
+          // Mirrors computeRootFontSizePx() in root-font-size.ts (same design canvas: 60rem x
+          // 33.75rem, 12px floor) so the pre-paint value matches what the debounced resize
+          // listener computes once the module boots.
+          var rootFontPx = Math.max(12, Math.min(window.innerWidth / 60, window.innerHeight / 33.75) * fontScale)
+          document.documentElement.style.setProperty("--xt-root-px", rootFontPx + "px")
+
+          var perfStored = localStorage.getItem("xt_perf_mode")
+          if (perfStored === null && detectedTv) {
+            localStorage.setItem("xt_perf_mode", "1")
+            localStorage.setItem("xt_perf_mode_auto", "1")
+            perfStored = "1"
+          }
+          if (perfStored === "1") {
             document.documentElement.setAttribute("data-perf-mode", "on")
+          }
+
+          // Same rule as classifyEffectTier() in motion.ts, so data-tv-effects is stable
+          // before first paint; effectTier() re-derives and re-stamps this at runtime.
+          var forcedEffectTier = localStorage.getItem("xt_tv_effects")
+          var resolvedEffectTier = "full"
+          if (forcedEffectTier === "full" || forcedEffectTier === "lite") {
+            resolvedEffectTier = forcedEffectTier
+          } else {
+            var deviceMemoryGb = navigator.deviceMemory
+            var memoryClassMb = null
+            try {
+              if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.getMemoryClass === "function") {
+                var rawMemoryClass = window.AndroidDeviceInfo.getMemoryClass()
+                if (typeof rawMemoryClass === "number" && rawMemoryClass > 0) memoryClassMb = rawMemoryClass
+              }
+            } catch (e) {}
+            var uaLower = (navigator.userAgent || "").toLowerCase()
+            if (typeof deviceMemoryGb === "number" && deviceMemoryGb <= 2) {
+              resolvedEffectTier = "lite"
+            } else if (memoryClassMb !== null && memoryClassMb <= 256) {
+              resolvedEffectTier = "lite"
+            } else if (
+              uaLower.indexOf("android") !== -1 &&
+              typeof navigator.hardwareConcurrency === "number" &&
+              navigator.hardwareConcurrency <= 4
+            ) {
+              resolvedEffectTier = "lite"
+            } else if (uaLower.indexOf("armv7") !== -1 || uaLower.indexOf("armeabi") !== -1) {
+              resolvedEffectTier = "lite"
+            }
+          }
+          document.documentElement.setAttribute("data-tv-effects", resolvedEffectTier)
+
+          // Astro's ClientRouter snapshots both documents per navigation even with animations zeroed.
+          if ((perfStored === "1" || resolvedEffectTier === "lite") && typeof document.startViewTransition === "function") {
+            document.__xtNativeStartViewTransition = document.startViewTransition
+            document.startViewTransition = function (updateCallback) {
+              var done = Promise.resolve().then(function () {
+                return updateCallback && updateCallback()
+              })
+              return { ready: done, updateCallbackDone: done, finished: done, skipTransition: function () {} }
+            }
           }
 
           var densityMap = { compact: 0.75, comfortable: 1.3 }
@@ -110,9 +187,13 @@ const navItems = [
 
         try {
           var storedThemeRaw = localStorage.getItem("xt_theme")
-          if (storedThemeRaw === null) document.documentElement.style.colorScheme = "dark"
-          else if (storedThemeRaw === "light") document.documentElement.style.colorScheme = "light"
-          else if (storedThemeRaw === "dark") document.documentElement.style.colorScheme = "dark"
+          if (storedThemeRaw === null || storedThemeRaw === "dark") {
+            document.documentElement.style.colorScheme = "dark"
+            document.documentElement.setAttribute("data-theme", "dark")
+          } else if (storedThemeRaw === "light") {
+            document.documentElement.style.colorScheme = "light"
+            document.documentElement.setAttribute("data-theme", "light")
+          }
         } catch (e) {}
 
         try {
@@ -150,18 +231,17 @@ const navItems = [
             )
           }
 
+          // Only the small nav aria-label/text subset TvLayout's own static markup needs -
+          // i18n.ts writes this alongside the full xt_locale_messages_v3 blob.
           if (storedLocale && storedLocale !== "en") {
-            var rawMessages = localStorage.getItem("xt_locale_messages_v3")
-            if (rawMessages) {
-              var cached = JSON.parse(rawMessages)
-              if (cached && cached.code === storedLocale && cached.messages) {
-                var msgs = cached.messages
+            var rawPrepaint = localStorage.getItem("xt_locale_prepaint")
+            if (rawPrepaint) {
+              var cachedPrepaint = JSON.parse(rawPrepaint)
+              if (cachedPrepaint && cachedPrepaint.code === storedLocale && cachedPrepaint.messages) {
+                var msgs = cachedPrepaint.messages
                 var translateEl = function (el) {
-                  if (!el || el.nodeType !== 1) return
                   var textKey = el.getAttribute("data-i18n")
                   if (textKey && msgs[textKey] != null) el.textContent = msgs[textKey]
-                  var htmlKey = el.getAttribute("data-i18n-html")
-                  if (htmlKey && msgs[htmlKey] != null) el.innerHTML = msgs[htmlKey]
                   var attrSpec = el.getAttribute("data-i18n-attr")
                   if (attrSpec) {
                     var pairs = attrSpec.split(";")
@@ -175,31 +255,11 @@ const navItems = [
                     }
                   }
                 }
-                var i18nObserver = new MutationObserver(function (mutations) {
-                  for (var mi = 0; mi < mutations.length; mi++) {
-                    var added = mutations[mi].addedNodes
-                    for (var ai = 0; ai < added.length; ai++) {
-                      var node = added[ai]
-                      if (node.nodeType !== 1) continue
-                      if (
-                        node.hasAttribute("data-i18n") ||
-                        node.hasAttribute("data-i18n-html") ||
-                        node.hasAttribute("data-i18n-attr")
-                      ) {
-                        translateEl(node)
-                      }
-                      var matches = node.querySelectorAll
-                        ? node.querySelectorAll("[data-i18n], [data-i18n-html], [data-i18n-attr]")
-                        : null
-                      if (matches) {
-                        for (var qi = 0; qi < matches.length; qi++) translateEl(matches[qi])
-                      }
-                    }
-                  }
-                })
-                i18nObserver.observe(document.documentElement, { childList: true, subtree: true })
+                // The nav markup is already parsed into the DOM by DOMContentLoaded, so one
+                // pass here replaces the parse-time MutationObserver this used to need.
                 document.addEventListener("DOMContentLoaded", function () {
-                  i18nObserver.disconnect()
+                  var matches = document.querySelectorAll("[data-i18n], [data-i18n-attr]")
+                  for (var qi = 0; qi < matches.length; qi++) translateEl(matches[qi])
                 })
               }
             }
@@ -207,6 +267,7 @@ const navItems = [
         } catch (e) {}
       })()
     </script>
+    <WebViewFloorNotice />
   </head>
 
   <body class="bg-bg text-fg h-dvh overflow-hidden">
@@ -216,12 +277,14 @@ const navItems = [
         transition:persist="tv-nav"
         aria-label="Main"
         data-i18n-attr="aria-label:sidebar.mainLabel"
-        class="relative z-40 shrink-0 w-[5rem]">
+        class="relative z-40 shrink-0 w-[5rem] hover:not-focus-within:z-50">
         <div
           class="group/rail tv-rail-surface absolute inset-y-0 start-0 flex w-[5rem] flex-col gap-1.5
                  overflow-y-auto overflow-x-hidden bg-bg
                  p-2 outline-none transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]
+                 hover:w-[15rem] hover:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]
                  focus-within:w-[15rem] focus-within:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]
+                 rtl:hover:shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.6)]
                  rtl:focus-within:shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.6)]">
           <div class="flex flex-1 flex-col gap-1.5">
             {navItems.map(({ href, key, label, Icon }) => {
@@ -236,6 +299,7 @@ const navItems = [
                   data-i18n-attr={`aria-label:${key}`}
                   class="group/item relative flex min-h-11 w-full items-center justify-center gap-4
                          rounded-2xl px-0 text-fg-2 outline-none transition-colors tv-focus-inset
+                         group-hover/rail:justify-start group-hover/rail:px-4
                          group-focus-within/rail:justify-start group-focus-within/rail:px-4
                          hover:bg-surface-2 hover:text-fg
                          focus-visible:text-fg
@@ -250,7 +314,7 @@ const navItems = [
                     stroke={1.75}
                     class="size-6 shrink-0 text-fg-3 group-data-[tv-nav-active=true]/item:text-accent"
                   />
-                  <span data-i18n={key} class="hidden truncate text-base font-medium group-focus-within/rail:inline">
+                  <span data-i18n={key} class="hidden truncate text-base font-medium group-hover/rail:inline group-focus-within/rail:inline">
                     {label}
                   </span>
                 </a>
@@ -267,6 +331,7 @@ const navItems = [
               data-i18n-attr="aria-label:tv.nav.playlist"
               class="flex min-h-11 w-full items-center justify-center gap-4 rounded-2xl px-0
                      text-fg-2 outline-none transition-colors tv-focus-inset
+                     group-hover/rail:justify-start group-hover/rail:px-4
                      group-focus-within/rail:justify-start group-focus-within/rail:px-4
                      hover:bg-surface-2 hover:text-fg
                      focus-visible:text-fg">
@@ -277,7 +342,7 @@ const navItems = [
                        bg-surface-2 text-sm font-semibold uppercase">?</span>
               <span
                 id="tv-nav-playlist-title"
-                class="hidden truncate text-base font-medium group-focus-within/rail:inline"
+                class="hidden truncate text-base font-medium group-hover/rail:inline group-focus-within/rail:inline"
                 data-i18n="tv.nav.playlist">Playlist</span>
             </button>
             <a
@@ -288,12 +353,13 @@ const navItems = [
               data-i18n-attr="aria-label:tv.nav.cast"
               class="flex min-h-11 w-full items-center justify-center gap-4 rounded-2xl px-0
                      text-fg-2 outline-none transition-colors tv-focus-inset
+                     group-hover/rail:justify-start group-hover/rail:px-4
                      group-focus-within/rail:justify-start group-focus-within/rail:px-4
                      hover:bg-surface-2 hover:text-fg
                      focus-visible:text-fg">
               <IconCast aria-hidden="true" stroke={1.75} class="size-6 shrink-0 text-fg-3" />
               <span
-                class="hidden truncate text-base font-medium group-focus-within/rail:inline"
+                class="hidden truncate text-base font-medium group-hover/rail:inline group-focus-within/rail:inline"
                 data-i18n="tv.nav.cast">Cast to this TV</span>
             </a>
           </div>

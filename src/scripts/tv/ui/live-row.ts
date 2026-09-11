@@ -3,8 +3,9 @@ import { t, getActiveLocale } from "@/scripts/lib/i18n"
 import { mountCachedImage, releaseCachedImages } from "@/scripts/lib/img-cache.ts"
 import { formatTimeRange, type Programme } from "@/scripts/lib/now-next"
 import { channelSupportsCatchup, isCatchupPlayable, type CatchupCapableChannel } from "@/scripts/lib/catchup.ts"
+import { parseNamePrefix } from "@/scripts/lib/language-tags.ts"
 import { STAR_OUTLINE, STAR_FILLED } from "@/scripts/lib/entry-card.ts"
-import { motionAllowed, TV_EASE } from "@/scripts/tv/motion"
+import { motionAllowed, TV_EASE, effectTier, heavyBlurClass } from "@/scripts/tv/motion"
 import type { CastChannel, CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
 
 export interface LiveChannel extends CastChannel, CatchupCapableChannel {
@@ -13,35 +14,64 @@ export interface LiveChannel extends CastChannel, CatchupCapableChannel {
 
 export type GuideStatus = "loading" | "empty" | "ready"
 
-function buildImg(logoUrl: string, className: string): HTMLImageElement {
+function buildImg(logoUrl: string, className: string, mount = true): HTMLImageElement {
   const img = document.createElement("img")
   img.alt = ""
   img.loading = "lazy"
   img.decoding = "async"
   img.referrerPolicy = "no-referrer"
   img.className = className
-  mountCachedImage(img, logoUrl, "logo")
+  if (mount) mountCachedImage(img, logoUrl, "logo")
   return img
 }
 
+function monogramFor(label: string): string {
+  const { rest } = parseNamePrefix(label)
+  const firstWord = (rest || label || "").trim().split(/\s+/)[0] || ""
+  return firstWord.slice(0, 2).toUpperCase()
+}
+
+function buildMonogram(label: string): HTMLSpanElement {
+  const monogram = document.createElement("span")
+  monogram.dataset.role = "monogram"
+  monogram.className = "absolute inset-0 flex items-center justify-center text-sm font-semibold text-fg-3 select-none"
+  monogram.textContent = monogramFor(label)
+  return monogram
+}
+
 /** 16:9 tile with the logo blurred behind itself on a dark panel, per ui/card.ts's live tile. */
-function buildLogoTile(logoUrl: string | null | undefined, widthClass: string): HTMLSpanElement {
+function buildLogoTile(logoUrl: string | null | undefined, widthClass: string, fallbackLabel?: string): HTMLSpanElement {
   const tile = document.createElement("span")
   tile.setAttribute("aria-hidden", "true")
+  const backgroundClass = logoUrl ? "bg-black/40" : "bg-surface-2"
   tile.className =
-    `relative isolate aspect-video shrink-0 overflow-hidden rounded-xl bg-black/40 tv-edge-mask ${widthClass}`
-  if (!logoUrl) return tile
-  tile.appendChild(buildImg(logoUrl, "absolute inset-0 h-full w-full scale-125 object-cover opacity-25 blur-xl saturate-150"))
+    `relative isolate aspect-video shrink-0 overflow-hidden rounded-xl ${backgroundClass} tv-edge-mask ${widthClass}`
+  if (!logoUrl) {
+    if (fallbackLabel) tile.appendChild(buildMonogram(fallbackLabel))
+    return tile
+  }
+  const isFullTier = effectTier() === "full"
+  tile.appendChild(
+    buildImg(
+      logoUrl,
+      heavyBlurClass(
+        "absolute inset-0 h-full w-full scale-125 object-cover opacity-25 blur-xl saturate-150",
+        "absolute inset-0 bg-surface-2"
+      ),
+      isFullTier
+    )
+  )
   tile.appendChild(buildImg(logoUrl, "absolute inset-0 m-auto max-h-[75%] max-w-[75%] object-contain"))
   return tile
 }
 
 // Always includes an <img>, even with no logo yet, so a persistent panel can mount one later.
-function buildLogoChip(logoUrl: string | null | undefined, widthClass: string): HTMLSpanElement {
+function buildLogoChip(logoUrl: string | null | undefined, widthClass: string, fallbackLabel?: string): HTMLSpanElement {
   const chip = document.createElement("span")
   chip.setAttribute("aria-hidden", "true")
+  const backgroundClass = logoUrl ? "bg-black/40" : "bg-surface-2"
   chip.className =
-    `relative grid isolate aspect-video shrink-0 place-items-center overflow-hidden rounded-lg bg-black/40 p-2 ring-1 ring-inset ring-line tv-edge-mask ${widthClass}`
+    `relative grid isolate aspect-video shrink-0 place-items-center overflow-hidden rounded-lg ${backgroundClass} p-2 ring-1 ring-inset ring-line tv-edge-mask ${widthClass}`
   // min-0: without it the grid track grows to the logo's intrinsic size and h-full/w-full clip it.
   const img = document.createElement("img")
   img.alt = ""
@@ -49,6 +79,9 @@ function buildLogoChip(logoUrl: string | null | undefined, widthClass: string): 
   img.referrerPolicy = "no-referrer"
   img.className = "h-full w-full min-h-0 min-w-0 object-contain"
   chip.appendChild(img)
+  const monogram = buildMonogram(fallbackLabel || "")
+  monogram.classList.toggle("hidden", !!logoUrl)
+  chip.appendChild(monogram)
   if (logoUrl) mountCachedImage(img, logoUrl, "logo")
   return chip
 }
@@ -79,7 +112,7 @@ export function buildGroupButton(group: CastChannelGroup, isActive: boolean): HT
 export function buildChannelRowSkeleton(): HTMLDivElement {
   const row = document.createElement("div")
   row.setAttribute("aria-hidden", "true")
-  row.className = "grid min-h-[4rem] grid-cols-[2rem_5rem_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-surface px-3 py-2"
+  row.className = "grid min-h-[4rem] grid-cols-[2rem_5rem_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-transparent px-3 py-2"
   const number = document.createElement("span")
   number.className = "h-4 w-5 animate-pulse justify-self-end rounded bg-surface-2"
   const logo = document.createElement("span")
@@ -100,8 +133,8 @@ export function buildChannelRow(channel: LiveChannel, index: number, isPlaying: 
   row.type = "button"
   row.className =
     "group/row relative grid min-h-[4rem] w-full grid-cols-[2rem_5rem_minmax(0,1fr)] items-center gap-3 " +
-    "rounded-2xl bg-surface px-3 py-2 text-start outline-none hover:bg-surface-2 tv-focus-inset " +
-    "data-[now-playing=true]:bg-surface-2"
+    "rounded-2xl bg-transparent px-3 py-2 text-start outline-none hover:bg-surface tv-focus-inset " +
+    "data-[now-playing=true]:bg-surface"
   row.dataset.focusKey = `ch:${channel.id}`
   row.dataset.channelId = String(channel.id)
   row.dataset.channelKey = String(channel.id)
@@ -118,7 +151,7 @@ export function buildChannelRow(channel: LiveChannel, index: number, isPlaying: 
   number.textContent = String(channel.chno ?? index + 1)
   row.appendChild(number)
 
-  row.appendChild(buildLogoTile(channel.logo, "w-20"))
+  row.appendChild(buildLogoTile(channel.logo, "w-20", channel.name))
 
   const textCol = document.createElement("span")
   textCol.className = "flex min-w-0 items-center gap-4"
@@ -178,7 +211,10 @@ function buildBackdropLayer(): HTMLSpanElement {
   img.alt = ""
   img.decoding = "async"
   img.referrerPolicy = "no-referrer"
-  img.className = "h-full w-full scale-125 object-cover opacity-35 blur-3xl saturate-150"
+  img.className = heavyBlurClass(
+    "h-full w-full scale-125 object-cover opacity-35 blur-3xl saturate-150",
+    "h-full w-full bg-surface-2"
+  )
   layer.appendChild(img)
   return layer
 }
@@ -260,6 +296,8 @@ export interface GuidePanelCallbacks {
   onToggleFavorite(channel: LiveChannel): void
   onReplay(channel: LiveChannel, programme: Programme, rawStart: number, rawStop: number): void
   onDetails(channel: LiveChannel, programme: Programme): void
+  /** True while a channel-list nav key is held - suppresses the dip animation and backdrop crossfade. */
+  isNavKeyHeld?(): boolean
 }
 
 export interface GuidePanelUpdate {
@@ -282,7 +320,7 @@ export interface GuidePanelHandle {
 /** Builds the guide hero + up-next list once into `container`, then patches in place on every update. */
 export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCallbacks): GuidePanelHandle {
   const hero = document.createElement("div")
-  hero.className = "relative isolate min-h-[10rem] overflow-hidden rounded-2xl bg-black/40 p-4 tv-edge-mask"
+  hero.className = "relative isolate min-h-[10rem] overflow-hidden rounded-2xl bg-surface p-4 tv-edge-mask"
 
   const backdropWrap = document.createElement("span")
   backdropWrap.setAttribute("aria-hidden", "true")
@@ -323,6 +361,7 @@ export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCa
   content.appendChild(programmeBlock)
 
   let activeChannel: LiveChannel | null = null
+  let lastFavorite: boolean | null = null
   favButton.addEventListener("click", (event) => {
     event.stopPropagation()
     if (activeChannel) callbacks.onToggleFavorite(activeChannel)
@@ -403,6 +442,8 @@ export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCa
   async function swapBackdrop(logoUrl: string | null | undefined, animate: boolean): Promise<void> {
     if (logoUrl === backdropUrl) return
     backdropUrl = logoUrl
+    // Lite tier renders the flat bg-surface-2 panel baked into buildBackdropLayer; no image to fetch.
+    if (effectTier() !== "full") return
     const myGeneration = ++backdropGeneration
     const nextImg = inactiveLayer.querySelector("img") as HTMLImageElement
 
@@ -450,11 +491,21 @@ export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCa
     favButton.classList.toggle("text-accent", input.favorite)
     favButton.classList.toggle("text-fg-3", !input.favorite)
     favButton.classList.toggle("hover:text-fg", !input.favorite)
-    favButton.innerHTML = `<span class="inline-flex text-base">${input.favorite ? STAR_FILLED : STAR_OUTLINE}</span>`
+    if (input.favorite !== lastFavorite) {
+      favButton.innerHTML = `<span class="inline-flex text-base">${input.favorite ? STAR_FILLED : STAR_OUTLINE}</span>`
+      lastFavorite = input.favorite
+    }
     if (logoImg) {
       releaseCachedImages(logoImg)
       if (input.channel.logo) mountCachedImage(logoImg, input.channel.logo, "logo")
       else logoImg.removeAttribute("src")
+    }
+    logoChip.classList.toggle("bg-black/40", !!input.channel.logo)
+    logoChip.classList.toggle("bg-surface-2", !input.channel.logo)
+    const monogram = logoChip.querySelector<HTMLElement>('[data-role="monogram"]')
+    if (monogram) {
+      monogram.classList.toggle("hidden", !!input.channel.logo)
+      if (!input.channel.logo) monogram.textContent = monogramFor(input.channel.name)
     }
   }
 
@@ -476,10 +527,11 @@ export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCa
 
   function update(input: GuidePanelUpdate): void {
     activeChannel = input.channel
-    void swapBackdrop(input.channel.logo, input.animate)
+    const keyHeld = callbacks.isNavKeyHeld?.() ?? false
+    void swapBackdrop(input.channel.logo, input.animate && !keyHeld)
     applyIdentity(input)
 
-    if (!input.animate || !motionAllowed()) {
+    if (!input.animate || !motionAllowed() || keyHeld) {
       applyProgramme(input)
       return
     }

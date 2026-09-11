@@ -29,6 +29,10 @@ vi.mock("@/scripts/lib/cache.js", () => ({
 vi.mock("@/scripts/lib/app-settings.js", () => ({
   getTmdbApiKey: () => "test-key",
   isTmdbActive: () => true,
+  getUserAgent: () => "",
+  getNetworkTimeoutSeconds: () => 15,
+  getGlobalDns: () => null,
+  DNS_EVENT: "xt:dns-changed",
 }))
 
 vi.mock("@/scripts/lib/i18n.js", () => ({

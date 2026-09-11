@@ -1,0 +1,98 @@
+name: Fetch mpv sidecar
+description: Download and verify a mpv-runtime-v1 sidecar asset, skipping cleanly when no checksums are pinned yet.
+
+inputs:
+  asset:
+    description: mpv sidecar release asset filename to fetch (e.g. mpv-x86_64-pc-windows-msvc.exe)
+    required: true
+  github-token:
+    description: token used for gh CLI calls
+    required: true
+  poll:
+    description: "'true' to retry for up to 15 minutes while checking the mpv-runtime.yml run for this commit"
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        # Before the "mpv Runtime" workflow's first publish there is nothing to verify
+        # against, so ship without the sidecar rather than fail the whole build leg.
+        if ! node src/scripts/ensure-mpv-runtime.mjs --has-pins; then
+          echo "::warning::src/scripts/mpv-runtime-checksums.json has no pins yet, building without the embedded mpv sidecar. Run the 'mpv Runtime' workflow, then 'node src/scripts/ensure-mpv-runtime.mjs --update-pins' and commit the result."
+          node -e "const fs=require('fs');const path='src-tauri/tauri.windows.conf.json';const conf=JSON.parse(fs.readFileSync(path,'utf8'));conf.bundle.externalBin=conf.bundle.externalBin.filter((entry)=>!entry.endsWith('infinitv-mpv'));fs.writeFileSync(path,JSON.stringify(conf,null,2)+'\n')"
+          exit 0
+        fi
+        mkdir -p src-tauri/binaries
+        ASSET="${{ inputs.asset }}"
+        if [ "${{ inputs.poll }}" = "true" ]; then
+          mpv_run_for_commit() {
+            gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow mpv-runtime.yml \
+              --limit 10 \
+              --json headSha,status,conclusion,url \
+              --jq "[.[] | select(.headSha == \"$GITHUB_SHA\")][0] // empty | [.status, (.conclusion // \"\"), .url] | @tsv" \
+              2>/dev/null || true
+          }
+          DOWNLOADED=0
+          for attempt in $(seq 1 15); do
+            if gh release download mpv-runtime-v1 \
+              --repo "${{ github.repository }}" \
+              --pattern "$ASSET" \
+              --dir src-tauri/binaries \
+              --clobber; then
+              DOWNLOADED=1
+              break
+            fi
+            RUN_LINE="$(mpv_run_for_commit)"
+            if [ -n "$RUN_LINE" ]; then
+              RUN_STATUS="$(printf '%s' "$RUN_LINE" | cut -f1)"
+              RUN_CONCLUSION="$(printf '%s' "$RUN_LINE" | cut -f2)"
+              RUN_URL="$(printf '%s' "$RUN_LINE" | cut -f3)"
+              if [ "$RUN_STATUS" = "completed" ] && [ "$RUN_CONCLUSION" != "success" ]; then
+                echo "::error::The 'mpv Runtime' workflow run for this commit finished as '$RUN_CONCLUSION' ($RUN_URL), so $ASSET will never appear. Fix and re-run 'mpv Runtime', then re-run this beta build."
+                exit 1
+              fi
+              echo "'mpv Runtime' run for this commit is '$RUN_STATUS' ($RUN_URL)"
+            elif [ "$attempt" -eq 1 ]; then
+              echo "No 'mpv Runtime' run found for $GITHUB_SHA, so the assets are expected to already exist on the mpv-runtime-v1 release."
+            fi
+            if [ "$attempt" -lt 15 ]; then
+              echo "$ASSET not available yet (attempt $attempt/15), retrying in 60s..."
+              sleep 60
+            fi
+          done
+          if [ "$DOWNLOADED" -ne 1 ]; then
+            echo "::error::Gave up waiting for $ASSET on the mpv-runtime-v1 release after 15 attempts (~15 min). The 'mpv Runtime' workflow publishes it: check that its latest run succeeded, then re-run this beta build once the assets are published."
+            exit 1
+          fi
+        else
+          if ! gh release download mpv-runtime-v1 \
+            --repo "${{ github.repository }}" \
+            --pattern "$ASSET" \
+            --dir src-tauri/binaries \
+            --clobber; then
+            echo "::error::Could not download $ASSET from the mpv-runtime-v1 release. Run the 'mpv Runtime' workflow first."
+            exit 1
+          fi
+        fi
+        if ! EXPECTED_SHA=$(node src/scripts/ensure-mpv-runtime.mjs --print-pin "$ASSET"); then
+          echo "::error::$ASSET has no pinned sha256 in src/scripts/mpv-runtime-checksums.json. Run 'node src/scripts/ensure-mpv-runtime.mjs --update-pins' and commit the result."
+          exit 1
+        fi
+        cd src-tauri/binaries
+        echo "$EXPECTED_SHA  $ASSET" > asset.sha256
+        if ! sha256sum -c asset.sha256; then
+          echo "::error::$ASSET does not match its pinned sha256 in src/scripts/mpv-runtime-checksums.json. Either the sidecar was republished (refresh the pins with --update-pins) or the asset was tampered with."
+          exit 1
+        fi
+        rm -f asset.sha256
+        cd - >/dev/null
+        # Rename after verification: checksum pins are keyed by the release asset name.
+        mv "src-tauri/binaries/$ASSET" "src-tauri/binaries/infinitv-$ASSET"

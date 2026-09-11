@@ -1,7 +1,8 @@
 // Generic absolute-position virtual list: fixed row height, index-window mount/unmount,
 // keyed so rows that stay inside the window across a focus move keep their DOM node.
 import { rowWindow } from "@/scripts/lib/tv-grid-filter"
-import { refreshKeepInView, resetKeepInView } from "@/scripts/tv/focus"
+import { refreshKeepInView, resetKeepInView, invalidateKeepInViewLayout } from "@/scripts/tv/focus"
+import { createKeyRepeatCoalescer } from "@/scripts/lib/key-repeat-coalescer"
 
 export type VirtualRowNavKey = "ArrowDown" | "ArrowUp" | "PageDown" | "PageUp" | "Home" | "End"
 
@@ -153,9 +154,10 @@ export function createVirtualRows<T>(options: VirtualRowsOptions<T>): VirtualRow
     mountRow(clamped)
     renderWindow()
     const rowEl = mountedRows.get(clamped)
+    // rowEl.focus() already fires a synchronous focusin that keepFocusedInView's own
+    // listener positions from - a second explicit refreshKeepInView here is redundant.
     rowEl?.focus()
     if (rowEl) lastFocusedIndex = clamped
-    refreshKeepInView(options.scroller, rowEl)
   }
 
   function indexForKey(key: string): number {
@@ -187,18 +189,35 @@ export function createVirtualRows<T>(options: VirtualRowsOptions<T>): VirtualRow
     for (const [index, rowEl] of mountedRows) callback(rowEl, items[index], index)
   }
 
+  // Accumulates same-burst key-repeat moves so a held Down/PageDown only touches the DOM
+  // once per frame instead of once per keydown; see grid.ts's onKeyDown for the same pattern.
+  const keyRepeat = createKeyRepeatCoalescer((delta) => {
+    if (!items.length) return
+    const domIndex = currentFocusedIndex() ?? lastFocusedIndex ?? 0
+    focusIndex(Math.max(0, Math.min(items.length - 1, domIndex + delta)))
+  })
+
   function onKeyDown(event: KeyboardEvent): void {
     if (event.ctrlKey || event.metaKey || event.altKey) return
     if (!NAV_KEYS.has(event.key)) return
-    const current = currentFocusedIndex() ?? lastFocusedIndex
-    if (current == null || !items.length) return
-    const next = nextRowIndex(current, event.key as VirtualRowNavKey, items.length, visibleRowCount())
-    if (next === current) return
+    const domIndex = currentFocusedIndex() ?? lastFocusedIndex
+    if (domIndex == null || !items.length) return
+    const projected = Math.max(0, Math.min(items.length - 1, domIndex + keyRepeat.pending()))
+    const next = nextRowIndex(projected, event.key as VirtualRowNavKey, items.length, visibleRowCount())
+    if (next === projected) return
     event.preventDefault()
     event.stopPropagation()
-    focusIndex(next)
+    keyRepeat.push(next - projected)
   }
   options.scroller.addEventListener("keydown", onKeyDown, true)
+
+  // Capture-phase, ahead of any bubble-phase Enter/long-press handler a caller wires on
+  // the track, so a burst's still-batched move is on screen before it reads the focused row.
+  function onEnterKeyDown(event: KeyboardEvent): void {
+    if (event.key !== "Enter") return
+    keyRepeat.flush()
+  }
+  options.scroller.addEventListener("keydown", onEnterKeyDown, true)
 
   function onFocusIn(event: FocusEvent): void {
     const target = event.target
@@ -219,6 +238,7 @@ export function createVirtualRows<T>(options: VirtualRowsOptions<T>): VirtualRow
   let resizeObserver: ResizeObserver | null = null
   if (typeof ResizeObserver === "function") {
     resizeObserver = new ResizeObserver(() => {
+      invalidateKeepInViewLayout(options.scroller)
       if (items.length) measureRowHeight(true)
     })
     resizeObserver.observe(options.scroller)
@@ -227,7 +247,9 @@ export function createVirtualRows<T>(options: VirtualRowsOptions<T>): VirtualRow
   function destroy(): void {
     clearMountedRows()
     resizeObserver?.disconnect()
+    keyRepeat.cancel()
     options.scroller.removeEventListener("keydown", onKeyDown, true)
+    options.scroller.removeEventListener("keydown", onEnterKeyDown, true)
     options.scroller.removeEventListener("focusin", onFocusIn)
   }
 

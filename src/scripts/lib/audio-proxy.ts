@@ -3,6 +3,7 @@
 import { log } from "@/scripts/lib/log.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.ts"
 import { getFfmpegPath, SETTINGS_EVENT } from "@/scripts/lib/app-settings.js"
+import { resolveDnsRoutedUrl } from "@/scripts/lib/provider-fetch.js"
 
 export interface AudioTranscodeSession {
   sessionId: string
@@ -111,13 +112,19 @@ export async function startAudioTranscode(
   try {
     const { invoke } = await import("@tauri-apps/api/core")
     const { url, authorization } = splitUrlAuth(streamUrl)
+    let routedUrl = url
+    try {
+      routedUrl = (await resolveDnsRoutedUrl(url, undefined)).url
+    } catch (err) {
+      log.warn("[xt:audio-proxy] dns-routed url resolve failed:", err)
+    }
     // Fall back to the WebView UA so the proxy's upstream request matches the direct-play fetch.
     const effectiveUserAgent =
       userAgent ||
       (typeof navigator !== "undefined" ? navigator.userAgent : null) ||
       null
     const result = (await invoke("register_audio_transcode", {
-      url,
+      url: routedUrl,
       userAgent: effectiveUserAgent,
       authorization,
       ffmpegPath: getFfmpegPath() || null,

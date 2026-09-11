@@ -58,6 +58,7 @@ import { log } from "@/scripts/lib/log"
 import { renderLanguagePills, type GroupingIndexLookup } from "@/scripts/lib/detail-chrome.ts"
 import { getSharedGroupingIndex, isLanguageGroupingExplicitlyEnabled } from "@/scripts/lib/language-groups.ts"
 import { memoryConservative } from "@/scripts/tv/motion"
+import { selectTopK } from "@/scripts/lib/top-k.ts"
 
 const RESUME_MIN_SECONDS = 30
 const SIMILAR_LIMIT = 20
@@ -145,6 +146,24 @@ function languageGroupingAllowed(): boolean {
   return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
 }
 
+// Keyed by catalog array identity (stable across renders of the same load) so the similar-rail
+// filter only ever bucket-scans the whole catalog once, instead of on every detail page visit.
+const categoryBucketCache = new WeakMap<CatalogRow[], Map<string, CatalogRow[]>>()
+
+function categoryBucket(catalog: CatalogRow[], category: string): CatalogRow[] {
+  let byCategory = categoryBucketCache.get(catalog)
+  if (!byCategory) {
+    byCategory = new Map()
+    for (const row of catalog) {
+      const bucket = byCategory.get(row.category)
+      if (bucket) bucket.push(row)
+      else byCategory.set(row.category, [row])
+    }
+    categoryBucketCache.set(catalog, byCategory)
+  }
+  return byCategory.get(category) || []
+}
+
 const view: TvView = {
   prepaint(root: HTMLElement, url: URL): boolean {
     const seriesId = Number(url.searchParams.get("id") || "0")
@@ -202,6 +221,9 @@ const view: TvView = {
     const unregisterKeepInView = keepFocusedInView(episodesScroller, "y", () => remPx(EPISODES_VERTICAL_OFFSET_REM))
 
     let destroyed = false
+    // One controller for the whole mount: aborted on teardown so an in-flight enrichment
+    // chain never applies its result to a view that's already gone.
+    const abortController = new AbortController()
     let activePlaylistId = ""
     let creds: Creds = { host: "", port: "", user: "", pass: "" }
     let series: CatalogRow | null = null
@@ -667,6 +689,7 @@ const view: TvView = {
           name: series.name,
           year: parseInt(String(series.year), 10) || null,
           providerTmdbId,
+          signal: abortController.signal,
         })
         if (requestId !== enrichRequestId) return
         resolvedTmdbId = details?.tmdbId ?? null
@@ -713,10 +736,12 @@ const view: TvView = {
       }
       if (destroyed) return
       renderLanguageVariants(catalog)
-      const candidates = catalog
-        .filter((row) => row.id !== currentSeries.id && (!currentSeries.category || row.category === currentSeries.category))
-        .sort((left, right) => ratingSortValue(right.rating) - ratingSortValue(left.rating))
-        .slice(0, SIMILAR_LIMIT)
+      const pool = currentSeries.category ? categoryBucket(catalog, currentSeries.category) : catalog
+      const candidates = selectTopK(
+        pool.filter((row) => row.id !== currentSeries.id),
+        SIMILAR_LIMIT,
+        (left, right) => ratingSortValue(right.rating) - ratingSortValue(left.rating)
+      )
 
       const items: PosterCardItem[] = candidates.map((row) => ({
         railId: SIMILAR_FOCUS_SECTION_ID,
@@ -859,6 +884,7 @@ const view: TvView = {
 
     return () => {
       destroyed = true
+      abortController.abort()
       document.removeEventListener("xt:favorites-changed", onFavoritesChanged)
       document.removeEventListener("xt:watchlist-changed", onWatchlistChanged)
       document.removeEventListener("xt:progress-changed", onProgressChanged)

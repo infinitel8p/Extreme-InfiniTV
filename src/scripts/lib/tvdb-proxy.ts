@@ -130,10 +130,21 @@ type ProxyResult<T> = { ok: true; data: T | null } | { ok: false; data: null }
 
 const FAILED: ProxyResult<never> = { ok: false, data: null }
 
+/** Some TV WebViews still lack AbortSignal.timeout; fall back to a manual AbortController. */
+function timeoutSignal(timeoutMs: number): AbortSignal {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(timeoutMs)
+  }
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), timeoutMs)
+  return controller.signal
+}
+
 function fetchOnce(path: string): Promise<Response> {
   return providerFetch(`${PROXY_BASE}${path}`, {
     logKind: "api",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: timeoutSignal(REQUEST_TIMEOUT_MS),
+    dns: "global",
   })
 }
 
@@ -197,6 +208,9 @@ async function fetchEnvelope<T>(
     })
     return { ok: true, data: result.data.data }
   } catch (error) {
+    // Covers network errors, aborts/timeouts, and rate-limit/recently-failed throws
+    // from the callback above, so a burst of callers doesn't keep re-hitting a dead path.
+    failedPathUntilMs.set(path, Date.now() + FAILED_PATH_MEMO_MS)
     log.warn("[xt:tvdb] proxy fetch failed:", path, error)
     return FAILED
   }

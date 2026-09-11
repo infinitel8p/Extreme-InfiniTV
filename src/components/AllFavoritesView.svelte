@@ -69,7 +69,18 @@
       title: entry.title || "Untitled playlist",
     }))
 
-    const raw = getAllGlobalFavorites()
+    const playlistRank = new Map()
+    playlistRank.set(activePlaylistId, 0)
+    let nextRank = 1
+    for (const playlist of playlists) {
+      if (playlist.id === activePlaylistId) continue
+      playlistRank.set(playlist.id, nextRank++)
+    }
+    const rankFor = (playlistId) => playlistRank.get(playlistId) ?? Number.MAX_SAFE_INTEGER
+
+    const raw = getAllGlobalFavorites().sort(
+      (rowA, rowB) => rankFor(rowA.playlistId) - rankFor(rowB.playlistId)
+    )
     const needed = new Map()
     for (const row of raw) {
       const kinds = needed.get(row.playlistId) || new Set()
@@ -224,11 +235,23 @@
     }
   }
 
+  const VALID_KIND_FILTERS = new Set(["live", "vod", "series"])
+
   function setFilter(next) {
     filter = next
+    if (typeof history !== "undefined") {
+      const url = new URL(location.href)
+      if (next === "all") url.searchParams.delete("kind")
+      else url.searchParams.set("kind", next)
+      history.replaceState(null, "", url)
+    }
   }
 
   onMount(() => {
+    if (typeof location !== "undefined") {
+      const kindParam = new URLSearchParams(location.search).get("kind")
+      if (VALID_KIND_FILTERS.has(kindParam)) filter = kindParam
+    }
     reload()
     const onLocale = () => { locale++ }
     let warmedRaf = 0

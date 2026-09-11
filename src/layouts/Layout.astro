@@ -3,6 +3,7 @@ import Sidebar from "@/components/Sidebar.astro"
 import TitleBar from "@/components/TitleBar.astro"
 import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
 import CatalogWarmingIndicator from "@/components/CatalogWarmingIndicator.svelte"
+import WebViewFloorNotice from "@/components/WebViewFloorNotice.astro"
 import pkg from "../../package.json"
 import { TV_ROUTE_TABLE } from "@/scripts/lib/tv-routes"
 import "../styles/global.css"
@@ -86,40 +87,53 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         var perfStored = localStorage.getItem("xt_perf_mode");
         var receiverStored = localStorage.getItem("xt_receiver_mode");
         var receiverBootStored = localStorage.getItem("xt_receiver_boot");
-        var isTvDevice = false;
-        if (perfStored === null || receiverStored === null || receiverBootStored === null) {
+        var realTv = false;
+        try {
+          realTv = !!(window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function" && window.AndroidDeviceInfo.isTv() === true);
+        } catch (e) {}
+        var detectedTv = localStorage.getItem("xt_is_tv") === "1" || realTv;
+        if (!detectedTv && (perfStored === null || receiverStored === null || receiverBootStored === null)) {
           try {
-            if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function") {
-              isTvDevice = !!window.AndroidDeviceInfo.isTv();
+            var ua = (navigator.userAgent || "").toLowerCase();
+            if (
+              ua.indexOf(" tv ") !== -1 ||
+              ua.indexOf("smart-tv") !== -1 ||
+              ua.indexOf("smarttv") !== -1 ||
+              ua.indexOf("googletv") !== -1 ||
+              ua.indexOf("appletv") !== -1 ||
+              ua.indexOf("hbbtv") !== -1 ||
+              ua.indexOf("netcast") !== -1 ||
+              ua.indexOf("nettv") !== -1 ||
+              ua.indexOf("aft") !== -1 ||
+              ua.indexOf("crkey") !== -1 ||
+              ua.indexOf("philipstv") !== -1 ||
+              ua.indexOf("bravia") !== -1
+            ) {
+              detectedTv = true;
             }
           } catch (e) {}
-          if (!isTvDevice) {
-            try {
-              var ua = (navigator.userAgent || "").toLowerCase();
-              if (
-                ua.indexOf(" tv ") !== -1 ||
-                ua.indexOf("smart-tv") !== -1 ||
-                ua.indexOf("smarttv") !== -1 ||
-                ua.indexOf("googletv") !== -1 ||
-                ua.indexOf("appletv") !== -1 ||
-                ua.indexOf("hbbtv") !== -1 ||
-                ua.indexOf("netcast") !== -1 ||
-                ua.indexOf("nettv") !== -1 ||
-                ua.indexOf("aft") !== -1 ||
-                ua.indexOf("crkey") !== -1 ||
-                ua.indexOf("philipstv") !== -1 ||
-                ua.indexOf("bravia") !== -1
-              ) {
-                isTvDevice = true;
-              }
-            } catch (e) {}
-          }
         }
-        if (isTvDevice) {
+        if (detectedTv) {
           document.documentElement.dataset.tv = "1";
           localStorage.setItem("xt_is_tv", "1");
         }
-        if (perfStored === null && isTvDevice) {
+
+        // Mirrors resolveUiMode in ui-mode.ts
+        try {
+          if (new URLSearchParams(location.search).get("tv") === "1") localStorage.setItem("xt_ui_mode", "tv");
+        } catch (e) {}
+        try {
+          if (localStorage.getItem("xt_force_tv") === "1" && localStorage.getItem("xt_ui_mode") === null) {
+            localStorage.setItem("xt_ui_mode", "tv");
+          }
+          localStorage.removeItem("xt_force_tv");
+        } catch (e) {}
+        var storedUiMode = localStorage.getItem("xt_ui_mode");
+        var uiMode = (storedUiMode === "tv" || storedUiMode === "desktop") ? storedUiMode : "auto";
+        // Only the redirect below stamps data-tv-ui; TvLayout owns that attribute.
+        window.__xtResolvedTvUi = realTv || uiMode === "tv" || (uiMode === "auto" && detectedTv);
+
+        if (perfStored === null && detectedTv) {
           localStorage.setItem("xt_perf_mode", "1");
           localStorage.setItem("xt_perf_mode_auto", "1");
           perfStored = "1";
@@ -127,11 +141,11 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         if (perfStored === "1") {
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
-        if (receiverStored === null && isTvDevice) {
+        if (receiverStored === null && detectedTv) {
           localStorage.setItem("xt_receiver_mode", "1");
           localStorage.setItem("xt_receiver_mode_auto", "1");
         }
-        if (receiverBootStored === null && isTvDevice) {
+        if (receiverBootStored === null && detectedTv) {
           localStorage.setItem("xt_receiver_boot", "1");
           localStorage.setItem("xt_receiver_boot_auto", "1");
         }
@@ -233,8 +247,13 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         }
 
         var currentTheme = localStorage.getItem("xt_theme") || "system";
-        if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
-        else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
+        if (currentTheme === "light") {
+          document.documentElement.style.colorScheme = "light";
+          document.documentElement.setAttribute("data-theme", "light");
+        } else if (currentTheme === "dark") {
+          document.documentElement.style.colorScheme = "dark";
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
 
         var KNOWN_ACCENTS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet", "gold", "lime", "teal", "silver", "white"];
         var storedAccent = localStorage.getItem("xt_accent") || "";
@@ -278,9 +297,10 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         window.__applyAndroidStatusBar = applyAndroidStatusBar;
       } catch (e) {}
     </script>
+    <WebViewFloorNotice />
     <script is:inline define:vars={{ tvRouteTable: TV_ROUTE_TABLE, appMode }}>
       try {
-        if (!window.__xtReceiverBooting && appMode !== "receiver" && document.documentElement.dataset.tv === "1") {
+        if (!window.__xtReceiverBooting && appMode !== "receiver" && window.__xtResolvedTvUi) {
           var tvRedirectPath = location.pathname.replace(/\/+$/, "");
           if (tvRedirectPath === "") tvRedirectPath = "/";
           var tvRedirectTarget = tvRouteTable[tvRedirectPath];
@@ -289,7 +309,8 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
             if (
               tvRedirectTarget === "/tv/movies/detail" ||
               tvRedirectTarget === "/tv/series/detail" ||
-              tvRedirectTarget === "/tv/search"
+              tvRedirectTarget === "/tv/search" ||
+              tvRedirectTarget === "/tv/login"
             ) {
               tvRedirectTarget += location.search;
             }
@@ -863,8 +884,11 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   import { mountBackHandler } from "@/scripts/lib/back-handler"
   import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
   import { isTvDevice } from "@/scripts/lib/tv-detect"
+  import { isElementVisibleForNav } from "@/scripts/lib/nav-visibility"
+  import { mountExternalProgressRecorder } from "@/scripts/lib/external-progress"
   initI18n()
   initConnectivity()
+  mountExternalProgressRecorder()
   initUiSounds()
   initHaptics()
   initPlaylistAccent()
@@ -996,11 +1020,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   // Safety net for full-app-on-TV users who never open /receiver.
   if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
     setTimeout(() => {
-      let isAndroidTv = false
-      try {
-        isAndroidTv = !!(window as any).AndroidDeviceInfo?.isTv?.()
-      } catch {}
-      if (!isAndroidTv) return
+      if (!isTvDevice()) return
       Promise.all([
         import("@/scripts/lib/ambient-handoff"),
         import("@/scripts/lib/account-info.js"),
@@ -1031,10 +1051,14 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   async function pushIdlePresence() {
     if (onLogin()) return
     try {
-      const [{ setIdleRichPresence }, { getActiveEntry }] = await Promise.all([
+      const [{ setIdleRichPresence }, { getActiveEntry }, { getCastSession }] = await Promise.all([
         import("@/scripts/lib/discord-rpc.js"),
         import("@/scripts/lib/creds.js"),
+        import("@/scripts/lib/tv-cast.js"),
       ])
+      // A cast keeps playing across navigations; its presence outranks browsing.
+      const casting = getCastSession()
+      if (casting && !casting.connectedOnly) return
       const active = await getActiveEntry()
       setIdleRichPresence({
         playlistId: active?._id || "",
@@ -1130,14 +1154,12 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         id: "main",
         selector:
           "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
-        // Reject fullscreen-occluded, inert, offscreen-parked, invisible, or faded-out player-chrome targets
+        // Reject fullscreen-occluded, inert, invisible, or faded-out player-chrome targets
         navigableFilter: (elem: Element) => {
           const fullscreenEl = document.fullscreenElement
           if (fullscreenEl && !fullscreenEl.contains(elem)) return false
           if (elem.closest("[inert]")) return false
-          const rect = elem.getBoundingClientRect()
-          if (rect.right <= 0 || rect.bottom <= 0) return false
-          if (getComputedStyle(elem).visibility !== "visible") return false
+          if (!isElementVisibleForNav(elem)) return false
           const playerChrome = elem.closest(
             ".vjs-control-bar, .vjs-volume-vertical, .vjs-menu"
           )

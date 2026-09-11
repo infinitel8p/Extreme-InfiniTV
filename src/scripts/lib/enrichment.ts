@@ -26,6 +26,9 @@ export interface TitleEnrichmentRequest {
   name: string
   year?: number | null
   providerTmdbId?: number | null
+  /** Checked between steps so a torn-down caller (unmounted detail page) skips the rest
+   * of the TVDB/TMDb chain instead of finishing work nobody will read. */
+  signal?: AbortSignal
 }
 
 function tmdbKindFor(kind: EnrichmentKind): TmdbKind {
@@ -66,10 +69,14 @@ const MAX_CONCURRENT_TVDB_RESOLVES = 3
 let activeTvdbResolves = 0
 const tvdbResolveQueue: Array<() => void> = []
 
-function acquireTvdbSlot(): Promise<() => void> {
+function acquireTvdbSlot(signal?: AbortSignal): Promise<(() => void) | null> {
   return new Promise((resolve) => {
+    let settled = false
     const tryAcquire = () => {
+      if (settled) return
       if (activeTvdbResolves < MAX_CONCURRENT_TVDB_RESOLVES) {
+        settled = true
+        signal?.removeEventListener("abort", onAbort)
         activeTvdbResolves++
         resolve(() => {
           activeTvdbResolves--
@@ -80,13 +87,27 @@ function acquireTvdbSlot(): Promise<() => void> {
         tvdbResolveQueue.push(tryAcquire)
       }
     }
+    // An abandoned caller must not keep its place in the queue ahead of live ones.
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      const queuedIndex = tvdbResolveQueue.indexOf(tryAcquire)
+      if (queuedIndex >= 0) tvdbResolveQueue.splice(queuedIndex, 1)
+      resolve(null)
+    }
+    if (signal?.aborted) {
+      resolve(null)
+      return
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
     tryAcquire()
   })
 }
 
-/** Runs `run` once fewer than MAX_CONCURRENT_TVDB_RESOLVES TVDB calls are in flight. */
-export async function withTvdbConcurrencyLimit<T>(run: () => Promise<T>): Promise<T> {
-  const release = await acquireTvdbSlot()
+/** Runs `run` once fewer than MAX_CONCURRENT_TVDB_RESOLVES TVDB calls are in flight; resolves null when `signal` aborts while queued. */
+export async function withTvdbConcurrencyLimit<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T | null> {
+  const release = await acquireTvdbSlot(signal)
+  if (!release) return null
   try {
     return await run()
   } finally {
@@ -130,14 +151,15 @@ export interface TitleEnrichmentDetails {
 export async function resolveTitleEnrichmentDetailed(
   request: TitleEnrichmentRequest
 ): Promise<TitleEnrichmentDetails | null> {
-  const { kind, playlistId, itemId, name, year, providerTmdbId } = request
+  const { kind, playlistId, itemId, name, year, providerTmdbId, signal } = request
   const language = tmdbLanguageFor(getActiveLocale())
 
   let tmdbId = normalizeTmdbId(providerTmdbId)
 
   const tvdbResult = getTvdbEnabled()
-    ? await withTvdbConcurrencyLimit(() => tvdbEnrichment(tmdbId, kind, { name, year: year ?? null }))
+    ? await withTvdbConcurrencyLimit(() => tvdbEnrichment(tmdbId, kind, { name, year: year ?? null }), signal)
     : null
+  if (signal?.aborted) return null
 
   if (tmdbId == null) {
     tmdbId = await resolveTmdbId(playlistId, tmdbKindFor(kind), {
@@ -147,11 +169,13 @@ export async function resolveTitleEnrichmentDetailed(
       providerTmdbId,
     })
   }
+  if (signal?.aborted) return null
 
   const tmdbResult =
     tmdbId != null
       ? await (kind === "movie" ? fetchMovieEnrichment(tmdbId) : fetchSeriesEnrichment(tmdbId))
       : null
+  if (signal?.aborted) return null
 
   const merged = mergeTitleEnrichment(tvdbResult?.enrichment ?? null, tmdbResult ?? null)
   if (!merged) return null

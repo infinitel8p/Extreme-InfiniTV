@@ -4,6 +4,7 @@ import { log, redactUrl } from "@/scripts/lib/log.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.js"
 import { clearKeyAvailable, isParseFailureDetail } from "@/scripts/lib/codec-hints"
+import type { StartFailureKind } from "@/scripts/lib/codec-hints"
 import { t } from "@/scripts/lib/i18n.js"
 import { escapeHtml } from "@/scripts/lib/format.js"
 import { ICON_BADGE_CC } from "@/scripts/lib/icons.js"
@@ -27,9 +28,13 @@ import {
   getPlayerExtraArgs,
   getPlayerReuseInstance,
   getUserAgent,
+  getNetworkTimeoutSeconds,
+  getPerfMode,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
-import { bindMonoAudio, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
+import { classifyEffectTier } from "@/scripts/tv/motion"
+import { getAndroidMemoryClassMb } from "@/scripts/lib/tv-detect.ts"
+import { bindMonoAudio, bindMonoAudioMpv, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import {
   createPlaybackTelemetry,
@@ -38,9 +43,17 @@ import {
   type PlaybackTelemetry,
   type ResolvedEngine,
 } from "@/scripts/lib/player-telemetry.js"
+import { dnsProxyAvailable, ensureDnsProxy, cachedDnsProxyBase } from "@/scripts/lib/dns-proxy.ts"
+import { wrapProxyUrlKeepingUserinfo, unwrapProxyUrl } from "@/scripts/lib/dns-proxy-url.ts"
+import type { DnsServer } from "@/scripts/lib/dns-config.ts"
+import { isNativeVideoBackend } from "@/scripts/lib/player-backend.ts"
+import type { PlayerBackend, ExternalPlayerKind } from "@/scripts/lib/player-backend.ts"
+import type { MpvSubtitleStyle } from "@/scripts/lib/mpv-embedded.ts"
+import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
+import { chooseSubtitleTrackId, rememberSubtitleTrack } from "@/scripts/lib/track-memory.ts"
 
-export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
-export type ExternalPlayerKind = "mpv" | "vlc"
+export type { PlayerBackend, ExternalPlayerKind }
+export { isNativeVideoBackend }
 
 export const RESUME_MIN_SECONDS_DEFAULT = 5
 
@@ -57,18 +70,30 @@ export interface DrmOptions {
 }
 
 export interface VjsLikeHandle {
-  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction, or a `mkvSession` into push-mode subtitles from the MKV tee-proxy. `audio` backs track switching for engines with none (mpegts.js/native). */
-  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean }): void
+  /** Mounts a source; `trackMemory` identifies the title for per-title audio/subtitle track restore+persist. */
+  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean; title?: string; trackMemory?: TrackMemoryContext | null }): void
   /** Wires a caller-supplied audio track source into the current mount without remounting; a no-op on engines/mounts that don't use caller-supplied tracks (e.g. hls.js/shaka, which source their own). Lets background VOD audio-track discovery attach a switcher after the source is already playing. */
   setAudioSource?(source: AudioTrackSource | null): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
   muted?(value?: boolean): boolean | void
+  /** Normalized 0..1, matching the native `<video>` element's `volume`. */
+  volume?(value?: number): number | void
+  /** Clamped 0.25-4; omit `value` to read the current rate. */
+  playbackRate?(value?: number): number | void
   reset?(): void
   dispose?(): void | Promise<void>
   duration?(): number
   currentTime?(value?: number): number
+  /** Whether the current source is live (vs. a finite/seekable catch-up mount). */
+  isLive?(): boolean
+  /** Live rewind window bounds and current position (seconds); null unless live and the window is usable. */
+  liveWindow?(): { start: number; end: number; position: number } | null
+  /** Seconds behind the live edge; null when there is no usable live window. */
+  behindLiveSeconds?(): number | null
+  /** Seeks to the live edge and resumes if paused. */
+  seekLive?(): void
   on(event: string, fn: (...args: unknown[]) => void): void
   off?(event: string, fn: (...args: unknown[]) => void): void
   one?(event: string, fn: (...args: unknown[]) => void): void
@@ -77,6 +102,15 @@ export interface VjsLikeHandle {
   requestFullscreen?(): Promise<void> | void
   isFullscreen?(): boolean
   exitFullscreen?(): void
+  /** mpv-embedded only: fills the app window, no Fullscreen API. */
+  requestWebFullscreen?(): void
+  exitWebFullscreen?(): void
+  isWebFullscreen?(): boolean
+  /** Saves the current frame to disk and resolves the saved file path, or null on failure. */
+  screenshot?(): Promise<string | null>
+  requestPip?(): Promise<void> | void
+  exitPip?(): Promise<void> | void
+  isPip?(): boolean
   userActive?(active: boolean): void
   /** What we learned about the current stream - feeds failure classification. */
   codecInfo?(): PlaybackCodecInfo
@@ -88,14 +122,24 @@ export interface VjsLikeHandle {
   engineStats?(): EngineStats | null
   /** Subscribes to engine lifecycle events (variant switches, errors, recoveries) for a stream-health log. */
   onEngineEvent?(listener: (event: EngineEvent) => void): () => void
+  setProperty?(name: string, value: unknown): Promise<void>
+  /** Starts recording the current live source to disk; resolves the saved file path. */
+  startRecording?(): Promise<string>
+  /** Stops an in-progress recording. */
+  stopRecording?(): Promise<void>
+  /** Path of the file currently being recorded, or null when not recording. */
+  recordingPath?(): string | null
+  /** Reads the persisted subtitle style, optionally applying and persisting a patch first. */
+  subtitleStyle?(patch?: Partial<MpvSubtitleStyle>): MpvSubtitleStyle
+  /** Reads the current audio-delay offset (seconds); an optional delta adjusts and persists it for the session. */
+  audioDelay?(deltaSeconds?: number): number
 }
 
 export interface ExternalLaunchOptions {
   userAgent?: string | null
   referer?: string | null
   resumeSeconds?: number
-  /** Localised "Couldn't launch <player>" toast title; caller-provided so we don't depend on i18n here. */
-  // (not a function dep on purpose; toast wiring is at the call site)
+  tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
 }
 
 export interface ExternalLauncher {
@@ -103,13 +147,13 @@ export interface ExternalLauncher {
   launch(
     src: string,
     options?: ExternalLaunchOptions,
-  ): Promise<{ pid: number; reused: boolean }>
+  ): Promise<{ pid: number; reused: boolean; sessionId: string | null; src: string }>
   kind: ExternalPlayerKind
   path: string
 }
 
 export type Mounted =
-  | { kind: "embedded"; backend: "videojs" | "artplayer" | "shaka"; handle: VjsLikeHandle }
+  | { kind: "embedded"; backend: "videojs" | "artplayer" | "shaka" | "mpv-embedded"; handle: VjsLikeHandle }
   | { kind: "external"; backend: ExternalPlayerKind; launcher: ExternalLauncher }
 
 export interface MountOptions {
@@ -122,6 +166,10 @@ export interface MountOptions {
   pictureInPictureToggle?: boolean
   controlBar?: Record<string, unknown>
   html5?: Record<string, unknown>
+  userAgent?: string | null
+  referer?: string | null
+  /** mpv-embedded only: mounts its own control bar. Defaults to true. */
+  mpvControls?: boolean
 }
 
 export const isTauri =
@@ -155,6 +203,84 @@ export const androidExternalAvailable =
   typeof window !== "undefined" &&
   !!(window as any).AndroidIntent
 
+// Dynamic import dodges a static import cycle with creds.js.
+let cachedGetActiveDnsOverride: (() => DnsServer | null) | null = null
+type CredsDnsModule = { ensureDnsProxyReady: () => Promise<unknown> } | null
+let credsDnsModule: Promise<CredsDnsModule> | null = null
+if (isTauri) {
+  credsDnsModule = import("@/scripts/lib/creds.js")
+    .then((mod) => {
+      cachedGetActiveDnsOverride = mod.getActiveDnsOverride as (() => DnsServer | null)
+      return mod as unknown as CredsDnsModule
+    })
+    .catch((error) => {
+      log.warn("[xt:player] creds.js import for dns override failed:", error)
+      return null
+    })
+}
+
+/** Awaits the active playlist's proxy session so the first sync src() wrap already has one. */
+export async function ensurePlaybackDnsReady(): Promise<void> {
+  if (!credsDnsModule || !dnsProxyAvailable()) return
+  try {
+    const mod = await credsDnsModule
+    await mod?.ensureDnsProxyReady()
+  } catch (error) {
+    log.warn("[xt:player] dns proxy warm failed:", error)
+  }
+}
+
+// creds.js warms the proxy session on active-playlist changes; this set only
+// tracks sessions that still raced ahead of that, so the diagnosis is greppable.
+const warnedDirectDnsSessions = new Set<string>()
+
+// Wraps via an existing proxy session; else registers one for next time.
+function wrapForDnsProxySync(url: string): string {
+  if (!dnsProxyAvailable() || !cachedGetActiveDnsOverride) return url
+  let override: DnsServer | null = null
+  try {
+    override = cachedGetActiveDnsOverride()
+  } catch {
+    return url
+  }
+  if (!override) return url
+  const sessionKey = `dns:${override.raw}`
+  const base = cachedDnsProxyBase(sessionKey)
+  if (base) {
+    try {
+      return wrapProxyUrlKeepingUserinfo(base, url)
+    } catch {
+      return url
+    }
+  }
+  if (!warnedDirectDnsSessions.has(sessionKey)) {
+    warnedDirectDnsSessions.add(sessionKey)
+    log.warn("[xt:player] dns proxy not ready yet, first request went direct:", sessionKey)
+  }
+  void ensureDnsProxy(sessionKey, override)
+  return url
+}
+
+// External-player DNS-proxy wrap; re-embeds userinfo for MPV/VLC basic auth.
+export async function wrapForDnsProxyExternal(url: string): Promise<string> {
+  if (!dnsProxyAvailable() || !cachedGetActiveDnsOverride) return url
+  let override: DnsServer | null = null
+  try {
+    override = cachedGetActiveDnsOverride()
+  } catch {
+    return url
+  }
+  if (!override) return url
+  const sessionKey = `dns:${override.raw}`
+  const base = await ensureDnsProxy(sessionKey, override)
+  if (!base) return url
+  try {
+    return wrapProxyUrlKeepingUserinfo(base, url)
+  } catch {
+    return url
+  }
+}
+
 let invokePromise: Promise<((cmd: string, args: unknown) => Promise<unknown>) | null> | null = null
 async function getInvoke() {
   if (!externalPlayersAvailable) return null
@@ -180,6 +306,7 @@ export interface ArgvInput {
   extraArgs?: string[]
   /** Resume threshold; below this we don't pass a seek arg (avoids restart-from-credits glitch). */
   resumeMinSeconds?: number
+  tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
 }
 
 export function buildMpvArgs(input: ArgvInput): string[] {
@@ -194,6 +321,9 @@ export function buildMpvArgs(input: ArgvInput): string[] {
   if (Number.isFinite(resume) && resume > minResume) {
     out.push(`--start=${Math.floor(resume)}`)
   }
+  if (input.tracks?.audioLang) out.push(`--alang=${input.tracks.audioLang}`)
+  if (input.tracks?.subOff) out.push("--sid=no")
+  else if (input.tracks?.subLang) out.push(`--slang=${input.tracks.subLang}`)
   for (const arg of input.extraArgs || []) {
     if (arg && arg.trim()) out.push(arg)
   }
@@ -213,6 +343,9 @@ export function buildVlcArgs(input: ArgvInput): string[] {
   if (Number.isFinite(resume) && resume > minResume) {
     out.push(`--start-time=${Math.floor(resume)}`)
   }
+  if (input.tracks?.audioLang) out.push(`--audio-language=${input.tracks.audioLang}`)
+  if (input.tracks?.subOff) out.push("--no-spu")
+  else if (input.tracks?.subLang) out.push(`--sub-language=${input.tracks.subLang}`)
   for (const arg of input.extraArgs || []) {
     if (arg && arg.trim()) out.push(arg)
   }
@@ -276,7 +409,7 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
           userAgent: options.userAgent ?? null,
           referer: options.referer ?? null,
         })
-        return { pid: 0, reused: false }
+        return { pid: 0, reused: false, sessionId: null, src }
       }
       if (!path) throw new PlayerNotConfiguredError(kind)
       const invoke = await getInvoke()
@@ -288,24 +421,36 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
           path,
         )
       }
+      const playbackSrc = await wrapForDnsProxyExternal(src)
       const args = buildArgsFor(kind, {
-        src,
+        src: playbackSrc,
         userAgent: options.userAgent ?? getUserAgent() ?? null,
         referer: options.referer ?? null,
         resumeSeconds: options.resumeSeconds,
         extraArgs: getPlayerExtraArgs(kind),
+        tracks: options.tracks ?? null,
       })
-      const reuse = getPlayerReuseInstance(kind)
-        ? { kind, enabled: true, url: src }
-        : { kind, enabled: false, url: src }
+      const reuse = {
+        kind,
+        enabled: getPlayerReuseInstance(kind),
+        url: playbackSrc,
+        alang: options.tracks?.audioLang ?? null,
+        slang: options.tracks?.subLang ?? null,
+        subOff: options.tracks?.subOff ?? false,
+      }
       try {
         const result = (await invoke("launch_external_player", {
           path,
           args,
           mode: "launch",
           reuse,
-        })) as { pid?: number; reused?: boolean }
-        return { pid: Number(result?.pid) || 0, reused: !!result?.reused }
+        })) as { pid?: number; reused?: boolean; sessionId?: string | null }
+        return {
+          pid: Number(result?.pid) || 0,
+          reused: !!result?.reused,
+          sessionId: result?.sessionId ?? null,
+          src: playbackSrc,
+        }
       } catch (raw) {
         throw classifyError(raw, kind, path)
       }
@@ -344,6 +489,66 @@ export function subscribeExternalPlayerExit(
   return () => {
     disposed = true
     try { unlisten?.() } catch (err) { log.warn("[xt:player] unlisten failed:", err) }
+  }
+}
+
+export const EXTERNAL_PLAYER_STATE_EVENT = "xt:external-player-state"
+
+export interface ExternalPlayerStateFrame {
+  sessionId: string
+  kind: "mpv"
+  path: string | null
+  position: number | null
+  duration: number | null
+  audio: { id: number; lang: string | null; title: string | null } | null
+  sub: { id: number; lang: string | null; title: string | null } | null
+  subOff: boolean
+  tracks: Array<{ type: "audio" | "sub"; id: number; lang: string | null; title: string | null; selected: boolean }> | null
+  eof: boolean
+  final: boolean
+}
+
+/** Fires as the launched mpv process reports position/track/eof state. No-op on web/Android. */
+export function subscribeExternalPlayerState(
+  handler: (frame: ExternalPlayerStateFrame) => void,
+): () => void {
+  if (!externalPlayersAvailable) return () => {}
+  let unlisten: (() => void) | null = null
+  let disposed = false
+  void (async () => {
+    try {
+      const { listen } = await import("@tauri-apps/api/event")
+      const stopListening = await listen<ExternalPlayerStateFrame>(
+        EXTERNAL_PLAYER_STATE_EVENT,
+        (event) => {
+          if (event.payload) handler(event.payload)
+        },
+      )
+      if (disposed) stopListening()
+      else unlisten = stopListening
+    } catch (err) {
+      log.warn("[xt:player] failed to subscribe to external-player-state events:", err)
+    }
+  })()
+  return () => {
+    disposed = true
+    try { unlisten?.() } catch (err) { log.warn("[xt:player] unlisten failed:", err) }
+  }
+}
+
+/** Sets an mpv property on a running external session (aid/sid/pause). Swallows failures. */
+export async function setExternalPlayerProperty(
+  kind: ExternalPlayerKind,
+  sessionId: string,
+  name: "aid" | "sid" | "pause",
+  value: unknown,
+): Promise<void> {
+  const invoke = await getInvoke()
+  if (!invoke) return
+  try {
+    await invoke("external_player_set_property", { kind, sessionId, name, value })
+  } catch (err) {
+    log.warn("[xt:player] external_player_set_property failed:", err)
   }
 }
 
@@ -469,7 +674,7 @@ export function getAndroidHandoffLauncher(kind: AndroidHandoffKind): AndroidHand
       if (kind === "vlc") return isVlcInstalledOnAndroid()
       return true
     },
-    async launch(src, options = {}) {
+    async launch(rawSrc, options = {}) {
       const bridge = androidIntent()
       if (!bridge) {
         throw new AndroidHandoffError(
@@ -478,6 +683,7 @@ export function getAndroidHandoffLauncher(kind: AndroidHandoffKind): AndroidHand
           kind,
         )
       }
+      const src = await wrapForDnsProxyExternal(rawSrc)
       const mime = options.mime || androidMimeForUrl(src)
       const userAgent = options.userAgent || getUserAgent() || ""
       const referer = options.referer || ""
@@ -553,7 +759,7 @@ export interface AndroidPackageLaunchOptions extends AndroidHandoffOptions {
 
 export async function openStreamInAndroidPackage(
   pkg: string,
-  src: string,
+  rawSrc: string,
   options: AndroidPackageLaunchOptions = {},
 ): Promise<void> {
   const bridge = androidIntent()
@@ -564,6 +770,7 @@ export async function openStreamInAndroidPackage(
       "system",
     )
   }
+  const src = await wrapForDnsProxyExternal(rawSrc)
   const mime = options.mime || androidMimeForUrl(src)
   const userAgent = options.userAgent || getUserAgent() || ""
   const referer = options.referer || ""
@@ -955,10 +1162,12 @@ function createTauriStreamLoaderClass(mpegts: any) {
   }
 }
 
+// requestUrl may be a DNS-proxy loopback URL (nested manifest/segment requests rewritten by the
+// proxy); unwrap it back to the real upstream URL before comparing, since authorizedOrigin is real.
 function matchesAuthorizedOrigin(requestUrl: string, authorizedOrigin: string | null): boolean {
   if (!authorizedOrigin) return false
   try {
-    return new URL(requestUrl).origin === authorizedOrigin
+    return new URL(unwrapProxyUrl(requestUrl)).origin === authorizedOrigin
   } catch {
     return false
   }
@@ -1164,6 +1373,28 @@ export function shouldPreferNativeHls(input: {
   return input.isMacOS && !input.isTauri && input.canPlayNativeHls
 }
 
+/**
+ * True on perf mode or the "lite" device tier. Reads classifyEffectTier's pure
+ * classifier directly (not motion.ts's memoized effectTier()/memoryConservative()),
+ * since those stamp `data-tv-effects` on `<html>` as a side effect that this
+ * non-TV-only module shouldn't trigger just by mounting a player.
+ */
+function isMemoryConservativeProfile(): boolean {
+  if (typeof document !== "undefined" && document.documentElement.dataset.perfMode === "on") return true
+  try {
+    if (getPerfMode()) return true
+  } catch {}
+  const nav = typeof navigator === "undefined" ? undefined : (navigator as Navigator & { deviceMemory?: number })
+  return (
+    classifyEffectTier({
+      deviceMemoryGb: nav?.deviceMemory ?? null,
+      hardwareConcurrency: nav?.hardwareConcurrency ?? null,
+      userAgent: nav?.userAgent ?? null,
+      memoryClassMb: getAndroidMemoryClassMb(),
+    }) === "lite"
+  )
+}
+
 // A lost demuxer emits these by the hundred per second; the progress threshold spares streams that error yet still play.
 const PARSE_ERROR_LIMIT = 24
 const PARSE_ERROR_WINDOW_MS = 4000
@@ -1184,13 +1415,14 @@ function attachHlsToVideo(
     try { existing.destroy() } catch {}
     active.set(null)
   }
-  // Native <video src> cannot carry a header, so those paths pass the
-  // original url through as best-effort; the hls.js paths get the split form.
   const { url: cleanUrl, authorization } = splitUrlAuth(url)
   let authorizedOrigin: string | null = null
   if (authorization) {
     try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
   }
+  const playbackUrl = wrapForDnsProxySync(cleanUrl)
+  // hls.js gets auth via header; a native <video src> can carry the userinfo itself.
+  const nativeUrl = wrapForDnsProxySync(url)
   const canPlayNativeHls = !!video.canPlayType("application/vnd.apple.mpegurl")
   // forceNative: this channel's audio (AC-3) cannot decode in this WebView's MSE.
   const preferNative =
@@ -1203,8 +1435,8 @@ function attachHlsToVideo(
         ? "[xt:player] hls transport=native (AC-3 audio fallback): MSE has no AC-3 decoder here"
         : "[xt:player] hls transport=native (macOS AVFoundation): no custom headers, no codec telemetry"
     )
-    noteMonoSourceChange(video, url)
-    setNativeSrc(video, url)
+    noteMonoSourceChange(video, nativeUrl)
+    setNativeSrc(video, nativeUrl)
     return
   }
   if (!Hls.isSupported()) {
@@ -1212,13 +1444,24 @@ function attachHlsToVideo(
       log.warn("[xt:player] hls.js unsupported and no native HLS; fallback to <video src>")
     }
     log.info("[xt:player] hls transport=native (hls.js unsupported)")
-    noteMonoSourceChange(video, url)
-    setNativeSrc(video, url)
+    noteMonoSourceChange(video, nativeUrl)
+    setNativeSrc(video, nativeUrl)
     return
   }
   log.info(`[xt:player] hls transport=hls.js loader=${isTauri ? "tauri-http" : "xhr"}`)
   // Off by default: a manifest's DEFAULT=YES rendition would otherwise render unasked.
   const hlsConfig: Record<string, unknown> = { enableWorker: true, subtitleDisplay: false }
+  // Bounds the buffer on low-memory/TV tiers: an unbounded back buffer is one of the
+  // WebView OOM crash causes on real TVs and Fire TV sticks over a long live session.
+  if (isMemoryConservativeProfile()) {
+    hlsConfig.backBufferLength = 30
+    hlsConfig.maxBufferLength = 10
+    hlsConfig.maxBufferSize = 12_000_000
+    hlsConfig.maxMaxBufferLength = 30
+    hlsConfig.frontBufferFlushThreshold = 60
+  } else {
+    hlsConfig.backBufferLength = 90
+  }
   if (isTauri) {
     hlsConfig.loader = createTauriHlsLoaderClass(authorization, authorizedOrigin)
   } else if (authorization) {
@@ -1327,7 +1570,7 @@ function attachHlsToVideo(
     telemetry?.emit("fatal", String(data?.details || "hls fatal error"))
     onGiveUp()
   })
-  hls.loadSource(cleanUrl)
+  hls.loadSource(playbackUrl)
   hls.attachMedia(video)
   active.set(hls)
 }
@@ -1420,6 +1663,7 @@ async function attachShaka(
   }
   const player = new shaka.Player()
   const handle = { destroy: () => { void player.destroy() }, player }
+  const playbackUrl = wrapForDnsProxySync(cleanUrl)
   configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
   const fail = (raw: any) => {
     if (!isCurrent()) return
@@ -1444,7 +1688,7 @@ async function attachShaka(
       try { player.destroy() } catch {}
       return
     }
-    await player.load(cleanUrl)
+    await player.load(playbackUrl)
     if (!isCurrent()) {
       try { player.destroy() } catch {}
       return
@@ -1534,6 +1778,7 @@ async function attachMpegts(
   let offsetWrapTimer: ReturnType<typeof setInterval> | null = null
 
   const { url: cleanUrl, authorization } = splitUrlAuth(url)
+  const playbackUrl = wrapForDnsProxySync(cleanUrl)
 
   const teardown = () => {
     if (durationRetryTimer) {
@@ -1629,7 +1874,12 @@ async function attachMpegts(
     const config: Record<string, unknown> = {}
     if (useTauriLoader) config.customLoader = createTauriStreamLoaderClass(mpegts)
     if (authorization) config.headers = { Authorization: authorization }
-    if (!isLive) {
+    if (isLive) {
+      // Bound the live SourceBuffer so a long session can't grow it until the WebView dies
+      config.autoCleanupSourceBuffer = true
+      config.autoCleanupMaxBackwardDuration = 60
+      config.autoCleanupMinBackwardDuration = 30
+    } else {
       try {
         const hostname = new URL(cleanUrl).hostname
         // Lazy-load aborts kill stateful proxy sessions; auto-cleanup keeps the MSE quota from filling instead.
@@ -1641,7 +1891,7 @@ async function attachMpegts(
         }
       } catch {}
     }
-    const mediaDataSource: Record<string, unknown> = { type: "mpegts", isLive, url: cleanUrl }
+    const mediaDataSource: Record<string, unknown> = { type: "mpegts", isLive, url: playbackUrl }
     if (!isLive && Number.isFinite(durationSeconds) && (durationSeconds as number) > 0) {
       mediaDataSource.duration = Math.round((durationSeconds as number) * 1000)
     }
@@ -1729,6 +1979,53 @@ async function attachMpegts(
 // ---------------------------------------------------------------------------
 // Embedded mounts
 // ---------------------------------------------------------------------------
+
+type SubtitleTrackInfo = { index: number; label: string; language: string }
+
+// Wires track-memory restore/persist into a mount's subtitle manager callbacks.
+export function createSubtitleTrackMemoryHooks(
+  getContext: () => TrackMemoryContext | null,
+  getManager: () => { select: (index: number) => void },
+) {
+  let suppressPersist = false
+  let restoreAttempted = false
+  return {
+    resetForLoad(): void {
+      restoreAttempted = false
+    },
+    onTracksReady(tracks: SubtitleTrackInfo[], activeIndex: number): void {
+      if (restoreAttempted) return
+      restoreAttempted = true
+      const ctx = getContext()
+      if (!ctx) return
+      const choice = chooseSubtitleTrackId(
+        ctx,
+        tracks.map((track) => ({ id: track.index, lang: track.language || null, title: track.label || null })),
+      )
+      if (choice === "off") {
+        if (activeIndex >= 0) {
+          suppressPersist = true
+          getManager().select(-1)
+          suppressPersist = false
+        }
+        return
+      }
+      if (typeof choice === "number" && choice !== activeIndex) {
+        suppressPersist = true
+        getManager().select(choice)
+        suppressPersist = false
+      }
+    },
+    onSelectionChanged(track: SubtitleTrackInfo | null): void {
+      if (suppressPersist) return
+      rememberSubtitleTrack(
+        getContext(),
+        track ? { id: track.index, lang: track.language || null, title: track.label || null } : null,
+      )
+    },
+  }
+}
+
 async function mountVideoJs(
   videoEl: HTMLVideoElement,
   options: MountOptions,
@@ -1776,6 +2073,7 @@ async function mountVideoJs(
   let pendingAudioSource: AudioTrackSource | null = null
   // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
   let pendingUsesCallerSuppliedTracks = false
+  let trackMemory: TrackMemoryContext | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
   function resolveEngine(): ResolvedEngine | null {
     if (activeHls) return { kind: "hls", instance: activeHls }
@@ -1788,9 +2086,12 @@ async function mountVideoJs(
     resolveEngine,
     getMediaElement: () => getUnderlyingVideo() ?? videoEl,
   })
+  const subtitleMemoryHooks = createSubtitleTrackMemoryHooks(() => trackMemory, () => subtitleManager)
   const subtitleManager = createSubtitleManager({
     registrar: createVideoJsTrackRegistrar(player),
     getCurrentTime: () => player.currentTime?.() || 0,
+    onTracksReady: (tracks, activeIndex) => subtitleMemoryHooks.onTracksReady(tracks, activeIndex),
+    onSelectionChanged: (track) => subtitleMemoryHooks.onSelectionChanged(track),
   })
   const audioMenu = attachVideoJsAudioMenu(videojs, player)
 
@@ -1872,13 +2173,13 @@ async function mountVideoJs(
       return
     }
     destroyHls()
-    player.src({ src, type: "application/x-mpegURL" })
+    player.src({ src: wrapForDnsProxySync(src), type: "application/x-mpegURL" })
   }
 
   async function loadHlsViaHlsJs(src: string) {
     destroyHls()
     if (!getUnderlyingVideo()) {
-      player.src({ src, type: "application/x-mpegURL" })
+      player.src({ src: wrapForDnsProxySync(src), type: "application/x-mpegURL" })
       return
     }
     try {
@@ -1891,7 +2192,7 @@ async function mountVideoJs(
       try { player.reset() } catch {}
       const video = getUnderlyingVideo()
       if (!video) {
-        player.src({ src, type: "application/x-mpegURL" })
+        player.src({ src: wrapForDnsProxySync(src), type: "application/x-mpegURL" })
         return
       }
       attachHlsToVideo(
@@ -1916,7 +2217,7 @@ async function mountVideoJs(
       try { player.hasStarted?.(true) } catch {}
     } catch (err) {
       log.warn("[xt:player] hls.js attach failed, falling back to VHS:", err)
-      player.src({ src, type: "application/x-mpegURL" })
+      player.src({ src: wrapForDnsProxySync(src), type: "application/x-mpegURL" })
     }
   }
 
@@ -1924,8 +2225,9 @@ async function mountVideoJs(
     destroyMpegts()
     destroyHls()
     destroyShaka()
-    noteMonoSourceChange(videoEl, src)
-    player.src({ src, type: type || "video/mp4" })
+    const playbackSrc = wrapForDnsProxySync(src)
+    noteMonoSourceChange(videoEl, playbackSrc)
+    player.src({ src: playbackSrc, type: type || "video/mp4" })
   }
 
   async function recoverFailedTs(src: string, detail: string) {
@@ -1995,10 +2297,12 @@ async function mountVideoJs(
   }
 
   const wrapped: VjsLikeHandle = {
-    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio, trackMemory: nextTrackMemory }) {
       pendingSrc = src
       pendingIsLive = isLive ?? true
       pendingDurationSeconds = durationSeconds
+      trackMemory = nextTrackMemory ?? null
+      subtitleMemoryHooks.resetForLoad()
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
       pendingAudioSource = audio ?? null
       codecState.videoCodec = null
@@ -2154,10 +2458,7 @@ async function mountVideoJs(
 }
 
 async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions = {}): Promise<VjsLikeHandle> {
-  const [{ default: Artplayer }, { default: Hls }] = await Promise.all([
-    import("artplayer"),
-    import("hls.js"),
-  ])
+  const { default: Artplayer } = await import("artplayer")
 
   const parent = videoEl.parentElement
   if (!parent) {
@@ -2187,6 +2488,10 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingAudioSource: AudioTrackSource | null = null
   // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
   let pendingUsesCallerSuppliedTracks = false
+  let trackMemory: TrackMemoryContext | null = null
+  // Resolved lazily, only once the mount actually hits an HLS source - mirrors mountVideoJs's
+  // hlsModPromise so artplayer/mpegts-only channels never pay hls.js's parse/bundle cost.
+  let hlsModPromise: Promise<any> | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
   function resolveEngine(): ResolvedEngine | null {
     if (activeHls) return { kind: "hls", instance: activeHls }
@@ -2251,12 +2556,17 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   // hls.js attach, shared by the m3u8 customType and the .ts -> HLS recovery
   // path below (some providers' .ts URLs redirect to / serve an HLS playlist,
   // which mpegts.js can't demux).
-  function loadHlsIntoVideo(video: HTMLVideoElement, url: string) {
+  async function loadHlsIntoVideo(video: HTMLVideoElement, url: string): Promise<void> {
     destroyMpegts()
     if (activeShaka) {
       try { activeShaka.destroy() } catch {}
       activeShaka = null
     }
+    if (!hlsModPromise) {
+      hlsModPromise = import("hls.js").then((mod) => (mod as any).default || mod)
+    }
+    const Hls = await hlsModPromise
+    if (pendingSrc !== url) return
     attachHlsToVideo(
       Hls,
       video,
@@ -2289,7 +2599,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         "[xt:player] .ts source served an HLS playlist - switching to hls.js:",
         redactUrl(url)
       )
-      loadHlsIntoVideo(video, url)
+      void loadHlsIntoVideo(video, url)
       return
     }
     if (pendingSrc !== url) return
@@ -2321,7 +2631,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     playsInline: true,
     customType: {
       m3u8(video, url) {
-        loadHlsIntoVideo(video, url)
+        void loadHlsIntoVideo(video, url)
       },
       mpd(video, url) {
         loadDashIntoVideo(video, url, pendingDrm)
@@ -2363,8 +2673,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           return
         }
         if (!handle) {
-          noteMonoSourceChange(video, url)
-          setNativeSrc(video, url)
+          const playbackUrl = wrapForDnsProxySync(url)
+          noteMonoSourceChange(video, playbackUrl)
+          setNativeSrc(video, playbackUrl)
           return
         }
         activeMpegts = handle
@@ -2381,10 +2692,15 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   if (art.isReady) applyPreload()
   else art.on("ready", applyPreload)
 
+  const subtitleMemoryHooks = createSubtitleTrackMemoryHooks(() => trackMemory, () => subtitleManager)
   const subtitleManager = createSubtitleManager({
     registrar: createNativeTrackRegistrar(() => art.video ?? null),
     getCurrentTime: () => art.currentTime || 0,
-    onTracksReady: (tracks, activeIndex) => installSubtitleControl(tracks, activeIndex),
+    onTracksReady: (tracks, activeIndex) => {
+      installSubtitleControl(tracks, activeIndex)
+      subtitleMemoryHooks.onTracksReady(tracks, activeIndex)
+    },
+    onSelectionChanged: (track) => subtitleMemoryHooks.onSelectionChanged(track),
   })
   const audioControl = attachArtplayerAudioControl(art, t)
   const hlsSubtitleControl = attachArtplayerHlsSubtitleControl(art, t)
@@ -2450,7 +2766,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   }
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio, preferNativeHls }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio, preferNativeHls, trackMemory: nextTrackMemory }) {
       pendingSrc = src
       pendingPreferNativeHls = !!preferNativeHls
       pendingDrm = drm ?? null
@@ -2458,6 +2774,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       pendingDurationSeconds = durationSeconds
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
       pendingAudioSource = audio ?? null
+      trackMemory = nextTrackMemory ?? null
+      subtitleMemoryHooks.resetForLoad()
       codecState.videoCodec = null
       codecState.audioCodec = null
       codecState.errorDetail = null
@@ -2495,8 +2813,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       if (hint === "native") {
         art.type = ""
         // artplayer's default (non-customType) handling sets el.src directly.
-        noteMonoSourceChange(art.video ?? null, src)
-        art.url = src
+        const playbackSrc = wrapForDnsProxySync(src)
+        noteMonoSourceChange(art.video ?? null, playbackSrc)
+        art.url = playbackSrc
         return
       }
       // Unknown - wait for the probe before loading anything so we don't
@@ -2507,8 +2826,13 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           if (pendingSrc !== src) return
           pendingUsesCallerSuppliedTracks = kind === "ts" || kind === "native"
           art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
-          if (kind === "native") noteMonoSourceChange(art.video ?? null, src)
-          art.url = src
+          if (kind === "native") {
+            const playbackSrc = wrapForDnsProxySync(src)
+            noteMonoSourceChange(art.video ?? null, playbackSrc)
+            art.url = playbackSrc
+          } else {
+            art.url = src
+          }
           if (kind === "ts" || kind === "native") audioControl.setSource(pendingAudioSource)
           if ((kind === "ts" || kind === "native") && subtitles) {
             setSubtitleSource(subtitles.sourceUrl, type, subtitles?.mkvSession ?? null)
@@ -2555,6 +2879,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       destroyArtEngines()
       telemetry.dispose()
       try { art.destroy(false) } catch {}
+      // A remount reuses the caller's videoEl; restore it or the next mount has no parent to attach to.
+      if (container.parentElement) container.parentElement.replaceChild(videoEl, container)
     },
     duration() {
       const dur = art.duration
@@ -2670,6 +2996,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   let pendingIsLive = true
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
+  let trackMemory: TrackMemoryContext | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
   // The raw-TS fallback keeps `player` attached-but-unloaded; mpegts, when active, is the real engine.
   function resolveEngine(): ResolvedEngine | null {
@@ -2681,9 +3008,12 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     resolveEngine,
     getMediaElement: () => video,
   })
+  const subtitleMemoryHooks = createSubtitleTrackMemoryHooks(() => trackMemory, () => subtitleManager)
   const subtitleManager = createSubtitleManager({
     registrar: createNativeTrackRegistrar(() => video),
     getCurrentTime: () => video.currentTime || 0,
+    onTracksReady: (tracks, activeIndex) => subtitleMemoryHooks.onTracksReady(tracks, activeIndex),
+    onSelectionChanged: (track) => subtitleMemoryHooks.onSelectionChanged(track),
   })
 
   function destroyMpegts(): Promise<void> {
@@ -2749,10 +3079,11 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       setNativeControls(false)
       setShakaSeekBar(true)
       player.getNetworkingEngine()?.clearAllRequestFilters()
+      const playbackUrl = wrapForDnsProxySync(cleanUrl)
       configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
       // Shaka can fall back to src= for non-MSE-able content, setting el.src directly.
-      noteMonoSourceChange(video, cleanUrl)
-      await player.load(cleanUrl, null, mimeTypeHint || undefined)
+      noteMonoSourceChange(video, playbackUrl)
+      await player.load(playbackUrl, null, mimeTypeHint || undefined)
       if (pendingSrc !== src) return
       consumePlayIntent()
       const track = player.getVariantTracks?.().find((variant: any) => variant.active)
@@ -2837,12 +3168,14 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   }
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, trackMemory: nextTrackMemory }) {
       pendingSrc = src
       pendingDrm = drm ?? null
       pendingIsLive = isLive ?? true
       pendingDurationSeconds = durationSeconds
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
+      trackMemory = nextTrackMemory ?? null
+      subtitleMemoryHooks.resetForLoad()
       codecState.videoCodec = null
       codecState.audioCodec = null
       codecState.errorDetail = null
@@ -2992,6 +3325,45 @@ function wireMonoAudioDisposal(handle: VjsLikeHandle): void {
   }
 }
 
+function wireMonoAudioDisposalMpv(handle: VjsLikeHandle): void {
+  const disposeMonoAudio = bindMonoAudioMpv(handle)
+  const originalDispose = handle.dispose?.bind(handle)
+  handle.dispose = () => {
+    disposeMonoAudio()
+    return originalDispose?.()
+  }
+}
+
+function dispatchPlayerFallback(requested: PlayerBackend, used: PlayerBackend): void {
+  log.debug("[xt:player] backend fallback", `requested=${requested} used=${used}`)
+  try {
+    document.dispatchEvent(new CustomEvent("xt:player-fallback", { detail: { requested, used } }))
+  } catch {}
+}
+
+/** Pure backend-availability decision, unit-testable without the platform probes it's normally fed. */
+export function resolveBackendFrom(
+  backend: PlayerBackend,
+  context: { isAndroid: boolean; mpvAvailable: boolean; externalAvailable: boolean },
+): PlayerBackend {
+  if (backend === "artplayer" && context.isAndroid) return "videojs"
+  if (backend === "mpv-embedded" && !context.mpvAvailable) return "artplayer"
+  if ((backend === "mpv" || backend === "vlc") && !context.externalAvailable) return "artplayer"
+  return backend
+}
+
+/** The backend mountPlayer will actually mount, after platform-availability fallbacks. */
+export async function resolveEffectiveBackend(
+  backend: PlayerBackend = getPlayerBackend() as PlayerBackend,
+): Promise<PlayerBackend> {
+  let mpvAvailable = false
+  if (backend === "mpv-embedded") {
+    const { mpvEmbeddedAvailable } = await import("@/scripts/lib/mpv-embedded.ts")
+    mpvAvailable = await mpvEmbeddedAvailable()
+  }
+  return resolveBackendFrom(backend, { isAndroid, mpvAvailable, externalAvailable: externalPlayersAvailable })
+}
+
 // ---------------------------------------------------------------------------
 // Mount entry point
 // ---------------------------------------------------------------------------
@@ -3000,19 +3372,32 @@ export async function mountPlayer(
   backend: PlayerBackend = getPlayerBackend(),
   options: MountOptions = {},
 ): Promise<Mounted> {
-  if (backend === "artplayer" && isAndroid) backend = "videojs"
-  if (backend === "mpv" || backend === "vlc") {
-    if (!externalPlayersAvailable) {
-      log.warn(`[xt:player] external backend "${backend}" requested but not available; falling back to artplayer`)
-      try {
-        document.dispatchEvent(
-          new CustomEvent("xt:player-fallback", {
-            detail: { requested: backend, used: "artplayer" },
-          }),
-        )
-      } catch {}
-      return mountPlayer(videoEl, "artplayer", options)
+  await ensurePlaybackDnsReady()
+  const requestedBackend = backend
+  backend = await resolveEffectiveBackend(backend)
+  if (backend !== requestedBackend) {
+    log.warn(`[xt:player] backend "${requestedBackend}" unavailable; falling back to "${backend}"`)
+    dispatchPlayerFallback(requestedBackend, backend)
+  }
+  if (backend === "mpv-embedded") {
+    const { createMpvEmbeddedHandle } = await import("@/scripts/lib/mpv-embedded.ts")
+    const container = videoEl.parentElement ?? videoEl
+    const handle = await createMpvEmbeddedHandle(container, {
+      userAgent: options.userAgent || getUserAgent() || DEFAULT_BROWSER_UA,
+      referer: options.referer ?? null,
+      networkTimeoutSeconds: getNetworkTimeoutSeconds(),
+      videoElement: videoEl,
+      controls: options.mpvControls,
+    })
+    if (handle) {
+      wireMonoAudioDisposalMpv(handle)
+      return { kind: "embedded", backend: "mpv-embedded", handle }
     }
+    log.warn(`[xt:player] embedded mpv requested but unavailable; falling back to artplayer`)
+    dispatchPlayerFallback(backend, "artplayer")
+    return mountPlayer(videoEl, "artplayer", options)
+  }
+  if (backend === "mpv" || backend === "vlc") {
     return {
       kind: "external",
       backend,
@@ -3060,6 +3445,24 @@ export async function stopExternalPlayback(kind: string): Promise<boolean> {
 
 export function isExternalBackend(backend: PlayerBackend): boolean {
   return EXTERNAL_PLAYER_BACKENDS.includes(backend as ExternalPlayerKind)
+}
+
+/** True when the current backend could still hand off to embedded mpv (not already mpv, not an external launcher). */
+export function canSwapToMpvEmbedded(
+  backend: PlayerBackend | string | null | undefined,
+  mpvAvailable: boolean
+): boolean {
+  return mpvAvailable && !isNativeVideoBackend(backend) && !isExternalBackend(backend as PlayerBackend)
+}
+
+/** hevc/codec verdicts are exactly what mpv's native decoder answers that MSE can't. */
+export function shouldOfferMpvEmbeddedFix(
+  failureKind: StartFailureKind | string | null | undefined,
+  backend: PlayerBackend | string | null | undefined,
+  mpvAvailable: boolean
+): boolean {
+  if (failureKind !== "hevc" && failureKind !== "codec") return false
+  return canSwapToMpvEmbedded(backend, mpvAvailable)
 }
 
 export interface PlayWhenReadyOptions {

@@ -784,11 +784,13 @@ export function mountCategoryPicker(
 
   // Sync-with-Live toggle (EPG only). Reflect current state on mount so the
   // checkbox doesn't show a hardcoded "checked".
+  let reflectSyncInput: () => void = () => {}
   if (syncInput && opts.kind === "epg") {
     const reflectSync = (): void => {
       const pid = opts.getActivePlaylistId()
       syncInput.checked = pid ? getSyncEpgWithLive(pid) : true
     }
+    reflectSyncInput = reflectSync
     reflectSync()
     syncInput.addEventListener("change", () => {
       const pid = opts.getActivePlaylistId()
@@ -920,6 +922,7 @@ export function mountCategoryPicker(
 
   return {
     rerender: () => {
+      reflectSyncInput()
       scheduleListRefresh()
       scheduleGenreRefresh()
     },

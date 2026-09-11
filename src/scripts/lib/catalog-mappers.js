@@ -1,6 +1,16 @@
-// Pure Xtream row mappers shared by catalog.js and (later) native ingest.
+// Pure Xtream row mappers shared by catalog.js and native/worker ingest.
 
 import { normalize } from "@/scripts/lib/text.js"
+
+// Shared across every name sort in this file (and the catalog ingest worker) so a
+// per-call localeCompare never re-builds the same collator on a multi-thousand-row sort.
+export const NAME_COLLATOR = new Intl.Collator("en", { sensitivity: "base" })
+
+/** Unwraps a raw Xtream streams/movies/series payload, tolerating the bare-array and {results} shapes. */
+export function unwrapRows(parsed, arrayKey) {
+  if (Array.isArray(parsed)) return parsed
+  return (parsed?.[arrayKey]) || (parsed?.results) || []
+}
 
 export function parseCategoriesToMap(data) {
   const arr = Array.isArray(data)
@@ -84,9 +94,7 @@ export function mapXtreamVodRows(rawRows, categoryMap) {
       }
     })
     .filter((m) => m.id && m.name)
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-    )
+    .sort((a, b) => NAME_COLLATOR.compare(a.name, b.name))
 }
 
 /** True when `rows` predate the `tmdb` field and need a background backfill. */
@@ -138,9 +146,7 @@ export function mapXtreamSeriesRows(rawRows, categoryMap) {
       }
     })
     .filter((s) => s.id && s.name)
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-    )
+    .sort((a, b) => NAME_COLLATOR.compare(a.name, b.name))
 }
 
 /** True when `rows` predate the `genre` field and need a background backfill. */

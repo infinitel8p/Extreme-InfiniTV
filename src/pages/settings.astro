@@ -80,6 +80,7 @@ const navStructure: NavSection[] = [
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
     { id: "card-casting",          labelKey: "settings.casting.title", label: "Casting", conditional: true },
     { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "Metadata enrichment" },
+    { id: "row-verbose-log",       labelKey: "settings.verboseLog.title", label: "Verbose logging", conditional: true },
     { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
@@ -319,6 +320,27 @@ const navStructure: NavSection[] = [
                 </div>
               </div>
 
+              <div id="settings-row-ui-mode" class="settings-row">
+                <div class="settings-row__text">
+                  <span data-i18n="settings.uiMode.label" class="text-sm font-medium leading-snug">Interface</span>
+                  <p data-i18n="settings.uiMode.helper" class="text-xs text-fg-3">
+                    TV is the 10-foot layout for remotes and keyboards, made for projectors and big screens. Auto follows device detection.
+                  </p>
+                </div>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-ui-mode"
+                    class="settings-seg"
+                    role="radiogroup"
+                    data-i18n-attr="aria-label:settings.uiMode.label"
+                    aria-label="Interface">
+                    <button type="button" role="radio" data-ui-mode="auto"    aria-checked="false" data-i18n="settings.uiMode.auto" class="ui-mode-btn btn">Auto</button>
+                    <button type="button" role="radio" data-ui-mode="tv"      aria-checked="false" data-i18n="settings.uiMode.tv" class="ui-mode-btn btn">TV</button>
+                    <button type="button" role="radio" data-ui-mode="desktop" aria-checked="false" data-i18n="settings.uiMode.desktop" class="ui-mode-btn btn">Desktop</button>
+                  </div>
+                </div>
+              </div>
+
               <div class="settings-row">
                 <div class="settings-row__text">
                   <span data-i18n="settings.accent.label" class="text-sm font-medium leading-snug">Accent color</span>
@@ -449,6 +471,21 @@ const navStructure: NavSection[] = [
                     var themeBtns = themeGroup.querySelectorAll(".theme-btn");
                     for (var j = 0; j < themeBtns.length; j++) {
                       themeBtns[j].setAttribute("aria-checked", themeBtns[j].getAttribute("data-theme") === currentTheme ? "true" : "false");
+                    }
+                  }
+                  var uiModeRow = document.getElementById("settings-row-ui-mode");
+                  var isRealAndroidTv = false;
+                  try {
+                    isRealAndroidTv = !!(window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function" && window.AndroidDeviceInfo.isTv() === true);
+                  } catch (e) {}
+                  if (uiModeRow && isRealAndroidTv) uiModeRow.classList.add("hidden");
+                  var currentUiMode = localStorage.getItem("xt_ui_mode");
+                  if (currentUiMode !== "tv" && currentUiMode !== "desktop") currentUiMode = "auto";
+                  var uiModeGroup = document.getElementById("settings-ui-mode");
+                  if (uiModeGroup) {
+                    var uiModeBtns = uiModeGroup.querySelectorAll("[data-ui-mode]");
+                    for (var uiModeIndex = 0; uiModeIndex < uiModeBtns.length; uiModeIndex++) {
+                      uiModeBtns[uiModeIndex].setAttribute("aria-checked", uiModeBtns[uiModeIndex].getAttribute("data-ui-mode") === currentUiMode ? "true" : "false");
                     }
                   }
                   var currentAccent = localStorage.getItem("xt_accent") || "fuchsia";
@@ -621,7 +658,7 @@ const navStructure: NavSection[] = [
                   </select>
                 </div>
                 <p id="rendering-hint" data-i18n="settings.rendering.hint" class="text-xs text-fg-3">
-                  Auto turns on safe mode only on hardware known to have problems. Faster is applied as a trial after a restart: if you do not confirm keeping it, the app switches back on the next launch.
+                  Auto enables safe rendering on known-risky hardware and for AppImage builds. Faster is a trial that reverts unless you confirm keeping it.
                 </p>
 
                 <p id="rendering-env-override-note" hidden data-i18n="settings.rendering.envOverrideNote" class="text-xs text-fg-3">
@@ -1001,6 +1038,43 @@ const navStructure: NavSection[] = [
               </div>
             </div>
 
+            <!-- Custom DNS server: global default, per-playlist overrides live on
+                 the entry (set from /login). Disabled on the web build - the
+                 Rust DNS proxy backs the Test probe and isn't available there. -->
+            <div data-settings-item class="settings-row settings-row--stack scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.network.dnsLabel" class="text-sm font-medium leading-snug">DNS server</h3>
+                <p data-i18n="settings.network.dnsHelper" class="text-xs text-fg-3">
+                  Also used for metadata, logos and update checks. A DNS server set on a playlist overrides this for that playlist.
+                </p>
+              </div>
+              <div class="settings-row__control w-full flex-col items-stretch gap-1">
+                <div class="flex gap-2">
+                  <input
+                    id="settings-dns"
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="1.1.1.1 or https://dnsforge.de/dns-query"
+                    data-i18n-attr="placeholder:dns.placeholder"
+                    class="field-input font-mono flex-1 min-w-0"
+                  />
+                  <button id="dns-test" type="button" class="btn justify-center">
+                    <span data-i18n="dns.test">Test</span>
+                  </button>
+                  <button id="dns-save" type="button" class="btn justify-center">
+                    <IconDeviceFloppy aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="common.save">Save</span>
+                  </button>
+                </div>
+                <span
+                  id="dns-msg"
+                  role="status"
+                  aria-live="polite"
+                  class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
+            </div>
+
             <!-- Request timeout -->
             <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
               <div class="settings-row__text">
@@ -1043,6 +1117,28 @@ const navStructure: NavSection[] = [
                   data-i18n-attr="aria-label:settings.devMode.label">
                   <button type="button" role="radio" data-dev="on"  aria-checked="false" data-i18n="settings.devMode.on"  class="dev-mode-btn btn">On</button>
                   <button type="button" role="radio" data-dev="off" aria-checked="false" data-i18n="settings.devMode.off" class="dev-mode-btn btn">Off</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Verbose logging: dev-mode gated, writes detailed activity to the app log -->
+            <div id="row-verbose-log" data-settings-item class="settings-row hidden scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.verboseLog.title" class="text-sm font-medium leading-snug">Verbose logging</h3>
+                <p id="settings-verbose-log-helper" data-i18n="settings.verboseLog.helper" class="text-xs text-fg-3">
+                  Writes detailed EPG, catalog, playback and network activity to the app log file, with credentials removed. Attach the log to a bug report via Share logs or the diagnostic bundle. Turn it off when you're done: the log grows quickly.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-verbose-log"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Verbose logging"
+                  aria-describedby="settings-verbose-log-helper"
+                  data-i18n-attr="aria-label:settings.verboseLog.label">
+                  <button type="button" role="radio" data-verbose="on"  aria-checked="false" data-i18n="settings.verboseLog.on"  class="verbose-log-btn btn">On</button>
+                  <button type="button" role="radio" data-verbose="off" aria-checked="false" data-i18n="settings.verboseLog.off" class="verbose-log-btn btn">Off</button>
                 </div>
               </div>
             </div>
@@ -2407,6 +2503,8 @@ const navStructure: NavSection[] = [
     import { t, LOCALE_EVENT, getActiveLocale, initI18n } from "@/scripts/lib/i18n.js"
     import { LANGUAGE_TOKENS, languageTagLabel } from "@/scripts/lib/language-tags.ts"
     import { ICON_CHECK } from "@/scripts/lib/icons.ts"
+    import { getUiMode, setUiMode } from "@/scripts/lib/ui-mode.ts"
+    import { tvRouteFor } from "@/scripts/lib/tv-routes.ts"
     import {
       getActiveEntry,
       getEntries,
@@ -2414,7 +2512,12 @@ const navStructure: NavSection[] = [
       isTauri,
       loadCreds,
       addEntry,
+      isLocalM3UHost,
+      isCustomHost,
     } from "@/scripts/lib/creds.js"
+    import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
+    import { dnsProxyAvailable } from "@/scripts/lib/dns-proxy.ts"
+    import { runDnsCheck, describeDnsError, formatDnsOutcome, dnsOutcomeTone, hostnameOf } from "@/scripts/lib/dns-test.ts"
     import {
       getNewestCacheTimeAsync,
       getCacheSizeAsync,
@@ -2478,6 +2581,8 @@ const navStructure: NavSection[] = [
       setProgressRetentionDays,
       getNetworkTimeoutSeconds,
       setNetworkTimeoutSeconds,
+      getGlobalDns,
+      setGlobalDns,
       getUpdateChannel,
       setUpdateChannel,
       getAutoUpdateEnabled,
@@ -2493,6 +2598,9 @@ const navStructure: NavSection[] = [
       getDevModeEnabled,
       setDevModeEnabled,
       DEV_MODE_EVENT,
+      getVerboseLogEnabled,
+      setVerboseLogEnabled,
+      VERBOSE_LOG_EVENT,
     } from "@/scripts/lib/app-settings.js"
     import { playUiSound } from "@/scripts/lib/ui-sounds.ts"
     import { hapticsAvailable, performHaptic } from "@/scripts/lib/haptics.ts"
@@ -3510,9 +3618,16 @@ const navStructure: NavSection[] = [
       }
     }
     function commitTheme(t) {
-      if (t === "light") document.documentElement.style.colorScheme = "light"
-      else if (t === "dark") document.documentElement.style.colorScheme = "dark"
-      else document.documentElement.style.colorScheme = ""
+      if (t === "light") {
+        document.documentElement.style.colorScheme = "light"
+        document.documentElement.setAttribute("data-theme", "light")
+      } else if (t === "dark") {
+        document.documentElement.style.colorScheme = "dark"
+        document.documentElement.setAttribute("data-theme", "dark")
+      } else {
+        document.documentElement.style.colorScheme = ""
+        document.documentElement.removeAttribute("data-theme")
+      }
       try {
         localStorage.setItem("xt_theme", t)
       } catch {}
@@ -3559,6 +3674,29 @@ const navStructure: NavSection[] = [
       applyTheme(btn.dataset.theme || "system", event.clientX, event.clientY)
     })
     syncThemeButtons()
+
+    // ---------------------------------------------------------------------
+    // Interface: TV browse UI vs classic desktop layout, device-local (xt_ui_mode).
+    // ---------------------------------------------------------------------
+    const uiModeGroup = document.getElementById("settings-ui-mode")
+    function syncUiModeButtons() {
+      const current = getUiMode()
+      for (const btn of uiModeGroup?.querySelectorAll("[data-ui-mode]") || []) {
+        btn.setAttribute("aria-checked", String(btn.dataset.uiMode === current))
+      }
+    }
+    uiModeGroup?.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement
+      const btn = target.closest<HTMLElement>("[data-ui-mode]")
+      if (!btn) return
+      const mode = (btn.dataset.uiMode || "auto") as "auto" | "tv" | "desktop"
+      setUiMode(mode)
+      syncUiModeButtons()
+      if (mode === "tv" || (mode === "auto" && document.documentElement.dataset.tv === "1")) {
+        window.location.href = tvRouteFor(location.pathname, location.search) ?? "/tv"
+      }
+    })
+    syncUiModeButtons()
 
     // ---------------------------------------------------------------------
     // Accent color: persisted to xt_accent, applied via `data-accent` on <html>.
@@ -3682,6 +3820,7 @@ const navStructure: NavSection[] = [
       if (detection === "raspberry-pi") return t("settings.rendering.detectionRaspberryPi")
       if (detection === "nvidia") return t("settings.rendering.detectionNvidia")
       if (detection === "vm") return t("settings.rendering.detectionVm")
+      if (detection === "appimage") return t("settings.rendering.detectionAppImage")
       return ""
     }
 
@@ -3695,15 +3834,18 @@ const navStructure: NavSection[] = [
       }
       if (renderingStatusEl) {
         const detectionLabel = renderingDetectionLabel(state.detection)
-        if (state.active === "safe") {
-          renderingStatusEl.textContent = detectionLabel
-            ? t("settings.rendering.statusSafeWithDetection", { detection: detectionLabel })
-            : t("settings.rendering.statusSafe")
-        } else {
-          renderingStatusEl.textContent = detectionLabel
-            ? t("settings.rendering.statusFastWithDetection", { detection: detectionLabel })
-            : t("settings.rendering.statusFast")
+        let statusText =
+          state.active === "safe"
+            ? detectionLabel
+              ? t("settings.rendering.statusSafeWithDetection", { detection: detectionLabel })
+              : t("settings.rendering.statusSafe")
+            : detectionLabel
+              ? t("settings.rendering.statusFastWithDetection", { detection: detectionLabel })
+              : t("settings.rendering.statusFast")
+        if (state.webkitVersion) {
+          statusText += ` ${t("settings.rendering.webkitVersion", { version: state.webkitVersion })}`
         }
+        renderingStatusEl.textContent = statusText
       }
       if (state.envOverride) {
         renderingSelectEl?.setAttribute("disabled", "")
@@ -4173,6 +4315,112 @@ const navStructure: NavSection[] = [
     })
 
     // ---------------------------------------------------------------------
+    // Custom DNS server: global default, tested against the active
+    // playlist's host. Per-playlist overrides are set from /login.
+    // ---------------------------------------------------------------------
+    const dnsInputEl = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("settings-dns")
+    )
+    const dnsTestBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("dns-test"))
+    const dnsTestBtnLabel = dnsTestBtn?.querySelector("span")
+    const dnsSaveBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("dns-save"))
+    const dnsMsgEl = document.getElementById("dns-msg")
+
+    if (dnsInputEl) dnsInputEl.value = getGlobalDns() || ""
+    dnsInputEl?.setAttribute("aria-describedby", "dns-msg")
+
+    function setDnsMessage(text, tone) {
+      if (!dnsMsgEl) return
+      dnsMsgEl.classList.remove("text-bad", "text-good", "text-warn", "text-fg-3")
+      dnsMsgEl.classList.add(
+        tone === "bad" ? "text-bad" : tone === "good" ? "text-good" : tone === "warn" ? "text-warn" : "text-fg-3"
+      )
+      dnsMsgEl.textContent = text || ""
+    }
+
+    function validateDnsInput() {
+      const raw = (dnsInputEl?.value || "").trim()
+      if (!raw || parseDnsServer(raw)) {
+        dnsInputEl?.removeAttribute("aria-invalid")
+        return true
+      }
+      setDnsMessage(t("dns.invalid"), "bad")
+      dnsInputEl?.setAttribute("aria-invalid", "true")
+      return false
+    }
+
+    function refreshDnsSaveAvailability() {
+      if (!dnsSaveBtn) return
+      dnsSaveBtn.disabled = (dnsInputEl?.value || "").trim() === (getGlobalDns() || "")
+    }
+
+    /** Active playlist's host, or null for local/custom entries with no remote host. */
+    async function activePlaylistDnsHost() {
+      const active = await getActiveEntry()
+      if (!active) return null
+      const creds = await loadCreds()
+      if (!creds?.host || isLocalM3UHost(creds.host) || isCustomHost(creds.host)) return null
+      const host = hostnameOf(creds.host)
+      return host ? { host, probeUrl: creds.host } : null
+    }
+
+    if (!dnsProxyAvailable()) {
+      if (dnsInputEl) dnsInputEl.readOnly = true
+      dnsTestBtn?.setAttribute("disabled", "")
+      dnsSaveBtn?.setAttribute("disabled", "")
+      setDnsMessage(t("dns.webUnavailable"), "")
+    } else {
+      refreshDnsSaveAvailability()
+      dnsInputEl?.addEventListener("blur", validateDnsInput)
+
+      const initialTarget = await activePlaylistDnsHost()
+      if (dnsTestBtn) dnsTestBtn.disabled = !initialTarget
+      if (!initialTarget) setDnsMessage(t("dns.noActivePlaylist"), "")
+
+      dnsInputEl?.addEventListener("input", () => {
+        refreshDnsSaveAvailability()
+        setDnsMessage(initialTarget ? "" : t("dns.noActivePlaylist"), "")
+        dnsInputEl?.removeAttribute("aria-invalid")
+      })
+
+      dnsSaveBtn?.addEventListener("click", () => {
+        if (!validateDnsInput()) return
+        const raw = (dnsInputEl?.value || "").trim()
+        setGlobalDns(raw || null)
+        if (dnsInputEl) dnsInputEl.value = getGlobalDns() || ""
+        refreshDnsSaveAvailability()
+        setDnsMessage(t("dns.saved"), "good")
+        flashSuccess(dnsSaveBtn)
+      })
+
+      dnsTestBtn?.addEventListener("click", async () => {
+        if (!validateDnsInput()) return
+        const raw = (dnsInputEl?.value || "").trim()
+        const server = parseDnsServer(raw)
+        if (!server) {
+          setDnsMessage(t("dns.invalid"), "bad")
+          return
+        }
+        const target = await activePlaylistDnsHost()
+        if (!target) {
+          setDnsMessage(t("dns.noActivePlaylist"), "bad")
+          return
+        }
+        dnsTestBtn.disabled = true
+        if (dnsTestBtnLabel) dnsTestBtnLabel.textContent = t("dns.testing")
+        try {
+          const outcome = await runDnsCheck(server, target.host, target.probeUrl)
+          setDnsMessage(formatDnsOutcome(outcome), dnsOutcomeTone(outcome))
+        } catch (error) {
+          setDnsMessage(describeDnsError(error), "bad")
+        } finally {
+          if (dnsTestBtnLabel) dnsTestBtnLabel.textContent = t("dns.test")
+          dnsTestBtn.disabled = !(await activePlaylistDnsHost())
+        }
+      })
+    }
+
+    // ---------------------------------------------------------------------
     // Network timeout: how long providerFetch waits before aborting. The
     // setting is read on every fetch, so the change takes effect on the
     // next catalog refresh without a reload.
@@ -4208,6 +4456,7 @@ const navStructure: NavSection[] = [
     }
     function applyDevModeVisibility() {
       document.getElementById("card-net-log")?.classList.toggle("hidden", !getDevModeEnabled())
+      document.getElementById("row-verbose-log")?.classList.toggle("hidden", !getDevModeEnabled())
     }
     devModeGroup?.addEventListener("click", (event) => {
       const target = /** @type {HTMLElement} */ (event.target)
@@ -4220,9 +4469,34 @@ const navStructure: NavSection[] = [
     document.addEventListener(DEV_MODE_EVENT, () => {
       syncDevModeButtons()
       applyDevModeVisibility()
+      syncVerboseLogButtons()
     })
     syncDevModeButtons()
     applyDevModeVisibility()
+
+    // ---------------------------------------------------------------------
+    // Verbose logging: writes detailed activity to the app log file. Only
+    // shown while Developer mode is on; turning Developer mode off also
+    // turns verbose logging off (handled in setDevModeEnabled).
+    // ---------------------------------------------------------------------
+    const verboseLogGroup = document.getElementById("settings-verbose-log")
+    function syncVerboseLogButtons() {
+      const current = getVerboseLogEnabled()
+      for (const btn of verboseLogGroup?.querySelectorAll(".verbose-log-btn") || []) {
+        btn.setAttribute("aria-checked", String((btn.dataset.verbose === "on") === current))
+      }
+    }
+    verboseLogGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".verbose-log-btn")
+      if (!btn) return
+      setVerboseLogEnabled(btn.dataset.verbose === "on")
+      syncVerboseLogButtons()
+    })
+    document.addEventListener(VERBOSE_LOG_EVENT, () => {
+      syncVerboseLogButtons()
+    })
+    syncVerboseLogButtons()
 
     // ---------------------------------------------------------------------
     // Downloads folder
@@ -5182,6 +5456,7 @@ const navStructure: NavSection[] = [
 
     const NET_LOG_RENDER_CAP = 100
     const NET_LOG_BADGE = "shrink-0 px-2 py-0.5 rounded-full text-2xs font-medium bg-surface-2 text-fg-3 uppercase tracking-wide"
+    const NET_LOG_BADGE_VALUE = NET_LOG_BADGE.replace(" uppercase", "")
 
     function netLogTone(entry) {
       if (entry.outcome === "error") return "bad"
@@ -5229,6 +5504,15 @@ const navStructure: NavSection[] = [
       transportBadge.textContent = entry.transport
 
       metaRow.append(time, method, status, duration, kindBadge, transportBadge)
+
+      if (entry.dns) {
+        const dnsBadge = document.createElement("span")
+        dnsBadge.className = NET_LOG_BADGE_VALUE
+        dnsBadge.textContent = entry.dns
+        dnsBadge.title = entry.dns
+        metaRow.appendChild(dnsBadge)
+      }
+
       row.appendChild(metaRow)
 
       const url = document.createElement("div")

@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">Sender</string>
     <string name="native_player_unsupported_stream">Dieser Sender kann im nativen Player nicht wiedergegeben werden</string>
+    <string name="native_player_backup_server">Verbindung über Backup-Server wird wiederhergestellt…</string>
+    <string name="native_player_stream_lost">Stream verloren - Verbindung konnte nicht wiederhergestellt werden</string>
     <string name="xt_video_settings_title">Player-Einstellungen</string>
     <string name="xt_video_display_mode">Anzeigemodus</string>
     <string name="xt_video_display_fit">Anpassen</string>
@@ -9,4 +11,9 @@
     <string name="xt_video_display_stretch">Strecken</string>
     <string name="xt_video_playback_speed">Wiedergabegeschwindigkeit</string>
     <string name="xt_video_speed_normal">Normal</string>
+    <string name="webview_floor_title">Android System WebView aktualisieren</string>
+    <string name="webview_floor_message">Extreme InfiniTV benötigt Android System WebView %1$d oder neuer. Dieses Gerät hat Version %2$s, daher können Seiten unformatiert erscheinen oder nicht reagieren.\n\nAuf Android TV blendet der Play Store das reguläre WebView-Update aus. Installiere \"Android System WebView Beta\" aus dem Play Store, aktiviere dann die Entwickleroptionen und wähle es unter \"WebView implementation\" aus.</string>
+    <string name="webview_floor_get_beta">WebView Beta laden</string>
+    <string name="webview_floor_developer_options">Entwickleroptionen</string>
+    <string name="webview_floor_continue">Trotzdem fortfahren</string>
 </resources>

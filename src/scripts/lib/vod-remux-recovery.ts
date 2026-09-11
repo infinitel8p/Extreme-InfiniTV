@@ -9,6 +9,8 @@ import {
 } from "@/scripts/lib/vod-container-plan.ts"
 import { probeVodSourceHealth } from "@/scripts/lib/vod-container-probe.ts"
 import { rememberRemuxPinnedContent } from "@/scripts/lib/vod-remux-memory.ts"
+import { isProviderRejection } from "@/scripts/lib/stream-reject.ts"
+import { parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 import type { VjsLikeHandle } from "@/scripts/lib/player-runtime.ts"
 import type { VodAudioSwitcher } from "@/scripts/lib/vod-audio-switch.ts"
 import type { VodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
@@ -101,11 +103,21 @@ export interface PlayerStartErrorOptions {
   /** Ahead-of-the-error handleRemuxFailure teardown (audio switcher, mkv session, watchdog) then re-run the tune in remux mode. */
   retirePreviousPlaybackAndRetryRemux(): void
   toasts: VodPlaybackToasts
+  /** Attempts a hop to the next Xtream mirror on a provider rejection; resolves true when a remount is under way. */
+  tryMirrorHop?(rejection: { errorDetail?: string | null; httpStatus?: number | null }): Promise<boolean>
 }
 
 /** Superseded runs must not report or seek; a code-4 native failure pins the content to remux and retries once, so it cannot re-fire. */
-export function handlePlayerStartError(options: PlayerStartErrorOptions) {
+export async function handlePlayerStartError(options: PlayerStartErrorOptions) {
   if (options.isStale()) return
+  const errorDetail = options.player.codecInfo?.()?.errorDetail
+  const httpStatus = parseHttpStatusPrefix(errorDetail ?? null)
+  if (options.tryMirrorHop && isProviderRejection({ errorDetail, httpStatus })) {
+    const hopped = await options.tryMirrorHop({ errorDetail, httpStatus })
+    // The hop's own network probe is another window for this run to go stale.
+    if (options.isStale()) return
+    if (hopped) return
+  }
   const playerError = options.player.error?.() as { code?: number; message?: string } | null | undefined
   log.error(`${options.logTag} player error`, {
     code: playerError?.code,

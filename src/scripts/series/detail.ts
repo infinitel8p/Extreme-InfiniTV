@@ -7,8 +7,11 @@ import {
   loadCreds,
   getActiveEntry,
   isTauri,
+  getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isProviderRejection } from "@/scripts/lib/stream-reject.ts"
+import { createMirrorHopper } from "@/scripts/lib/vod-mirror-hop.ts"
 import { isCastRoutingActive, routePlayToCast, castXtreamEpisodeToTv } from "@/scripts/lib/tv-cast.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
@@ -25,6 +28,7 @@ import {
   markCompleted,
   isCompleted,
   clearProgress,
+  getTrackPrefs,
   getVideoScaleOverride,
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
@@ -51,6 +55,7 @@ import {
   paintHero as paintHeroOn,
   sanitizeProviderBackdropUrl,
 } from "@/scripts/lib/morph-detail.js"
+import { peekPosterTint } from "@/scripts/lib/img-cache.ts"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
@@ -66,6 +71,7 @@ import {
   setVideoScale,
   isTmdbActive,
   getContentLanguage,
+  getUserAgent,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { fetchSeasonEnrichment, peekCachedSeasonEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
@@ -105,7 +111,9 @@ import {
   mountPlayer,
   getExternalLauncher,
   subscribeExternalPlayerExit,
+  isNativeVideoBackend,
 } from "@/scripts/lib/player-runtime.ts"
+import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
 import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
@@ -117,6 +125,7 @@ import { attachPosterContextMenu } from "@/scripts/lib/poster-menu.ts"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { createVodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
 import { mountVodPlayback } from "@/scripts/lib/vod-mount.ts"
+import { parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -190,12 +199,17 @@ let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
+function applyHeroTint(url) {
+  peekPosterTint(url).then((css) => {
+    if (css && posterEl && !heroSettled) posterEl.style.setProperty("--xt-poster-tint", css)
+  })
+}
+
 // Paints the hero once, at whichever point the caller decided enough is known.
 function settleHero() {
   if (heroSettled) return
   heroSettled = true
   paintedHeroPosterUrl = heroPosterUrl
-  posterEl?.classList.remove("skel")
   paintHeroOn(posterEl, {
     name: series?.name || "",
     posterUrl: heroPosterUrl,
@@ -1234,7 +1248,16 @@ async function populateSimilarRail(requestId) {
 // ----------------------------
 let vjs = null
 let focusKeeperCleanup: (() => void) | null = null
+let embeddedPlayerBackend = null
 let seriesInsights = null
+const heroWrap = document.getElementById("series-detail-hero")
+
+// Pins the player container in place while the embedded mpv window plays underneath it - see mpv-embedded.ts.
+function updateStickyPlayer() {
+  if (!heroWrap) return
+  if (vjs && isNativeVideoBackend(embeddedPlayerBackend)) heroWrap.dataset.stickyPlayer = "on"
+  else delete heroWrap.dataset.stickyPlayer
+}
 
 const inlineTrailer = createInlineTrailer({
   wrapEl: document.getElementById("series-detail-trailer-wrap"),
@@ -1298,7 +1321,7 @@ function setupPipButton(player) {
 
 // One display-mode override per series (not per episode) - same mounted
 // player and container across episode changes.
-const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
 
 function resolveVideoScaleMode() {
   if (activePlaylistId && series) {
@@ -1406,13 +1429,17 @@ async function ensureEmbeddedPlayer(backend) {
     autoplay: false,
     aspectRatio: "16:9",
     pictureInPictureToggle: !hasNativePipBridge,
+    userAgent: getUserAgent() || null,
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
-  if (mounted.backend === "videojs") {
+  embeddedPlayerBackend = mounted.backend
+  if (mounted.backend === "videojs" || (mounted.backend === "mpv-embedded" && typeof vjs.userActive === "function")) {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
+  updateStickyPlayer()
+  vjs.el()?.addEventListener?.("xt:mpv-retry", () => { if (currentEpisode) playEpisode(currentEpisode) })
   return vjs
 }
 
@@ -1479,10 +1506,12 @@ function retirePreviousPlayback() {
   stallWatchdogDetach = null
   qualityChipDetach?.()
   qualityChipDetach = null
+  updateStickyPlayer()
 }
 
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
+  const mirrorHopsUsed = options.mirrorHopsUsed || 0
   if (isTauri && isCastRoutingActive() && !options.forceLocal) {
     const title = episodeCastTitle(episode)
     await routePlayToCast({
@@ -1502,29 +1531,49 @@ async function playEpisode(episode, options = {}) {
             episodeNum: Number(episode.episode_num) || 0,
           }
         : undefined,
-      buildDescriptor: () => {
+      buildDescriptor: async () => {
         const src = buildEpisodeStreamUrl(episode)
         if (!src || !isCastableSrc(src)) return null
         const saved = activePlaylistId ? getProgress(activePlaylistId, "episode", episode.id) : null
         const resumeSeconds =
           saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
         const durationSeconds = episodeDurationSeconds(episode)
-        return buildVodCastDescriptor({
+        const descriptor = buildVodCastDescriptor({
           src,
           title,
           logo: series?.logo || undefined,
           resumeSeconds,
           durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
         })
+        descriptor.dns = (await getActiveDnsOverrideAsync())?.raw ?? null
+        return descriptor
       },
     })
     return
   }
   inlineTrailer.close()
   const requestId = ++playRequestId
-  const src = episode?._directUrl
-    ? buildEpisodeStreamUrl(episode)
-    : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
+  const episodeSrcBuilder = episode?._directUrl
+    ? null
+    : (candidate) => buildEpisodeStreamUrl(episode, candidate)
+
+  const tryMirrorHop = createMirrorHopper({
+    buildUrl: episodeSrcBuilder,
+    isCurrent: () => requestId === playRequestId,
+    logTag: "[xt:series-detail]",
+    hopsUsed: mirrorHopsUsed,
+    onHop: (url, hopsUsed) => {
+      retirePreviousPlayback()
+      playEpisode(episode, { isAutomaticRetry: true, mirrorHopsUsed: hopsUsed, overrideSrc: url })
+    },
+  })
+
+  // Already probed by the mirror hop - re-resolving could re-pin back to the primary.
+  const src = options.overrideSrc
+    ? options.overrideSrc
+    : episode?._directUrl
+      ? buildEpisodeStreamUrl(episode)
+      : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
   if (!src) return
   if (requestId !== playRequestId) return
   // Ahead of every await that can register a proxy/remux session for this run.
@@ -1581,6 +1630,8 @@ async function playEpisode(episode, options = {}) {
     getAndroidNativePlayerEnabled() &&
     activePlaylistId
   ) {
+    const nativeDns = (await getActiveDnsOverrideAsync())?.raw ?? null
+    if (requestId !== playRequestId) return
     const launched = launchAndroidNativeVodWithProgress({
       playlistId: activePlaylistId,
       contentKey: `ep:${episode.id}`,
@@ -1590,6 +1641,7 @@ async function playEpisode(episode, options = {}) {
       title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}`,
       posterUrl: series?.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      dns: nativeDns,
       progressExtras: progressExtrasFor(episode),
       onCompleted: () => {
         // Trigger the same Up Next overlay the WebView player path uses.
@@ -1602,11 +1654,12 @@ async function playEpisode(episode, options = {}) {
   }
 
   let backend = getPlayerBackend()
+  log.debug("[xt:series-detail] playback source", `id=${episode.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)
 
   if (backend === "mpv" || backend === "vlc") {
     try {
       const externalSrc = (await getLocalDownloadPath(src)) || playSrc
-      await launchExternalPlayback(backend, externalSrc, resumePos)
+      await launchExternalPlayback(backend, externalSrc, resumePos, episode)
       pushEpisodePresence(episode)
       externalPresenceActive = true
       return
@@ -1628,6 +1681,7 @@ async function playEpisode(episode, options = {}) {
     savedProgress: saved,
     resumePos,
     nameHintSource: episode.title || series?.name,
+    title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}${episode.title ? ` - ${episode.title}` : ""}`,
     posterEl,
     playerWrap,
     videoElementId: "series-player",
@@ -1640,6 +1694,20 @@ async function playEpisode(episode, options = {}) {
       setupStatsButton()
       setupHealthButton()
       subtitleDelayController.setup()
+      // mpv-only signals the generic remux-failure classifier below doesn't recognize.
+      player.one?.("error", async () => {
+        const errorDetail = player.codecInfo?.()?.errorDetail
+        if (typeof errorDetail !== "string") return
+        const httpStatus = parseHttpStatusPrefix(errorDetail)
+        if (isProviderRejection({ errorDetail, httpStatus })) {
+          const hopped = await tryMirrorHop({ errorDetail, httpStatus })
+          if (requestId !== playRequestId) return
+          if (hopped) return
+        }
+        if (errorDetail.startsWith("OFFLINE_PLACEHOLDER")) vodPlaybackToasts.showOfflinePlaceholderToast()
+        else if (httpStatus != null) vodPlaybackToasts.showHttpErrorToast(httpStatus)
+        else if (errorDetail.startsWith("NETWORK:")) vodPlaybackToasts.showNetworkErrorToast()
+      })
     },
     applyVideoScale,
     toasts: vodPlaybackToasts,
@@ -1652,6 +1720,7 @@ async function playEpisode(episode, options = {}) {
       retirePreviousPlayback()
       playEpisode(currentEpisode, { isAutomaticRetry: true })
     },
+    tryMirrorHop,
     beginInsightsSession: (isAutomaticRetry) => {
       if (isAutomaticRetry) getSeriesInsights().record("fallback", "auto:mkv-remux-fallback")
       else getSeriesInsights().startSession({ label: [series?.name, episode.title].filter(Boolean).join(" - ") })
@@ -1706,14 +1775,32 @@ function pushEpisodePresence(episode) {
   })
 }
 
-async function launchExternalPlayback(backend, src, resumeSeconds) {
+async function launchExternalPlayback(backend, src, resumeSeconds, episode) {
   const launcher = getExternalLauncher(backend)
   toast({
     title: t("settings.playback.launching", { player: backend.toUpperCase() })
       || `Launching ${backend.toUpperCase()}…`,
     duration: 2000,
   })
-  await launcher.launch(src, { resumeSeconds })
+  const trackPrefs = activePlaylistId ? getTrackPrefs(activePlaylistId, "episode", episode.id) : null
+  const result = await launcher.launch(src, {
+    resumeSeconds,
+    tracks: trackPrefs
+      ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+      : null,
+  })
+  if (result.sessionId && activePlaylistId && backend === "mpv") {
+    beginExternalSession({
+      sessionId: result.sessionId,
+      kind: "mpv",
+      srcKey: externalSrcKey(result.src),
+      playlistId: activePlaylistId,
+      contentKind: "episode",
+      contentId: String(episode.id),
+      extras: progressExtrasFor(episode),
+      startedAt: Date.now(),
+    })
+  }
 }
 
 // ----------------------------
@@ -1749,6 +1836,20 @@ const externalBtnHandle = setupExternalPlayerButton(
       const seriesName = series?.name || ""
       const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
       return [seriesName, sxe, episodeTitle].filter(Boolean).join(" · ") || null
+    },
+    getTrackPrefs() {
+      if (!activePlaylistId || !currentEpisode) return null
+      const prefs = getTrackPrefs(activePlaylistId, "episode", currentEpisode.id)
+      return prefs ? { audioLang: prefs.audioLang, subLang: prefs.subLang, subOff: prefs.subOff } : null
+    },
+    getProgressTarget() {
+      if (!activePlaylistId || !currentEpisode) return null
+      return {
+        playlistId: activePlaylistId,
+        kind: "episode",
+        id: String(currentEpisode.id),
+        extras: progressExtrasFor(currentEpisode),
+      }
     },
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
@@ -2184,6 +2285,7 @@ async function boot() {
   if (titleEl && series.name !== stubName) titleEl.textContent = displayTitle(series.name)
   // Hero stays in its skeleton state - settleHero() below decides when to paint it once.
   heroPosterUrl = series.logo || null
+  applyHeroTint(heroPosterUrl)
   setAmbient(series.logo || null)
   syncFavButton()
   syncWatchButton()
@@ -2276,6 +2378,8 @@ async function boot() {
 
   let infoOk = providerInfoReady
   if (creds.host && creds.user && creds.pass) {
+    const seriesInfoFetchStartedAtMs = performance.now()
+    log.debug("[xt:series-detail] series info fetch start", `id=${seriesId}`)
     try {
       const r = await xtreamApiFetch("get_series_info", {
         series_id: String(seriesId),
@@ -2284,6 +2388,10 @@ async function boot() {
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
       setCached(active._id, `series_info_${seriesId}`, data, SERIES_INFO_TTL_MS)
+      log.debug(
+        "[xt:series-detail] series info fetch end",
+        `id=${seriesId} ok=true ms=${Math.round(performance.now() - seriesInfoFetchStartedAtMs)} seasons=${Array.isArray(data?.seasons) ? data.seasons.length : "unknown"}`
+      )
       if (enrichRequestIdForThisBoot === enrichRequestId) {
         applySeriesInfo(data)
         // applySeriesInfo rebuilds meta text and episode rows, wiping the merge; reassert it.
@@ -2301,6 +2409,7 @@ async function boot() {
       }
       infoOk = true
     } catch (e) {
+      log.debug("[xt:series-detail] series info fetch end", `id=${seriesId} ok=false ms=${Math.round(performance.now() - seriesInfoFetchStartedAtMs)}`)
       log.error("[xt:series-detail] info fetch failed:", e)
       if (!providerInfoReady && enrichRequestIdForThisBoot === enrichRequestId) {
         if (plotEl) {

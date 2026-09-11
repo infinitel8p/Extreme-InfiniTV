@@ -1,0 +1,22 @@
+# Desktop-only ACL for the embedded mpv player commands, granted from desktop.json.
+
+[[permission]]
+identifier = "allow-mpv-embed-commands"
+description = "Local-origin access to the embedded mpv player commands."
+commands.allow = [
+    "mpv_embed_available",
+    "mpv_embed_start",
+    "mpv_embed_load",
+    "mpv_embed_command",
+    "mpv_embed_set_property",
+    "mpv_embed_get_property",
+    "mpv_embed_set_bounds",
+    "mpv_embed_set_visible",
+    "mpv_embed_pip_enter",
+    "mpv_embed_pip_exit",
+    "mpv_embed_window_fullscreen",
+    "mpv_embed_screenshot",
+    "mpv_embed_stop",
+    "mpv_embed_shutdown",
+    "mpv_embed_status",
+]

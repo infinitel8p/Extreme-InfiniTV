@@ -66,10 +66,10 @@ import {
         </div>
 
         <!-- Hero: poster (default) or player (after Play). -->
-        <div class="w-full">
+        <div id="movie-detail-hero" class="w-full">
           <div
             id="movie-detail-poster"
-            class="dt-hero skel aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
+            class="dt-hero dt-hero--loading aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
                    max-h-[60dvh] max-w-[calc(60dvh*2/3)] sm:max-w-[calc(60dvh*16/9)]"
             style="view-transition-name: active-poster;">
           </div>
@@ -307,6 +307,15 @@ import {
       </div>
     </div>
   </main>
+
+  <style>
+    /* Keeps the embedded mpv window's hole pinned while the page scrolls - see mpv-embedded.ts. */
+    #movie-detail-hero[data-sticky-player="on"] {
+      position: sticky;
+      top: 1rem;
+      z-index: 20;
+    }
+  </style>
 
   <script>
     import "@/scripts/movies/detail.ts"

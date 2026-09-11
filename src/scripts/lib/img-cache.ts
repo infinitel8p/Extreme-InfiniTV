@@ -6,10 +6,12 @@ import {
   scaleToFit,
   imgCacheKey,
   isCacheableImageUrl,
-  IMG_KIND_MAX_DIM,
+  imgKindMaxDim,
   type ImgKind,
 } from "@/scripts/lib/img-scale"
 import { createTimedIdbOpener } from "@/scripts/lib/idb-open.ts"
+import { memoryConservative } from "@/scripts/tv/motion"
+import { dominantColor, posterTintCss, type RgbColor } from "@/scripts/lib/ambient-math"
 
 const DB_NAME = "xt_img_cache"
 const DB_VERSION = 1
@@ -18,6 +20,7 @@ const STORE = "images"
 interface StoredImage {
   blob: Blob
   cachedAt: number
+  tint?: RgbColor
 }
 
 const idbOpener = createTimedIdbOpener({
@@ -132,11 +135,17 @@ async function idbPruneExpired(maxAgeMs: number): Promise<string[]> {
 // Module state
 // ---------------------------------------------------------------------------
 const objectUrlMemo = new Map<string, string>()
+const tintMemo = new Map<string, string>()
 const failedUrls = new Set<string>()
 const inFlight = new Map<string, Promise<void>>()
 
 // Bounds live blob URLs; LRU order keeps in-DOM images safe from eviction.
 const MAX_MEMO_ENTRIES = 512
+const MAX_MEMO_ENTRIES_LITE = 128
+
+function maxMemoEntries(): number {
+  return memoryConservative() ? MAX_MEMO_ENTRIES_LITE : MAX_MEMO_ENTRIES
+}
 
 // Reads a memoized object URL and refreshes its recency (Map insertion order).
 function memoGet(cacheKey: string): string | undefined {
@@ -153,7 +162,7 @@ function memoAdopt(cacheKey: string, blob: Blob): string {
   if (existing) return existing
   const objectUrl = URL.createObjectURL(blob)
   objectUrlMemo.set(cacheKey, objectUrl)
-  while (objectUrlMemo.size > MAX_MEMO_ENTRIES) {
+  while (objectUrlMemo.size > maxMemoEntries()) {
     const oldestKey = objectUrlMemo.keys().next().value
     if (oldestKey === undefined) break
     const oldestUrl = objectUrlMemo.get(oldestKey)
@@ -163,11 +172,48 @@ function memoAdopt(cacheKey: string, blob: Blob): string {
   return objectUrl
 }
 
-const MAX_CONCURRENT = 6
-let runningCount = 0
-const queue: Array<() => void> = []
+function rememberTint(cacheKey: string, css: string): void {
+  tintMemo.set(cacheKey, css)
+  while (tintMemo.size > maxMemoEntries()) {
+    const oldestKey = tintMemo.keys().next().value
+    if (oldestKey === undefined) break
+    tintMemo.delete(oldestKey)
+  }
+}
 
-function runLimited<T>(job: () => Promise<T>): Promise<T> {
+function applyPosterTint(img: HTMLImageElement, css: string): void {
+  const wrap = img.closest<HTMLElement>("[data-poster-wrap]")
+  if (!wrap) return
+  wrap.style.setProperty("--xt-poster-tint", css)
+  wrap.dataset.posterTint = "1"
+}
+
+/** Reads a poster's cached dominant-color tint without fetching or decoding anything. */
+export async function peekPosterTint(url: string | null | undefined): Promise<string | null> {
+  if (!url) return null
+  const cacheKey = imgCacheKey("poster", url)
+  const memoized = tintMemo.get(cacheKey)
+  if (memoized) return memoized
+  const cached = await idbGet(cacheKey)
+  if (!cached?.tint) return null
+  const css = posterTintCss(cached.tint)
+  rememberTint(cacheKey, css)
+  return css
+}
+
+const MAX_CONCURRENT = 6
+const MAX_CONCURRENT_LITE = 2
+let runningCount = 0
+// Two queues sharing one concurrency budget: a visible <img> waiting to display never queues
+// behind idle background fills (prefetch/warm), only behind other visible images.
+const foregroundQueue: Array<() => void> = []
+const backgroundQueue: Array<() => void> = []
+
+function maxConcurrent(): number {
+  return memoryConservative() ? MAX_CONCURRENT_LITE : MAX_CONCURRENT
+}
+
+function runLimited<T>(job: () => Promise<T>, priority: "foreground" | "background" = "background"): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const run = () => {
       runningCount++
@@ -175,12 +221,12 @@ function runLimited<T>(job: () => Promise<T>): Promise<T> {
         .then(resolve, reject)
         .finally(() => {
           runningCount--
-          const next = queue.shift()
+          const next = foregroundQueue.shift() || backgroundQueue.shift()
           if (next) next()
         })
     }
-    if (runningCount < MAX_CONCURRENT) run()
-    else queue.push(run)
+    if (runningCount < maxConcurrent()) run()
+    else (priority === "foreground" ? foregroundQueue : backgroundQueue).push(run)
   })
 }
 
@@ -242,36 +288,96 @@ async function encodeDownscaled(
   }
 }
 
-async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<Blob> {
+const TINT_SAMPLE_MAX_DIM = 32
+
+function sampleTint(bitmap: ImageBitmap): RgbColor | null {
+  try {
+    const scale = Math.min(1, TINT_SAMPLE_MAX_DIM / Math.max(bitmap.width, bitmap.height))
+    const width = Math.max(1, Math.round(bitmap.width * scale))
+    const height = Math.max(1, Math.round(bitmap.height * scale))
+    let ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null = null
+    if (typeof OffscreenCanvas !== "undefined") {
+      const canvas = new OffscreenCanvas(width, height)
+      ctx = canvas.getContext("2d")
+    }
+    if (!ctx && typeof document !== "undefined") {
+      const canvas = document.createElement("canvas")
+      canvas.width = width
+      canvas.height = height
+      ctx = canvas.getContext("2d")
+    }
+    if (!ctx) return null
+    ctx.drawImage(bitmap, 0, 0, width, height)
+    const { data } = ctx.getImageData(0, 0, width, height)
+    return dominantColor(data, width, height)
+  } catch {
+    return null
+  }
+}
+
+/** html[data-tv-effects="lite"] gate, checked inline: lib files never import from src/scripts/tv/. */
+function isTvLiteEffectsTier(): boolean {
+  return typeof document !== "undefined" && document.documentElement.dataset.tvEffects === "lite"
+}
+
+async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<{ blob: Blob; tint: RgbColor | null }> {
+  // Lite tier stores the original blob: no decode, tint sample or WebP re-encode.
+  if (isTvLiteEffectsTier()) return { blob: originalBlob, tint: null }
   let bitmap: ImageBitmap
   try {
     bitmap = await createImageBitmap(originalBlob)
   } catch {
-    return originalBlob
+    return { blob: originalBlob, tint: null }
   }
   try {
-    const targetSize = scaleToFit(bitmap.width, bitmap.height, IMG_KIND_MAX_DIM[kind])
-    if (!targetSize) return originalBlob
+    const tint = kind === "poster" ? sampleTint(bitmap) : null
+    const targetSize = scaleToFit(bitmap.width, bitmap.height, imgKindMaxDim(kind, memoryConservative()))
+    if (!targetSize) return { blob: originalBlob, tint }
     const encoded = await encodeDownscaled(bitmap, targetSize.width, targetSize.height)
-    return encoded || originalBlob
+    return { blob: encoded || originalBlob, tint }
   } finally {
     bitmap.close()
   }
 }
 
-// Fetches, downscales and caches `url` without touching any <img>
-async function backgroundFill(cacheKey: string, url: string, kind: ImgKind): Promise<void> {
+// Fetches, downscales and caches `url` without touching any <img>. Feeds `displayImg`
+// (when given) from the same fetched blob so the cold path never issues a second
+// network request for the image it is about to show.
+async function fetchAndCache(
+  cacheKey: string,
+  url: string,
+  kind: ImgKind,
+  displayImg?: HTMLImageElement,
+  stillWanted?: () => boolean
+): Promise<void> {
+  let previewUrl: string | null = null
   try {
     const response = await providerFetch(url, { logKind: "image" })
     if (!response.ok) throw new Error(`fetch failed: ${response.status}`)
     const originalBlob = await response.blob()
-    const storedBlob = await downscaleBlob(originalBlob, kind)
-    await idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now() })
-    memoAdopt(cacheKey, storedBlob)
+    if (displayImg && (!stillWanted || stillWanted()) && displayImg.isConnected) {
+      previewUrl = URL.createObjectURL(originalBlob)
+      displayImg.src = previewUrl
+    }
+    const { blob: storedBlob, tint } = await downscaleBlob(originalBlob, kind)
+    await idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now(), ...(tint ? { tint } : {}) })
+    if (tint) rememberTint(cacheKey, posterTintCss(tint))
+    const finalUrl = memoAdopt(cacheKey, storedBlob)
+    // Only swap when the img still shows our own preview - a caller may have moved on to a
+    // different image (row recycled) while the fetch and downscale were in flight.
+    if (displayImg?.isConnected && displayImg.src === previewUrl) displayImg.src = finalUrl
   } catch (err) {
     log.warn("[xt:img-cache] background fill failed:", err)
     failedUrls.add(url)
+    if (displayImg?.isConnected && (!stillWanted || stillWanted())) displayImg.src = url
+  } finally {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
   }
+}
+
+// Fetches, downscales and caches `url` without touching any <img>
+function backgroundFill(cacheKey: string, url: string, kind: ImgKind): Promise<void> {
+  return fetchAndCache(cacheKey, url, kind)
 }
 
 function scheduleBackgroundFill(
@@ -296,30 +402,81 @@ function scheduleBackgroundFill(
   fill.finally(() => inFlight.delete(cacheKey))
 }
 
+// Cold-cache visible path: joins an already in-flight fetch for the same cacheKey instead of
+// starting a second one, otherwise fetches once through the shared limiter and feeds `img`.
+async function fillAndDisplay(
+  img: HTMLImageElement,
+  cacheKey: string,
+  url: string,
+  kind: ImgKind,
+  stillWanted: () => boolean
+): Promise<void> {
+  const existingFill = inFlight.get(cacheKey)
+  if (existingFill) {
+    await existingFill
+    if (stillWanted() && img.isConnected) img.src = memoGet(cacheKey) || url
+    return
+  }
+  // The foreground queue is already saturated - waiting it out would leave the <img> blank
+  // until its turn. Fall back to a native load now and still cache the downscaled variant
+  // in the background for next time, instead of blocking the image on our own queue.
+  if (runningCount >= maxConcurrent()) {
+    img.src = url
+    scheduleBackgroundFill(cacheKey, url, kind, stillWanted)
+    return
+  }
+  const fill = runLimited(
+    () => (stillWanted() ? fetchAndCache(cacheKey, url, kind, img, stillWanted) : Promise.resolve()),
+    "foreground"
+  )
+  inFlight.set(cacheKey, fill)
+  fill.finally(() => inFlight.delete(cacheKey))
+  await fill
+}
+
 async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind): Promise<void> {
   if (!img.isConnected) return
   schedulePrune()
   const cacheKey = imgCacheKey(kind, url)
   const memoized = memoGet(cacheKey)
   if (memoized) {
+    const memoizedTint = tintMemo.get(cacheKey)
+    if (memoizedTint) applyPosterTint(img, memoizedTint)
     img.src = memoized
     return
   }
   const cached = await idbGet(cacheKey)
+  if (!img.isConnected) return
   if (cached?.blob) {
+    if (cached.tint) {
+      const css = posterTintCss(cached.tint)
+      rememberTint(cacheKey, css)
+      applyPosterTint(img, css)
+    }
     img.src = memoAdopt(cacheKey, cached.blob)
     return
   }
-  img.src = url
   // WeakRef, not the element: a queued fill can wait out several navigations, and a
   // captured <img> pins the whole detached view it belongs to until the queue drains.
   const imgRef = typeof WeakRef === "function" ? new WeakRef(img) : null
-  scheduleBackgroundFill(
-    cacheKey,
-    url,
-    kind,
-    imgRef ? () => imgRef.deref()?.isConnected === true : () => img.isConnected
-  )
+  const stillWanted = imgRef ? () => imgRef.deref()?.isConnected === true : () => img.isConnected
+  if (!stillWanted()) return
+  await fillAndDisplay(img, cacheKey, url, kind, stillWanted)
+}
+
+/** Primes the IDB cache entry for `url` without mounting or decoding any <img>. */
+export function warmCachedImage(url: string, kind: ImgKind): void {
+  if (!isCacheableImageUrl(url) || failedUrls.has(url)) return
+  const cacheKey = imgCacheKey(kind, url)
+  if (memoGet(cacheKey)) return
+  void (async () => {
+    const cached = await idbGet(cacheKey)
+    if (cached?.blob) {
+      memoAdopt(cacheKey, cached.blob)
+      return
+    }
+    scheduleBackgroundFill(cacheKey, url, kind, () => true)
+  })()
 }
 
 /** Fetch (or serve cached) `url`, downscale to `kind`'s bucket, and mount it once visible. */
@@ -331,6 +488,8 @@ export function mountCachedImage(img: HTMLImageElement, url: string, kind: ImgKi
   const cacheKey = imgCacheKey(kind, url)
   const memoized = memoGet(cacheKey)
   if (memoized) {
+    const memoizedTint = tintMemo.get(cacheKey)
+    if (memoizedTint) applyPosterTint(img, memoizedTint)
     img.src = memoized
     return
   }
@@ -402,8 +561,31 @@ export async function clearImageCache(): Promise<number> {
   await idbClear()
   for (const objectUrl of objectUrlMemo.values()) URL.revokeObjectURL(objectUrl)
   objectUrlMemo.clear()
+  tintMemo.clear()
   failedUrls.clear()
   return removed
+}
+
+/**
+ * Drops the in-memory object-URL memo and failed-URL set on Android memory pressure,
+ * without touching the persisted IndexedDB cache - a cheap release, not a wipe.
+ * Object URLs still displayed by a connected <img> are kept; revoking those would blank
+ * the image currently on screen.
+ */
+function releaseMemoryPressureCache(): void {
+  const displayedUrls = new Set(
+    Array.from(document.querySelectorAll<HTMLImageElement>('img[src^="blob:"]'), (img) => img.src)
+  )
+  for (const [cacheKey, objectUrl] of objectUrlMemo) {
+    if (displayedUrls.has(objectUrl)) continue
+    URL.revokeObjectURL(objectUrl)
+    objectUrlMemo.delete(cacheKey)
+  }
+  failedUrls.clear()
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("xt:memory-pressure", releaseMemoryPressureCache)
 }
 
 // ---------------------------------------------------------------------------

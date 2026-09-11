@@ -6,6 +6,8 @@
     <string name="render_gone_repeat">Display keeps crashing. Restart the app if this continues.</string>
     <string name="xt_channels_title">Channels</string>
     <string name="native_player_unsupported_stream">Can\'t play this channel in the native player</string>
+    <string name="native_player_backup_server">Reconnecting via backup server…</string>
+    <string name="native_player_stream_lost">Stream lost - couldn\'t reconnect</string>
     <string name="dream_label">Extreme InfiniTV</string>
     <string name="receiver_notification_channel">TV receiver</string>
     <string name="receiver_notification_title">TV receiver active</string>
@@ -32,4 +34,9 @@
     <string name="receiver_wake_notification_channel">Cast wake</string>
     <string name="receiver_wake_notification_title">Casting to this TV</string>
     <string name="receiver_wake_notification_text">Tap to open and start playback</string>
+    <string name="webview_floor_title">Update Android System WebView</string>
+    <string name="webview_floor_message">Extreme InfiniTV needs Android System WebView %1$d or newer. This device has version %2$s, so pages may show up unstyled or not react.\n\nOn Android TV the Play Store hides the regular WebView update. Install \"Android System WebView Beta\" from the Play Store, then enable Developer options and choose it under \"WebView implementation\".</string>
+    <string name="webview_floor_get_beta">Get WebView Beta</string>
+    <string name="webview_floor_developer_options">Developer options</string>
+    <string name="webview_floor_continue">Continue anyway</string>
 </resources>

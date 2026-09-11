@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, Query, State};
+use axum::extract::{DefaultBodyLimit, Extension, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -58,6 +58,8 @@ const ALLOWED_PLAYBACK_STATES: [&str; 7] =
     ["idle", "loading", "buffering", "playing", "paused", "ended", "error"];
 
 const AUTH_HEADER: &str = "x-xt-key";
+const INTERNAL_AUTH_HEADER: &str = "x-xt-internal";
+const INTERNAL_COMMANDS_MAX_WAIT_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
 // Event emitter abstraction (testable without a Tauri AppHandle)
@@ -146,6 +148,33 @@ impl PairingState {
     }
 }
 
+/// Command drained by the Kotlin-side long poll while it mirrors playback natively.
+#[derive(Debug, Clone, PartialEq)]
+enum NativeCommand {
+    Pause,
+    Resume,
+    Stop,
+    Seek { position_seconds: f64 },
+    Volume { volume: f64, muted: bool },
+}
+
+impl NativeCommand {
+    fn to_json(&self) -> Value {
+        match self {
+            NativeCommand::Pause => json!({"action": "pause"}),
+            NativeCommand::Resume => json!({"action": "resume"}),
+            NativeCommand::Stop => json!({"action": "stop"}),
+            NativeCommand::Seek { position_seconds } => json!({"action": "seek", "positionSeconds": position_seconds}),
+            NativeCommand::Volume { volume, muted } => json!({"action": "volume", "volume": volume, "muted": muted}),
+        }
+    }
+}
+
+struct NativeMirror {
+    generation: u64,
+    commands: std::collections::VecDeque<NativeCommand>,
+}
+
 struct ReceiverShared {
     pairing: Mutex<Option<PairingState>>,
     devices: Mutex<Vec<PairedDevice>>,
@@ -157,6 +186,10 @@ struct ReceiverShared {
     // Session log the receiver page feeds us: live stream to the sender plus mid-session backlog.
     log_ring: Mutex<std::collections::VecDeque<String>>,
     ip_watcher_running: AtomicBool,
+    // Loopback-only auth for the Kotlin-side native mirror routes; regenerated per receiver_start.
+    internal_token: Mutex<String>,
+    native_mirror: Mutex<Option<NativeMirror>>,
+    native_mirror_notify: tokio::sync::Notify,
 }
 
 impl ReceiverShared {
@@ -172,6 +205,9 @@ impl ReceiverShared {
             broadcast,
             log_ring: Mutex::new(std::collections::VecDeque::new()),
             ip_watcher_running: AtomicBool::new(false),
+            internal_token: Mutex::new(String::new()),
+            native_mirror: Mutex::new(None),
+            native_mirror_notify: tokio::sync::Notify::new(),
         }
     }
 }
@@ -339,6 +375,49 @@ fn generate_device_key() -> String {
     let mut bytes = [0u8; 16];
     rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn generate_internal_token() -> String {
+    generate_device_key()
+}
+
+/// `active=false` only clears a mirror at or before its own generation.
+fn apply_native_mirror_transition(current: &mut Option<NativeMirror>, active: bool, generation: u64) {
+    if active {
+        *current = Some(NativeMirror { generation, commands: std::collections::VecDeque::new() });
+    } else if current.as_ref().is_some_and(|mirror| mirror.generation <= generation) {
+        *current = None;
+    }
+}
+
+/// Applies when no mirror is active, or the incoming generation is at least the mirror's.
+fn should_apply_report(mirror_generation: Option<u64>, incoming_generation: Option<u64>) -> bool {
+    match mirror_generation {
+        None => true,
+        Some(mirror_generation) => incoming_generation.is_some_and(|incoming| incoming >= mirror_generation),
+    }
+}
+
+/// Pushes a command for the Kotlin-side mirror to drain; `false` when no mirror is active.
+fn push_native_command(shared: &ReceiverShared, command: NativeCommand) -> bool {
+    let pushed = {
+        let mut mirror = shared.native_mirror.lock().unwrap_or_else(|poison| poison.into_inner());
+        match mirror.as_mut() {
+            Some(current) => {
+                current.commands.push_back(command);
+                true
+            }
+            None => false,
+        }
+    };
+    if pushed {
+        shared.native_mirror_notify.notify_waiters();
+    }
+    pushed
+}
+
+fn peer_is_loopback(addr: &std::net::SocketAddr) -> bool {
+    addr.ip().is_loopback()
 }
 
 // ---------------------------------------------------------------------------
@@ -678,6 +757,8 @@ pub async fn receiver_start(
 
         *state.shared.pairing.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(PairingState::new());
         *state.shared.ips.lock().unwrap_or_else(|poison| poison.into_inner()) = local_ips();
+        *state.shared.internal_token.lock().unwrap_or_else(|poison| poison.into_inner()) = generate_internal_token();
+        *state.shared.native_mirror.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
 
         let events: Arc<dyn ReceiverEvents> = Arc::new(app.clone());
         ensure_server_started(&state, events, config_dir, log_dir).await?;
@@ -717,6 +798,7 @@ pub async fn receiver_stop(app: AppHandle, state: tauri::State<'_, ReceiverState
     *state.shared.pairing.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     *state.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()) = PlaybackReport::default();
     state.shared.ips.lock().unwrap_or_else(|poison| poison.into_inner()).clear();
+    *state.shared.native_mirror.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
 
     let status = build_status_json(&state.shared, None);
     let events: Arc<dyn ReceiverEvents> = Arc::new(app);
@@ -853,13 +935,12 @@ pub fn receiver_log_lines(state: tauri::State<'_, ReceiverState>, lines: Vec<Str
     Ok(())
 }
 
-#[tauri::command]
-pub fn receiver_report_state(state: tauri::State<'_, ReceiverState>, payload: PlaybackReport) -> Result<(), String> {
+fn apply_playback_report(shared: &ReceiverShared, payload: PlaybackReport) -> Result<(), String> {
     if !ALLOWED_PLAYBACK_STATES.contains(&payload.state.as_str()) {
         return Err(format!("OTHER:invalid playback state '{}'", payload.state));
     }
     let serialized = {
-        let mut playback = state.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut playback = shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
         let bounded = PlaybackReport {
             state: payload.state,
             position_seconds: payload.position_seconds,
@@ -874,7 +955,52 @@ pub fn receiver_report_state(state: tauri::State<'_, ReceiverState>, payload: Pl
         *playback = bounded;
         serialized
     };
-    let _ = state.shared.broadcast.send(serialized);
+    let _ = shared.broadcast.send(serialized);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn receiver_report_state(
+    state: tauri::State<'_, ReceiverState>,
+    payload: PlaybackReport,
+    generation: Option<u64>,
+) -> Result<(), String> {
+    let mirror_generation = state
+        .shared
+        .native_mirror
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map(|mirror| mirror.generation);
+    if !should_apply_report(mirror_generation, generation) {
+        log::debug!("[receiver] dropping stale report_state generation {generation:?} (mirror {mirror_generation:?})");
+        return Ok(());
+    }
+    apply_playback_report(&state.shared, payload)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InternalChannel {
+    pub port: u16,
+    pub token: String,
+}
+
+#[tauri::command]
+pub fn receiver_internal_channel(state: tauri::State<'_, ReceiverState>) -> Option<InternalChannel> {
+    let port = state.server.lock().unwrap_or_else(|poison| poison.into_inner()).as_ref().map(|handle| handle.port)?;
+    let token = state.shared.internal_token.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    Some(InternalChannel { port, token })
+}
+
+#[tauri::command]
+pub fn receiver_native_mirror(state: tauri::State<'_, ReceiverState>, active: bool, generation: u64) -> Result<(), String> {
+    {
+        let mut mirror = state.shared.native_mirror.lock().unwrap_or_else(|poison| poison.into_inner());
+        apply_native_mirror_transition(&mut mirror, active, generation);
+    }
+    log::info!("[receiver] native mirror {} generation {generation}", if active { "active" } else { "inactive" });
+    state.shared.native_mirror_notify.notify_waiters();
     Ok(())
 }
 
@@ -1524,6 +1650,10 @@ pub fn shutdown(state: &ReceiverState) {
 // Server lifecycle
 // ---------------------------------------------------------------------------
 
+/// Per-connection peer address, threaded in via an `Extension` layer for the loopback-only routes.
+#[derive(Debug, Clone, Copy)]
+struct PeerAddr(std::net::SocketAddr);
+
 struct ServerCtx {
     shared: Arc<ReceiverShared>,
     events: Arc<dyn ReceiverEvents>,
@@ -1607,8 +1737,8 @@ async fn spawn_server(
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
-                    let stream = match accepted {
-                        Ok((stream, _remote_addr)) => stream,
+                    let (stream, remote_addr) = match accepted {
+                        Ok(pair) => pair,
                         Err(error) => {
                             log::debug!("[receiver] accept failed: {error}");
                             // Non-transient errors (fd exhaustion) would busy-spin without a backoff.
@@ -1627,7 +1757,7 @@ async fn spawn_server(
                         // At the connection cap: refuse rather than queue unboundedly.
                         continue;
                     };
-                    let tower_service = router.clone();
+                    let tower_service = router.clone().layer(Extension(PeerAddr(remote_addr)));
                     tokio::task::spawn(async move {
                         let _permit = permit;
                         let io = hyper_util::rt::TokioIo::new(stream);
@@ -1667,6 +1797,8 @@ fn build_router(ctx: Arc<ServerCtx>) -> axum::Router {
         .route("/state", get(handle_state))
         .route("/logs", get(handle_logs))
         .route("/events", get(handle_events))
+        .route("/internal/report", post(handle_internal_report))
+        .route("/internal/commands", get(handle_internal_commands))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(ctx)
 }
@@ -1699,12 +1831,33 @@ fn authenticate(ctx: &ServerCtx, headers: &HeaderMap) -> Option<String> {
     find_device_by_key(ctx, key)
 }
 
+/// Loopback peer plus a matching internal token; any failure must look identical from outside.
+fn authenticate_internal(ctx: &ServerCtx, headers: &HeaderMap, peer_addr: &std::net::SocketAddr) -> bool {
+    if !peer_is_loopback(peer_addr) {
+        return false;
+    }
+    let Some(header_value) = headers.get(INTERNAL_AUTH_HEADER).and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let token = ctx.shared.internal_token.lock().unwrap_or_else(|poison| poison.into_inner());
+    constant_time_eq(header_value.as_bytes(), token.as_bytes())
+}
+
 fn unauthorized_response() -> Response {
     (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response()
 }
 
 fn bad_request_response(reason: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({"error": reason}))).into_response()
+}
+
+/// Internal-route auth failures return this rather than 401, so the routes stay invisible.
+fn internal_not_found() -> Response {
+    StatusCode::NOT_FOUND.into_response()
+}
+
+fn stale_response() -> Response {
+    (StatusCode::CONFLICT, Json(json!({"error": "stale"}))).into_response()
 }
 
 fn is_http_url(value: &str) -> bool {
@@ -1836,6 +1989,8 @@ struct PlayRequest {
     timeline_offset_seconds: Option<f64>,
     #[serde(default)]
     prefer_native_hls: Option<bool>,
+    #[serde(default)]
+    dns: Option<String>,
 }
 
 async fn handle_play(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_body: Bytes) -> Response {
@@ -1901,7 +2056,8 @@ async fn handle_play(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_
         }
     }
 
-    {
+    // Mirroring: end that native session instead of overwriting the report with loading.
+    if !push_native_command(&ctx.shared, NativeCommand::Stop) {
         let mut playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
         let previous_volume = playback.volume;
         let previous_muted = playback.muted;
@@ -1914,8 +2070,9 @@ async fn handle_play(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_
             volume: previous_volume,
             muted: previous_muted,
         };
+        drop(playback);
+        broadcast_playback(&ctx);
     }
-    broadcast_playback(&ctx);
 
     let descriptor = serde_json::to_value(&body).unwrap_or_else(|_| json!({}));
     ctx.events.play(json!({"descriptor": descriptor, "deviceName": device_name}));
@@ -2008,6 +2165,16 @@ async fn handle_transport(ctx: Arc<ServerCtx>, headers: HeaderMap, action: &'sta
     let Some(device_name) = authenticate(&ctx, &headers) else {
         return unauthorized_response();
     };
+    let mirror_command = match action {
+        "pause" => Some(NativeCommand::Pause),
+        "resume" => Some(NativeCommand::Resume),
+        "stop" => Some(NativeCommand::Stop),
+        _ => None,
+    };
+    if mirror_command.is_some_and(|command| push_native_command(&ctx.shared, command)) {
+        // Kotlin reports finished -> idle itself; the webview would otherwise replay this late.
+        return (StatusCode::OK, Json(json!({"ok": true}))).into_response();
+    }
     ctx.events.control(json!({"action": action, "deviceName": device_name}));
     if action == "stop" {
         *ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()) = PlaybackReport::default();
@@ -2047,7 +2214,9 @@ async fn handle_seek(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_
     if !seconds.is_finite() || seconds < 0.0 {
         return bad_request_response("invalidSeconds");
     }
-    ctx.events.control(json!({"action": "seek", "seconds": seconds, "deviceName": device_name}));
+    if !push_native_command(&ctx.shared, NativeCommand::Seek { position_seconds: seconds }) {
+        ctx.events.control(json!({"action": "seek", "seconds": seconds, "deviceName": device_name}));
+    }
     (StatusCode::OK, Json(json!({"ok": true}))).into_response()
 }
 
@@ -2071,7 +2240,9 @@ async fn handle_volume(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, ra
     if !level.is_finite() || !(0.0..=1.0).contains(&level) {
         return bad_request_response("invalidLevel");
     }
-    ctx.events.control(json!({"action": "volume", "level": level, "muted": body.muted, "deviceName": device_name}));
+    if !push_native_command(&ctx.shared, NativeCommand::Volume { volume: level, muted: body.muted }) {
+        ctx.events.control(json!({"action": "volume", "level": level, "muted": body.muted, "deviceName": device_name}));
+    }
     {
         let mut playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
         playback.volume = Some(level);
@@ -2096,6 +2267,111 @@ async fn handle_logs(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> R
     let log_dir = ctx.log_dir.clone();
     let text = tauri::async_runtime::spawn_blocking(move || newest_log_tail(&log_dir)).await.unwrap_or_default();
     (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InternalReportBody {
+    generation: u64,
+    report: PlaybackReport,
+}
+
+/// Loopback-only route the native mirror uses to relay playback reports.
+async fn handle_internal_report(
+    State(ctx): State<Arc<ServerCtx>>,
+    Extension(PeerAddr(peer_addr)): Extension<PeerAddr>,
+    headers: HeaderMap,
+    raw_body: Bytes,
+) -> Response {
+    if !authenticate_internal(&ctx, &headers, &peer_addr) {
+        return internal_not_found();
+    }
+    let Ok(body) = serde_json::from_slice::<InternalReportBody>(&raw_body) else {
+        return bad_request_response("badRequest");
+    };
+    let mirror_generation = ctx
+        .shared
+        .native_mirror
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map(|mirror| mirror.generation);
+    if mirror_generation != Some(body.generation) {
+        return stale_response();
+    }
+    match apply_playback_report(&ctx.shared, body.report) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => bad_request_response("badRequest"),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct InternalCommandsQuery {
+    generation: u64,
+    wait: Option<u64>,
+}
+
+/// Hand-rolled rather than the `Query` extractor, which rejects before auth runs.
+fn parse_internal_commands_query(raw: Option<&str>) -> Option<InternalCommandsQuery> {
+    let mut generation = None;
+    let mut wait = None;
+    for pair in raw?.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next()?;
+        let value = parts.next().unwrap_or("");
+        match key {
+            "generation" => generation = Some(value.parse::<u64>().ok()?),
+            "wait" => wait = Some(value.parse::<u64>().ok()?),
+            _ => {}
+        }
+    }
+    Some(InternalCommandsQuery { generation: generation?, wait })
+}
+
+/// Long-polled by Kotlin for pause/resume/stop/seek/volume commands queued while it mirrors.
+async fn handle_internal_commands(
+    State(ctx): State<Arc<ServerCtx>>,
+    Extension(PeerAddr(peer_addr)): Extension<PeerAddr>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !authenticate_internal(&ctx, &headers, &peer_addr) {
+        return internal_not_found();
+    }
+    let Some(query) = parse_internal_commands_query(raw_query.as_deref()) else {
+        return internal_not_found();
+    };
+    let wait_secs = query.wait.unwrap_or(0).min(INTERNAL_COMMANDS_MAX_WAIT_SECS);
+    let deadline = Instant::now() + Duration::from_secs(wait_secs);
+    loop {
+        // Registered before the check below so a command pushed in between is never missed.
+        let notified = ctx.shared.native_mirror_notify.notified();
+        let commands_ready = {
+            let mut mirror = ctx.shared.native_mirror.lock().unwrap_or_else(|poison| poison.into_inner());
+            let Some(current) = mirror.as_mut() else {
+                return stale_response();
+            };
+            if current.generation != query.generation {
+                return stale_response();
+            }
+            if current.commands.is_empty() {
+                None
+            } else {
+                Some(current.commands.drain(..).map(|command| command.to_json()).collect::<Vec<_>>())
+            }
+        };
+        if let Some(commands) = commands_ready {
+            return (StatusCode::OK, Json(json!({"commands": commands}))).into_response();
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return (StatusCode::OK, Json(json!({"commands": Value::Array(Vec::new())}))).into_response();
+        }
+        tokio::select! {
+            _ = notified => {}
+            _ = tokio::time::sleep(remaining) => {}
+        }
+    }
 }
 
 fn newest_log_tail(log_dir: &std::path::Path) -> String {
@@ -4114,6 +4390,142 @@ mod tests {
         write_log(&dir, "notes.txt", "not a log");
         assert_eq!(newest_log_tail(&dir), "");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---------------------------------------------------------------------
+    // Native mirror (Android background-playback bridge)
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn constant_time_eq_matches_equal_bytes_and_rejects_different_ones() {
+        assert!(constant_time_eq(b"same-token", b"same-token"));
+        assert!(!constant_time_eq(b"same-token", b"other-token"));
+        assert!(!constant_time_eq(b"short", b"much-longer"));
+    }
+
+    #[test]
+    fn peer_is_loopback_accepts_v4_and_v6_loopback_only() {
+        assert!(peer_is_loopback(&"127.0.0.1:1234".parse().unwrap()));
+        assert!(peer_is_loopback(&"[::1]:1234".parse().unwrap()));
+        assert!(!peer_is_loopback(&"192.168.1.5:1234".parse().unwrap()));
+    }
+
+    #[test]
+    fn apply_native_mirror_transition_active_installs_a_fresh_mirror() {
+        let mut mirror = None;
+        apply_native_mirror_transition(&mut mirror, true, 1);
+        assert_eq!(mirror.as_ref().unwrap().generation, 1);
+        assert!(mirror.as_ref().unwrap().commands.is_empty());
+    }
+
+    #[test]
+    fn apply_native_mirror_transition_replaces_an_older_mirror_on_reactivate() {
+        let mut mirror = None;
+        apply_native_mirror_transition(&mut mirror, true, 1);
+        push_test_command(&mut mirror, NativeCommand::Pause);
+        apply_native_mirror_transition(&mut mirror, true, 2);
+        assert_eq!(mirror.as_ref().unwrap().generation, 2);
+        assert!(mirror.as_ref().unwrap().commands.is_empty());
+    }
+
+    #[test]
+    fn apply_native_mirror_transition_inactive_with_an_older_generation_is_a_no_op() {
+        let mut mirror = None;
+        apply_native_mirror_transition(&mut mirror, true, 5);
+        apply_native_mirror_transition(&mut mirror, false, 3);
+        assert!(mirror.is_some(), "a stale end must not kill a newer session");
+    }
+
+    #[test]
+    fn apply_native_mirror_transition_inactive_at_or_after_its_own_generation_clears_it() {
+        let mut mirror = None;
+        apply_native_mirror_transition(&mut mirror, true, 5);
+        apply_native_mirror_transition(&mut mirror, false, 5);
+        assert!(mirror.is_none());
+    }
+
+    fn push_test_command(mirror: &mut Option<NativeMirror>, command: NativeCommand) {
+        mirror.as_mut().unwrap().commands.push_back(command);
+    }
+
+    #[test]
+    fn should_apply_report_always_applies_when_no_mirror_is_active() {
+        assert!(should_apply_report(None, None));
+        assert!(should_apply_report(None, Some(1)));
+    }
+
+    #[test]
+    fn should_apply_report_drops_a_report_with_no_generation_while_mirroring() {
+        assert!(!should_apply_report(Some(3), None));
+    }
+
+    #[test]
+    fn should_apply_report_drops_a_report_behind_the_mirror_generation() {
+        assert!(!should_apply_report(Some(3), Some(2)));
+    }
+
+    #[test]
+    fn should_apply_report_applies_a_report_at_or_ahead_of_the_mirror_generation() {
+        assert!(should_apply_report(Some(3), Some(3)));
+        assert!(should_apply_report(Some(3), Some(4)));
+    }
+
+    #[test]
+    fn push_native_command_returns_false_when_no_mirror_is_active() {
+        let shared = ReceiverShared::new();
+        assert!(!push_native_command(&shared, NativeCommand::Pause));
+    }
+
+    #[test]
+    fn push_native_command_queues_onto_an_active_mirror() {
+        let shared = ReceiverShared::new();
+        *shared.native_mirror.lock().unwrap() = Some(NativeMirror { generation: 1, commands: std::collections::VecDeque::new() });
+        assert!(push_native_command(&shared, NativeCommand::Resume));
+        let mirror = shared.native_mirror.lock().unwrap();
+        assert_eq!(mirror.as_ref().unwrap().commands.len(), 1);
+    }
+
+    #[test]
+    fn native_command_to_json_matches_the_wire_contract() {
+        assert_eq!(NativeCommand::Pause.to_json(), json!({"action": "pause"}));
+        assert_eq!(NativeCommand::Resume.to_json(), json!({"action": "resume"}));
+        assert_eq!(NativeCommand::Stop.to_json(), json!({"action": "stop"}));
+        assert_eq!(
+            NativeCommand::Seek { position_seconds: 12.5 }.to_json(),
+            json!({"action": "seek", "positionSeconds": 12.5})
+        );
+        assert_eq!(
+            NativeCommand::Volume { volume: 0.5, muted: true }.to_json(),
+            json!({"action": "volume", "volume": 0.5, "muted": true})
+        );
+    }
+
+    #[test]
+    fn parse_internal_commands_query_reads_both_fields() {
+        assert_eq!(
+            parse_internal_commands_query(Some("generation=7&wait=5")),
+            Some(InternalCommandsQuery { generation: 7, wait: Some(5) })
+        );
+    }
+
+    #[test]
+    fn parse_internal_commands_query_wait_is_optional_and_order_independent() {
+        assert_eq!(
+            parse_internal_commands_query(Some("wait=5&generation=7")),
+            Some(InternalCommandsQuery { generation: 7, wait: Some(5) })
+        );
+        assert_eq!(
+            parse_internal_commands_query(Some("generation=7")),
+            Some(InternalCommandsQuery { generation: 7, wait: None })
+        );
+    }
+
+    #[test]
+    fn parse_internal_commands_query_rejects_missing_or_malformed_generation() {
+        assert_eq!(parse_internal_commands_query(None), None);
+        assert_eq!(parse_internal_commands_query(Some("")), None);
+        assert_eq!(parse_internal_commands_query(Some("wait=5")), None);
+        assert_eq!(parse_internal_commands_query(Some("generation=nope")), None);
     }
 }
 

@@ -1,16 +1,21 @@
 // Receiver playback engine abstraction: embedded WebView player vs the
 // Android native ExoPlayer handoff. Both report through the same callbacks
 // so the orchestrator (receiver.ts) doesn't need to know which one is live.
+import { invoke } from "@tauri-apps/api/core"
 import {
   mountPlayer,
   playWhenReady,
   type Mounted,
+  type PlayerBackend,
   type VjsLikeHandle,
 } from "@/scripts/lib/player-runtime"
 import { getPlayerBackend } from "@/scripts/lib/app-settings.js"
 import type { CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
+import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
+import { dnsProxyAvailable, ensureDnsProxy } from "@/scripts/lib/dns-proxy.ts"
+import { wrapProxyUrl } from "@/scripts/lib/dns-proxy-url.ts"
 import { decodedFrameCount } from "@/scripts/lib/player-telemetry.js"
 import {
   classifyStartFailure,
@@ -24,9 +29,12 @@ import {
 import {
   launchAndroidNativeLive,
   launchAndroidNativeVod,
+  persistNativeTracksEvent,
   subscribeAndroidNativeEvents,
+  tracksLaunchOptionsFor,
   type AndroidNativeEvent,
 } from "@/scripts/lib/android-video-launcher.js"
+import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
 import {
   messageKeyForProbeVerdict,
   probeManifestSource,
@@ -69,6 +77,7 @@ export interface ReceiverLiveContext {
 
 export interface ReceiverPlayOptions {
   liveContext?: ReceiverLiveContext
+  trackMemory?: TrackMemoryContext | null
 }
 
 export interface ReceiverEngine {
@@ -76,6 +85,11 @@ export interface ReceiverEngine {
   control(action: ReceiverControlAction, seconds?: number): void
   setVolume(level: number, muted: boolean): void
   teardown(): void
+}
+
+export interface EmbeddedReceiverEngine extends ReceiverEngine {
+  /** Shows the error panel for a failure caught before any engine started. */
+  showError(messageKey: string, technical?: string | null): void
 }
 
 /** Clamps to [0, 1], treating non-finite input as silence rather than throwing. */
@@ -106,8 +120,14 @@ export function normalizeReportedVolume(level: number | null | undefined): numbe
 // Embedded engine: mountPlayer-backed playback inside the receiver page.
 // ---------------------------------------------------------------------
 
+export interface EmbeddedEngineOptions {
+  /** Caller owns input (TV browse UI): mpv-embedded is allowed, no control bar. */
+  localInput?: boolean
+}
+
 export interface EmbeddedEngineDom {
   idleEl: HTMLElement | null
+  exitEl?: HTMLElement | null
   playerViewEl: HTMLElement | null
   videoEl: HTMLVideoElement | null
   titleWrapEl: HTMLElement | null
@@ -138,14 +158,34 @@ const LOADING_TIMEOUT_MS = 30000
 const VOD_LOADING_TIMEOUT_MS = 90000
 const LOADING_MAX_WAIT_MS = 180000
 const LOAD_PROGRESS_EVENTS = ["progress", "loadedmetadata", "loadeddata", "canplay", "seeked"]
-const ERROR_HIDE_MS = 10000
+// Long enough to catch a viewer who wandered off with the remote.
+export const ERROR_HIDE_MS = 20000
 const TITLE_HIDE_MS = 5000
+
+// The sender's descriptor is authoritative here, not the receiver's own active-playlist DNS override.
+async function resolveDescriptorDnsSrc(descriptor: CastDescriptorV1): Promise<string> {
+  if (!descriptor.dns || !dnsProxyAvailable()) return descriptor.src
+  const server = parseDnsServer(descriptor.dns)
+  if (!server) return descriptor.src
+  try {
+    const base = await ensureDnsProxy(`dns:${server.raw}`, server)
+    return base ? wrapProxyUrl(base, descriptor.src) : descriptor.src
+  } catch (err) {
+    log.warn("[xt:receiver] dns proxy wrap failed, using raw src:", err)
+    return descriptor.src
+  }
+}
 
 export function createEmbeddedReceiverEngine(
   dom: EmbeddedEngineDom,
   callbacks: ReceiverEngineCallbacks,
-): ReceiverEngine {
+  engineOptions: EmbeddedEngineOptions = {},
+): EmbeddedReceiverEngine {
   let mounted: Mounted | null = null
+  // Backend requested at mount time; mounted.backend may resolve differently (e.g. Android).
+  let mountedRequestedBackend: PlayerBackend | null = null
+  let mountedUserAgent: string | null = null
+  let mountedReferer: string | null = null
   let activeHandle: VjsLikeHandle | null = null
   let mediaListenersWired = false
   let currentTitle = ""
@@ -164,12 +204,16 @@ export function createEmbeddedReceiverEngine(
 
   let titleHideTimer: ReturnType<typeof setTimeout> | null = null
   let errorHideTimer: ReturnType<typeof setTimeout> | null = null
+  let errorHideAbort: AbortController | null = null
   let deadVideoTimer: ReturnType<typeof setTimeout> | null = null
   let loadingTimeoutTimer: ReturnType<typeof setTimeout> | null = null
   let lastLoadProgressAt = 0
 
   function getMediaElementFor(handle: VjsLikeHandle | null): HTMLVideoElement | null {
-    return handle?.getMediaElement?.() ?? dom.videoEl
+    // A handle that defines getMediaElement() is authoritative, even when it returns
+    // null (mpv-embedded has no <video> in play) - don't report stats off dom.videoEl instead.
+    if (handle && typeof handle.getMediaElement === "function") return handle.getMediaElement()
+    return dom.videoEl
   }
 
   // Backends answer 0 for unknown; reporting 0 would pin the remote's scrubber range at zero.
@@ -187,15 +231,20 @@ export function createEmbeddedReceiverEngine(
     const mediaEl = getMediaElementFor(activeHandle)
     const durationSeconds = currentDurationSeconds(partial.durationSeconds)
     if (durationSeconds !== undefined) knownDurationSeconds = durationSeconds
-    // Read live off the media element so even a plain state transition carries a level.
-    const volume = normalizeReportedVolume(partial.volume ?? mediaEl?.volume)
+    // No <video> to read from (mpv-embedded) - fall back to the handle's own reporters.
+    const rawVolume = mediaEl ? mediaEl.volume : activeHandle?.volume?.()
+    const rawMuted = mediaEl ? mediaEl.muted : activeHandle?.muted?.()
+    const positionSeconds = mediaEl
+      ? mediaEl.currentTime
+      : activeHandle?.currentTime?.()
+    const volume = normalizeReportedVolume(partial.volume ?? (typeof rawVolume === "number" ? rawVolume : undefined))
     callbacks.report({
       state: partial.state ?? currentPlaybackState,
-      positionSeconds: partial.positionSeconds ?? mediaEl?.currentTime ?? 0,
+      positionSeconds: partial.positionSeconds ?? positionSeconds ?? 0,
       durationSeconds,
       error: partial.error,
       volume,
-      muted: volume === undefined ? undefined : (partial.muted ?? mediaEl?.muted ?? false),
+      muted: volume === undefined ? undefined : (partial.muted ?? (typeof rawMuted === "boolean" ? rawMuted : false)),
     })
   }
 
@@ -218,6 +267,64 @@ export function createEmbeddedReceiverEngine(
     dom.titleWrapEl.classList.remove("opacity-0")
     if (titleHideTimer) clearTimeout(titleHideTimer)
     titleHideTimer = setTimeout(() => dom.titleWrapEl?.classList.add("opacity-0"), TITLE_HIDE_MS)
+  }
+
+  // Lands focus somewhere sane for D-pad nav when returning to idle.
+  function focusIdleEntry(): void {
+    if (dom.exitEl?.isConnected) dom.exitEl.focus()
+    else dom.idleEl?.focus()
+  }
+
+  // Hides the panel and returns to idle without touching playback or notifying the orchestrator.
+  function lightHideError(): void {
+    dom.errorEl?.classList.add("hidden")
+    dom.errorCountdownEl?.classList.remove("receiver-countdown-run")
+    dom.playerViewEl?.classList.add("hidden")
+    dom.idleEl?.classList.remove("hidden")
+    focusIdleEntry()
+  }
+
+  function clearErrorHideTimer(): void {
+    if (errorHideTimer) {
+      clearTimeout(errorHideTimer)
+      errorHideTimer = null
+    }
+    errorHideAbort?.abort()
+    errorHideAbort = null
+  }
+
+  // Re-armed per error; a retry focus or any keypress cancels it early.
+  function armErrorHideTimer(onHide: () => void): void {
+    clearErrorHideTimer()
+    errorHideAbort = new AbortController()
+    errorHideTimer = setTimeout(() => {
+      clearErrorHideTimer()
+      onHide()
+    }, ERROR_HIDE_MS)
+    dom.errorRetryEl?.addEventListener("focus", clearErrorHideTimer, { signal: errorHideAbort.signal })
+    if (typeof document !== "undefined") {
+      document.addEventListener("keydown", clearErrorHideTimer, { capture: true, signal: errorHideAbort.signal })
+    }
+  }
+
+  // Shared by the in-player failure path and early orchestrator rejections.
+  function presentError(message: string, onHide: () => void): void {
+    if (dom.errorMessageEl) dom.errorMessageEl.textContent = message
+    showLoading(false)
+    dom.pausedEl?.classList.add("hidden")
+    dom.idleEl?.classList.add("hidden")
+    dom.playerViewEl?.classList.remove("hidden")
+    dom.errorEl?.style?.setProperty?.("--receiver-error-hide", `${ERROR_HIDE_MS}ms`)
+    dom.errorEl?.classList.remove("hidden")
+    if (dom.errorCountdownEl) {
+      dom.errorCountdownEl.classList.remove("receiver-countdown-run")
+      void dom.errorCountdownEl.offsetWidth
+      dom.errorCountdownEl.classList.add("receiver-countdown-run")
+    }
+    // Single OK press retries: the panel's only control should already have focus.
+    dom.errorRetryEl?.focus()
+    // Armed after focus, or the focus listener below would cancel it immediately.
+    armErrorHideTimer(onHide)
   }
 
   function mediaErrorMessageKey(code: number): string | null {
@@ -268,9 +375,9 @@ export function createEmbeddedReceiverEngine(
     }
 
     const errorDetail = activeHandle?.codecInfo?.()?.errorDetail
-    if (errorDetail) return { messageKey: "receiver.error.title", technical: errorDetail }
+    if (errorDetail) return { messageKey: "receiver.error.generic", technical: errorDetail }
 
-    return { messageKey: "receiver.error.title", technical: null }
+    return { messageKey: "receiver.error.generic", technical: null }
   }
 
   async function handleError(context: FailureContext = "player"): Promise<void> {
@@ -293,20 +400,8 @@ export function createEmbeddedReceiverEngine(
     const technical = [described.technical, verdictPart].filter(Boolean).join("; ") || null
     const detail = technical ? `${message} (${technical})`.slice(0, 300) : message
     log.error("[xt:receiver] playback failed:", detail)
-    if (dom.errorMessageEl) dom.errorMessageEl.textContent = message
-    showLoading(false)
-    dom.pausedEl?.classList.add("hidden")
-    dom.errorEl?.classList.remove("hidden")
-    if (dom.errorCountdownEl) {
-      dom.errorCountdownEl.classList.remove("receiver-countdown-run")
-      void dom.errorCountdownEl.offsetWidth
-      dom.errorCountdownEl.classList.add("receiver-countdown-run")
-    }
+    presentError(message, () => teardownInternal(true))
     report({ state: "error", error: detail, positionSeconds: 0 })
-    if (errorHideTimer) clearTimeout(errorHideTimer)
-    errorHideTimer = setTimeout(() => teardownInternal(true), ERROR_HIDE_MS)
-    // Single OK press retries: the panel's only control should already have focus.
-    dom.errorRetryEl?.focus()
   }
 
   function clearDeadVideoWatchdog(): void {
@@ -373,7 +468,7 @@ export function createEmbeddedReceiverEngine(
     tearingDown = true
     playGeneration++
     if (titleHideTimer) clearTimeout(titleHideTimer)
-    if (errorHideTimer) clearTimeout(errorHideTimer)
+    clearErrorHideTimer()
     clearDeadVideoWatchdog()
     clearLoadingWatchdog()
     pendingResumeCleanup?.()
@@ -386,6 +481,7 @@ export function createEmbeddedReceiverEngine(
     dom.titleWrapEl?.classList.add("opacity-0")
     dom.pausedEl?.classList.add("hidden")
     dom.idleEl?.classList.remove("hidden")
+    focusIdleEntry()
     knownDurationSeconds = undefined
     // No positionSeconds: reportState keeps the last real position.
     if (options?.reportIdle ?? true) report({ state: "idle" })
@@ -428,37 +524,83 @@ export function createEmbeddedReceiverEngine(
       if (now - lastTimeReportAt < 1000) return
       lastTimeReportAt = now
       const mediaEl = getMediaElementFor(handle)
+      const positionSeconds = mediaEl ? mediaEl.currentTime : handle.currentTime?.()
       report({
         state: currentPlaybackState,
-        positionSeconds: mediaEl?.currentTime ?? 0,
+        positionSeconds: positionSeconds ?? 0,
         durationSeconds: handle.duration?.(),
       })
     })
   }
 
-  async function ensurePlayer(): Promise<VjsLikeHandle | null> {
-    if (mounted?.kind === "embedded") return mounted.handle
-    if (!dom.videoEl) return null
-    let backend = getPlayerBackend()
+  function wantedBackendFor(descriptor: CastDescriptorV1): PlayerBackend {
+    let backend = getPlayerBackend() as PlayerBackend
+    // Local playback here would be an unattended child process.
     if (backend === "mpv" || backend === "vlc") backend = "artplayer"
-    const result = await mountPlayer(dom.videoEl, backend, { autoplay: true })
+    // Its own control bar only makes sense when the caller owns input.
+    if (backend === "mpv-embedded" && !engineOptions.localInput) backend = "artplayer"
+    // mpv has no ClearKey support.
+    if (backend === "mpv-embedded" && descriptor.drm) backend = "artplayer"
+    return backend
+  }
+
+  let ensurePlayerInFlight: Promise<VjsLikeHandle | null> | null = null
+
+  async function ensurePlayer(descriptor: CastDescriptorV1): Promise<VjsLikeHandle | null> {
+    if (ensurePlayerInFlight) await ensurePlayerInFlight
+    const run = ensurePlayerOnce(descriptor)
+    ensurePlayerInFlight = run
+    try {
+      return await run
+    } finally {
+      if (ensurePlayerInFlight === run) ensurePlayerInFlight = null
+    }
+  }
+
+  async function ensurePlayerOnce(descriptor: CastDescriptorV1): Promise<VjsLikeHandle | null> {
+    const backend = wantedBackendFor(descriptor)
+    const wantedUserAgent = descriptor.headers?.userAgent ?? null
+    const wantedReferer = descriptor.headers?.referer ?? null
+    // mpv-embedded only takes user-agent/referer at mount time, not per src() load.
+    const settingsChanged =
+      backend === "mpv-embedded" &&
+      (mountedUserAgent !== wantedUserAgent || mountedReferer !== wantedReferer)
+    if (mounted?.kind === "embedded" && mountedRequestedBackend === backend && !settingsChanged) {
+      return mounted.handle
+    }
+    if (mounted?.kind === "embedded") {
+      try { mounted.handle.pause() } catch {}
+      try { mounted.handle.reset?.() } catch {}
+      try { await mounted.handle.dispose?.() } catch {}
+      mounted = null
+      mountedRequestedBackend = null
+      mediaListenersWired = false
+      activeHandle = null
+    }
+    if (!dom.videoEl) return null
+    const mpvOptions = backend === "mpv-embedded"
+      ? { userAgent: wantedUserAgent, referer: wantedReferer, mpvControls: !engineOptions.localInput }
+      : {}
+    const result = await mountPlayer(dom.videoEl, backend, { autoplay: true, ...mpvOptions })
     if (result.kind !== "embedded") {
       log.warn("[xt:receiver] mountPlayer returned an external backend; receiver requires embedded playback")
       return null
     }
     mounted = result
+    mountedRequestedBackend = backend
+    mountedUserAgent = wantedUserAgent
+    mountedReferer = wantedReferer
     wireMediaListeners(result.handle)
     return result.handle
   }
 
   return {
-    async play(descriptor: CastDescriptorV1): Promise<boolean> {
+    async play(descriptor: CastDescriptorV1, options?: ReceiverPlayOptions): Promise<boolean> {
       const attemptGeneration = ++playGeneration
       tearingDown = false
       clearDeadVideoWatchdog()
       clearLoadingWatchdog()
-      if (errorHideTimer) clearTimeout(errorHideTimer)
-      errorHideTimer = null
+      clearErrorHideTimer()
       errorReported = false
       currentTitle = descriptor.title
       currentMime = descriptor.mime
@@ -471,20 +613,37 @@ export function createEmbeddedReceiverEngine(
       report({ state: "loading", positionSeconds: 0 })
       showLoading(true, descriptor.title)
 
-      const handle = await ensurePlayer()
+      let handle: VjsLikeHandle | null
+      try {
+        handle = await ensurePlayer(descriptor)
+      } catch (err) {
+        log.error("[xt:receiver] ensurePlayer failed:", err)
+        if (attemptGeneration !== playGeneration) return false
+        errorReported = true
+        const message = t("receiver.error.generic")
+        const technical = err instanceof Error ? err.message : String(err)
+        presentError(message, () => teardownInternal(true))
+        report({ state: "error", error: `${message} (${technical})`.slice(0, 300), positionSeconds: 0 })
+        return false
+      }
       if (!handle) return false
       // Another play()/teardown claimed the engine while mounting.
       if (attemptGeneration !== playGeneration) return false
       activeHandle = handle
 
+      const playbackSrc = await resolveDescriptorDnsSrc(descriptor)
+      if (attemptGeneration !== playGeneration) return false
+
       handle.src({
-        src: descriptor.src,
+        src: playbackSrc,
         type: descriptor.mime,
         drm: descriptor.drm ?? null,
         isLive: descriptor.isLive,
         durationSeconds: descriptor.durationSeconds,
         timelineOffsetSeconds: descriptor.timelineOffsetSeconds,
         preferNativeHls: descriptor.preferNativeHls,
+        title: descriptor.title,
+        trackMemory: descriptor.isLive ? null : (options?.trackMemory ?? null),
       })
       armLoadingWatchdog(handle)
 
@@ -493,12 +652,25 @@ export function createEmbeddedReceiverEngine(
       if (!descriptor.isLive && (descriptor.resumeSeconds ?? 0) > 5) {
         const resumeSeconds = descriptor.resumeSeconds!
         const resumeMediaEl = getMediaElementFor(handle)
-        const onLoadedMetadata = () => {
-          pendingResumeCleanup = null
-          handle.currentTime?.(resumeSeconds)
+        if (resumeMediaEl) {
+          const onLoadedMetadata = () => {
+            pendingResumeCleanup = null
+            handle.currentTime?.(resumeSeconds)
+          }
+          resumeMediaEl.addEventListener("loadedmetadata", onLoadedMetadata, { once: true })
+          pendingResumeCleanup = () => resumeMediaEl.removeEventListener("loadedmetadata", onLoadedMetadata)
+        } else {
+          // No <video> to listen on (mpv-embedded) - guard against a stale fire with a flag instead.
+          let stale = false
+          const onLoadedMetadata = () => {
+            if (stale) return
+            pendingResumeCleanup = null
+            handle.currentTime?.(resumeSeconds)
+          }
+          if (typeof handle.one === "function") handle.one("loadedmetadata", onLoadedMetadata)
+          else handle.on("loadedmetadata", onLoadedMetadata)
+          pendingResumeCleanup = () => { stale = true }
         }
-        resumeMediaEl?.addEventListener("loadedmetadata", onLoadedMetadata, { once: true })
-        pendingResumeCleanup = () => resumeMediaEl?.removeEventListener("loadedmetadata", onLoadedMetadata)
       }
 
       playWhenReady(handle, {
@@ -537,6 +709,8 @@ export function createEmbeddedReceiverEngine(
       if (mediaEl) {
         mediaEl.volume = clamped
         mediaEl.muted = muted
+      } else {
+        activeHandle?.volume?.(clamped)
       }
       activeHandle?.muted?.(muted)
       report({ volume: clamped, muted })
@@ -544,6 +718,18 @@ export function createEmbeddedReceiverEngine(
 
     teardown(): void {
       teardownInternal(false)
+    },
+
+    showError(messageKey: string, technical?: string | null): void {
+      // A different engine may still own playback; only tear down if this one was the active player.
+      const wasActive = activeHandle !== null
+      errorReported = true
+      playGeneration++
+      activeHandle = null
+      const message = t(messageKey)
+      const detail = technical ? `${message} (${technical})`.slice(0, 300) : message
+      log.error("[xt:receiver] play rejected:", detail)
+      presentError(message, wasActive ? () => teardownInternal(true) : lightHideError)
     },
   }
 }
@@ -578,7 +764,7 @@ export function mapNativeErrorCode(code: string | null | undefined, httpStatus?:
 }
 
 /** Keys that only mean "the player couldn't parse this" - a provider refusal looks identical. */
-const PROBE_REFINABLE_KEYS = new Set(["receiver.error.container", "receiver.error.title"])
+const PROBE_REFINABLE_KEYS = new Set(["receiver.error.container", "receiver.error.title", "receiver.error.generic"])
 
 /** Asked only when the player's verdict is a parse guess, which a provider refusal mimics. */
 export async function refineParseFailureKey(
@@ -593,6 +779,31 @@ export async function refineParseFailureKey(
 const RECEIVER_LIVE_CONTENT_KEY = "receiver-live"
 const RECEIVER_VOD_CONTENT_KEY = "receiver-vod"
 const RECEIVER_LIVE_CHANNEL_ID = "cast"
+
+// Set while Kotlin mirrors native-player state straight into the receiver server.
+let activeMirrorGeneration: number | null = null
+
+export function isNativeMirrorActive(): boolean {
+  return activeMirrorGeneration !== null
+}
+
+export function nativeMirrorGeneration(): number | null {
+  return activeMirrorGeneration
+}
+
+interface ReceiverInternalChannel {
+  port: number
+  token: string
+}
+
+async function fetchReceiverInternalChannel(): Promise<ReceiverInternalChannel | null> {
+  try {
+    return await invoke<ReceiverInternalChannel | null>("receiver_internal_channel")
+  } catch (err) {
+    log.warn("[xt:receiver] receiver_internal_channel fetch failed:", err)
+    return null
+  }
+}
 
 export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallbacks): ReceiverEngine {
   let unsubscribe: (() => void) | null = null
@@ -613,6 +824,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
   let activeContentKey = ""
   // null = synthetic single "cast" channel
   let liveChannelIds: Set<string> | null = null
+  let activeTrackMemory: TrackMemoryContext | null = null
 
   function stopListening(): void {
     unsubscribe?.()
@@ -631,13 +843,22 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     })
   }
 
+  function endNativeMirror(sessionGeneration: number): void {
+    if (activeMirrorGeneration !== sessionGeneration) return
+    activeMirrorGeneration = null
+    void invoke("receiver_native_mirror", { active: false, generation: sessionGeneration }).catch((err) => {
+      log.warn("[xt:receiver] receiver_native_mirror deactivate failed:", err)
+    })
+  }
+
   // Finishes the native activity and unwinds our end of the session. Safe to
   // call after the activity already finished itself (Kotlin no-ops).
-  function finishAndEndSession(): void {
+  function finishAndEndSession(sessionGeneration: number): void {
     knownDurationSeconds = undefined
     try { window.AndroidVideo?.receiverControl?.("stop", 0) } catch {}
     stopListening()
     try { window.AndroidVideo?.receiverSessionEnd?.() } catch {}
+    endNativeMirror(sessionGeneration)
   }
 
   // VideoActivity's loadChannel catch reports "live:<channelId>", not the launch contentKey
@@ -669,7 +890,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     const detail = `${t(messageKey)} (${technical})`.slice(0, 300)
     log.error("[xt:receiver] native playback failed:", detail)
     report({ state: "error", error: detail, positionSeconds: 0 })
-    finishAndEndSession()
+    finishAndEndSession(sessionGeneration)
     callbacks.onSessionEnded()
   }
 
@@ -697,6 +918,9 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       case "xt:android-native-error":
         void reportNativeError(sessionGeneration, event)
         break
+      case "xt:android-native-tracks":
+        persistNativeTracksEvent(activeTrackMemory, event.payload)
+        break
       case "xt:android-native-channel-changed":
         if (event.payload.channelId) {
           callbacks.onLiveChannelChanged?.(event.payload.channelId, event.payload.channelName || "")
@@ -709,7 +933,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
           : undefined
         report({ state: event.payload.completed ? "ended" : "idle", positionSeconds: finishedPositionSeconds })
         callbacks.onFinished?.(event.payload.finalChannelId ?? null)
-        finishAndEndSession()
+        finishAndEndSession(sessionGeneration)
         callbacks.onSessionEnded()
         break
       }
@@ -731,26 +955,50 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       errorReported = false
       // Seeded from the sender's metadata so the first report already carries a range.
       knownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
-      let sessionStarted = false
-      try {
-        sessionStarted = window.AndroidVideo?.receiverSessionStart?.() ?? false
-      } catch (err) {
-        log.warn("[xt:receiver] receiverSessionStart threw:", err)
-      }
-      if (!sessionStarted) return false
       const sessionGeneration = ++generation
       const contentKey = `${descriptor.isLive ? RECEIVER_LIVE_CONTENT_KEY : RECEIVER_VOD_CONTENT_KEY}-${sessionGeneration}`
       activeContentKey = contentKey
+      const channel = await fetchReceiverInternalChannel()
+      const channelPayload: Record<string, unknown> = {
+        generation: sessionGeneration,
+        contentKey,
+        title: descriptor.title,
+        isLive: descriptor.isLive,
+      }
+      if (channel) {
+        channelPayload.port = channel.port
+        channelPayload.token = channel.token
+        // Kotlin polls Rust inside receiverSessionStart, so the mirror must exist first.
+        try {
+          await invoke("receiver_native_mirror", { active: true, generation: sessionGeneration })
+          activeMirrorGeneration = sessionGeneration
+        } catch (err) {
+          log.warn("[xt:receiver] receiver_native_mirror activate failed:", err)
+        }
+      }
+      let sessionStarted = false
+      try {
+        sessionStarted = window.AndroidVideo?.receiverSessionStart?.(JSON.stringify(channelPayload)) ?? false
+      } catch (err) {
+        log.warn("[xt:receiver] receiverSessionStart threw:", err)
+      }
+      if (!sessionStarted) {
+        endNativeMirror(sessionGeneration)
+        return false
+      }
       const requestedLiveContext = options?.liveContext ?? null
       const liveContext = descriptor.isLive && requestedLiveContext && requestedLiveContext.channels.length > 0
         ? requestedLiveContext
         : null
-      liveChannelIds = liveContext ? new Set(liveContext.channels.map((channel) => String(channel.id))) : null
+      liveChannelIds = liveContext ? new Set(liveContext.channels.map((liveChannel) => String(liveChannel.id))) : null
+      activeTrackMemory = descriptor.isLive ? null : (options?.trackMemory ?? null)
       unsubscribe = subscribeAndroidNativeEvents((event) => handleEvent(sessionGeneration, event))
+      // Rust's handle_play already wrote "loading" once the mirror activated above.
       report({ state: "loading", positionSeconds: 0, durationSeconds: knownDurationSeconds })
 
       const ua = descriptor.headers?.userAgent || ""
       const referer = descriptor.headers?.referer || ""
+      const dns = descriptor.dns ?? null
       const launched = descriptor.isLive
         ? launchAndroidNativeLive({
             contentKey,
@@ -760,6 +1008,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
             initialChannelId: liveContext ? liveContext.initialChannelId : RECEIVER_LIVE_CHANNEL_ID,
             defaultUa: ua,
             defaultReferer: referer,
+            dns,
           })
         : launchAndroidNativeVod({
             contentKey,
@@ -768,12 +1017,15 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
             referer,
             title: descriptor.title,
             startMs: Math.max(0, Math.floor((descriptor.resumeSeconds || 0) * 1000)),
+            dns,
+            tracks: tracksLaunchOptionsFor(activeTrackMemory),
           })
 
       if (!launched) {
         log.warn("[xt:receiver] native launch failed, falling back to embedded playback")
         stopListening()
         try { window.AndroidVideo?.receiverSessionEnd?.() } catch {}
+        endNativeMirror(sessionGeneration)
         return false
       }
 
@@ -784,7 +1036,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     control(action: ReceiverControlAction, seconds?: number): void {
       if (action === "stop") {
         report({ state: "idle", positionSeconds: 0 })
-        finishAndEndSession()
+        finishAndEndSession(generation)
         callbacks.onSessionEnded()
         return
       }
@@ -815,7 +1067,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     teardown(): void {
       // No positionSeconds: reportState keeps the last real position.
       report({ state: "idle" })
-      finishAndEndSession()
+      finishAndEndSession(generation)
     },
   }
 }

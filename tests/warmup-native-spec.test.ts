@@ -194,6 +194,29 @@ describe("buildWarmupSpec passthrough", () => {
     expect(spec.playlistId).toBe("pl-force-check")
     expect(spec.force).toBe(true)
   })
+
+  it("passes dns through when provided, and defaults it to null otherwise", () => {
+    const withDns = buildWarmupSpec({
+      playlistId: "pl-dns",
+      force: false,
+      timeoutSeconds: 10,
+      userAgent: "ua",
+      kinds: ["live"],
+      source: { type: "xtream", candidates: xtreamCandidates, startIndex: 0 },
+      dns: "1.1.1.1",
+    })
+    expect(withDns.dns).toBe("1.1.1.1")
+
+    const withoutDns = buildWarmupSpec({
+      playlistId: "pl-dns",
+      force: false,
+      timeoutSeconds: 10,
+      userAgent: "ua",
+      kinds: ["live"],
+      source: { type: "xtream", candidates: xtreamCandidates, startIndex: 0 },
+    })
+    expect(withoutDns.dns).toBeNull()
+  })
 })
 
 describe("decideNativeKinds", () => {

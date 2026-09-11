@@ -81,6 +81,22 @@ function isLocaleCode(code: string): code is LocaleCode {
 const LOCALE_STORAGE_KEY = "xt_locale"
 // Bumped from v2 to v3 in 1.6.0 to invalidate stale pre-paint caches
 const LOCALE_MESSAGES_STORAGE_KEY = "xt_locale_messages_v3"
+// Small pre-paint-only subset for TvLayout.astro's static nav markup, so its inline <head>
+// script parses a handful of keys instead of the full locale blob. Keep this list in sync
+// with the data-i18n / data-i18n-attr keys in TvLayout.astro that render before hydration.
+const LOCALE_PREPAINT_STORAGE_KEY = "xt_locale_prepaint"
+const PREPAINT_KEYS = [
+  "sidebar.mainLabel",
+  "nav.home",
+  "nav.livetv",
+  "nav.movies",
+  "nav.series",
+  "nav.search",
+  "nav.downloads",
+  "nav.settings",
+  "tv.nav.playlist",
+  "tv.nav.cast",
+] as const
 const LOCALE_CHANGED_EVENT = "xt:locale-changed"
 
 const cache = new Map<string, LocaleMessages>()
@@ -141,6 +157,16 @@ function writePersistedLocale(code: string | null): void {
   }
 }
 
+// Build-time stamp from the layouts; a version compare replaces diffing ~150KB of JSON.
+function getAppVersionStamp(): string | null {
+  try {
+    if (typeof document === "undefined") return null
+    return document.querySelector('meta[name="x-app-version"]')?.getAttribute("content") || null
+  } catch {
+    return null
+  }
+}
+
 function writeCachedMessages(
   code: string,
   messages: LocaleMessages,
@@ -154,16 +180,38 @@ function writeCachedMessages(
     }
     // Reuse the caller's stringified messages instead of re-serializing them
     const messagesJson = serializedMessages ?? JSON.stringify(messages)
+    const appVersion = getAppVersionStamp()
     localStorage.setItem(
       LOCALE_MESSAGES_STORAGE_KEY,
-      `{"code":${JSON.stringify(code)},"messages":${messagesJson}}`
+      `{"code":${JSON.stringify(code)},"appVersion":${JSON.stringify(appVersion)},"messages":${messagesJson}}`
     )
   } catch {
     /* ignore quota / privacy-mode errors */
   }
 }
 
-function readCachedMessages(): { code: LocaleCode; messages: LocaleMessages } | null {
+function writePrepaintMessages(code: string, messages: LocaleMessages): void {
+  try {
+    if (typeof localStorage === "undefined") return
+    if (code === "en") {
+      localStorage.removeItem(LOCALE_PREPAINT_STORAGE_KEY)
+      return
+    }
+    const subset: Record<string, string> = {}
+    for (const key of PREPAINT_KEYS) {
+      const value = messages[key]
+      if (value != null) subset[key] = value
+    }
+    localStorage.setItem(
+      LOCALE_PREPAINT_STORAGE_KEY,
+      `{"code":${JSON.stringify(code)},"messages":${JSON.stringify(subset)}}`
+    )
+  } catch {
+    /* ignore quota / privacy-mode errors */
+  }
+}
+
+function readCachedMessages(): { code: LocaleCode; messages: LocaleMessages; appVersion: string | null } | null {
   try {
     if (typeof localStorage === "undefined") return null
     const raw = localStorage.getItem(LOCALE_MESSAGES_STORAGE_KEY)
@@ -176,7 +224,11 @@ function readCachedMessages(): { code: LocaleCode; messages: LocaleMessages } | 
       parsed.messages &&
       typeof parsed.messages === "object"
     ) {
-      return { code: parsed.code, messages: parsed.messages as LocaleMessages }
+      return {
+        code: parsed.code,
+        messages: parsed.messages as LocaleMessages,
+        appVersion: typeof parsed.appVersion === "string" ? parsed.appVersion : null,
+      }
     }
   } catch {
     /* corrupt cache - bundled async loader will recover */
@@ -231,6 +283,7 @@ export async function setLocale(input: string | null): Promise<void> {
   activeCode = code
   activeMessages = cache.get(code)!
   writeCachedMessages(code, activeMessages)
+  writePrepaintMessages(code, activeMessages)
   const matchesAutoDetect = code === detectLocale() && !readPersistedLocale()
   writePersistedLocale(matchesAutoDetect ? null : code)
   if (typeof document !== "undefined") {
@@ -282,7 +335,13 @@ let _initPromise: Promise<void> | null = null
 // the bundled JSON against what was actually served, and only touch that one
 // locale.
 let seededLocaleCode: LocaleCode | null = null
-let seededMessages: LocaleMessages | null = null
+let seededAppVersion: string | null = null
+
+/** True when the cached locale should be reloaded from the bundle: a version mismatch, or no stamp recorded at all. */
+export function shouldRefreshLocaleCache(seededVersion: string | null, currentVersion: string | null): boolean {
+  if (!seededVersion || !currentVersion) return true
+  return seededVersion !== currentVersion
+}
 
 // Initialise i18n at app boot
 export function initI18n(): Promise<void> {
@@ -291,7 +350,7 @@ export function initI18n(): Promise<void> {
     if (cached && !cache.has(cached.code)) cache.set(cached.code, cached.messages)
     if (cached) {
       seededLocaleCode = cached.code
-      seededMessages = cached.messages
+      seededAppVersion = cached.appVersion
     }
     const code = detectLocale()
     _initPromise = setLocale(code === "en" ? "en" : code).then(() => {
@@ -309,17 +368,17 @@ export function initI18n(): Promise<void> {
 async function refreshSeededLocale(): Promise<void> {
   const code = seededLocaleCode
   if (!code || code === "en") return
+  // Dev builds keep one version across edits, so they always refresh.
+  if (!import.meta.env.DEV && !shouldRefreshLocaleCache(seededAppVersion, getAppVersionStamp())) return
   try {
     const fresh = await LOCALE_LOADERS[code]()
     // Always replace the in-memory entry so a later locale round-trip can't
     // resurrect the stale snapshot.
     cache.set(code, fresh)
-    const staleMessages = seededMessages
-    const freshMessagesJson = JSON.stringify(fresh)
-    const changed = !staleMessages || freshMessagesJson !== JSON.stringify(staleMessages)
-    if (changed && code === activeCode) {
+    if (code === activeCode) {
       activeMessages = fresh
-      writeCachedMessages(code, fresh, freshMessagesJson)
+      writeCachedMessages(code, fresh)
+      writePrepaintMessages(code, fresh)
       if (typeof document !== "undefined") {
         applyI18nDOM()
         document.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT, { detail: { code } }))

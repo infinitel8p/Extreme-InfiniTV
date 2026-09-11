@@ -21,8 +21,10 @@ const LANG_FILTER_PATTERN = /^[A-Z0-9+]{0,8}$/
 const RECENT_CAP = 30
 const SEARCH_RECENT_CAP = 10
 const PROGRESS_CAP = 200
+const TRACK_PREFS_CAP = 200
 const DAY_MS = 24 * 60 * 60 * 1000
-const COMPLETED_THRESHOLD = 0.95
+export const COMPLETED_THRESHOLD = 0.95
+export const PROGRESS_COMPLETED_THRESHOLD = COMPLETED_THRESHOLD
 const EVT_FAV_CHANGED = "xt:favorites-changed"
 const EVT_REC_CHANGED = "xt:recents-changed"
 const EVT_PROGRESS_CHANGED = "xt:progress-changed"
@@ -41,6 +43,7 @@ export const EVT_SEARCH_RECENT_CHANGED = "xt:search-recent-changed"
 export const EVT_HIDE_WATCHED_CHANGED = "xt:hide-watched-changed"
 export const EVT_LANG_FILTER_CHANGED = "xt:lang-filter-changed"
 export const EVT_GROUP_LANGS_CHANGED = "xt:group-langs-changed"
+export const TRACK_PREFS_EVENT = "xt:track-prefs-changed"
 
 let storePromise = null
 const STORE_LOAD_TIMEOUT_MS = 3000
@@ -127,17 +130,23 @@ async function readRaw() {
 // Browsers silently drop cookies over ~4KB; skip the mirror rather than write a truncated one.
 const COOKIE_MIRROR_MAX_BYTES = 3500
 
-async function writeRaw(data) {
+// Fast path: a crash right after a write still has this to read back.
+function writeLocalMirror(data) {
   const json = JSON.stringify(data)
   try {
     localStorage.setItem(STORAGE_KEY, json)
-    if (json.length <= COOKIE_MIRROR_MAX_BYTES) setCookie(STORAGE_KEY, json)
   } catch (writeError) {
-    log.error("[xt:prefs] localStorage/cookie write failed:", writeError)
+    log.error("[xt:prefs] localStorage write failed:", writeError)
     // Drop any stale copy so readRaw falls through to the plugin store below
     // instead of replaying an outdated blob on the next launch.
     try { localStorage.removeItem(STORAGE_KEY) } catch {}
   }
+}
+
+// Cookie + Tauri store round-trip the full blob, too costly per progress tick.
+async function writeDeferredMirror(data) {
+  const json = JSON.stringify(data)
+  if (json.length <= COOKIE_MIRROR_MAX_BYTES) setCookie(STORAGE_KEY, json)
   const store = await getStore()
   if (store) {
     await store.set(STORAGE_KEY, data)
@@ -206,6 +215,7 @@ function emptyEntry() {
     searchRecent: [],
     progVod: Object.create(null),
     progEpisode: Object.create(null),
+    trackPrefs: Object.create(null),
     hiddenLive: new Set(),
     hiddenVod: new Set(),
     hiddenSeries: new Set(),
@@ -250,6 +260,8 @@ function emptyEntry() {
 
 function hydrate(raw) {
   cache = new Map()
+  channelOverridesRevision++
+  progressRevision++
   if (!raw || typeof raw !== "object") return
   for (const [pid, val] of Object.entries(raw)) {
     if (!val || typeof val !== "object") continue
@@ -257,9 +269,15 @@ function hydrate(raw) {
     const langFilterRaw = val.langFilter && typeof val.langFilter === "object" ? val.langFilter : {}
     const groupLangsRaw = val.groupLangs && typeof val.groupLangs === "object" ? val.groupLangs : {}
     cache.set(pid, {
-      favLive: new Set(Array.isArray(val.favLive) ? val.favLive : []),
-      favVod: new Set(Array.isArray(val.favVod) ? val.favVod : []),
-      favSeries: new Set(Array.isArray(val.favSeries) ? val.favSeries : []),
+      favLive: new Set(
+        Array.isArray(val.favLive) ? val.favLive.map(normalizeFavoriteId) : []
+      ),
+      favVod: new Set(
+        Array.isArray(val.favVod) ? val.favVod.map(normalizeFavoriteId) : []
+      ),
+      favSeries: new Set(
+        Array.isArray(val.favSeries) ? val.favSeries.map(normalizeFavoriteId) : []
+      ),
       favMetaLive:
         val.favMetaLive && typeof val.favMetaLive === "object"
           ? { ...val.favMetaLive }
@@ -290,6 +308,10 @@ function hydrate(raw) {
       progEpisode:
         val.progEpisode && typeof val.progEpisode === "object"
           ? { ...val.progEpisode }
+          : Object.create(null),
+      trackPrefs:
+        val.trackPrefs && typeof val.trackPrefs === "object"
+          ? { ...val.trackPrefs }
           : Object.create(null),
       hiddenLive: new Set(
         Array.isArray(val.hiddenLive) ? val.hiddenLive.map(String) : []
@@ -416,6 +438,7 @@ function dehydrate() {
       searchRecent: v.searchRecent,
       progVod: v.progVod,
       progEpisode: v.progEpisode,
+      trackPrefs: v.trackPrefs,
       hiddenLive: [...v.hiddenLive],
       hiddenVod: [...v.hiddenVod],
       hiddenSeries: [...v.hiddenSeries],
@@ -477,17 +500,50 @@ function getOrCreate(playlistId) {
   return entry
 }
 
+const DEFERRED_SAVE_DEBOUNCE_MS = 15000
+
 let saveScheduled = false
+let deferredSaveTimer = null
+
 function scheduleSave() {
-  if (saveScheduled) return
-  saveScheduled = true
-  queueMicrotask(async () => {
-    saveScheduled = false
-    try {
-      await writeRaw(dehydrate())
-    } catch (saveError) {
-      log.error("[xt:prefs] failed to persist preferences:", saveError)
-    }
+  if (!saveScheduled) {
+    saveScheduled = true
+    queueMicrotask(() => {
+      saveScheduled = false
+      try {
+        writeLocalMirror(dehydrate())
+      } catch (saveError) {
+        log.error("[xt:prefs] failed to persist preferences:", saveError)
+      }
+    })
+  }
+  if (!deferredSaveTimer) {
+    deferredSaveTimer = setTimeout(flushDeferredSave, DEFERRED_SAVE_DEBOUNCE_MS)
+    // Node/test runs: a pending debounce must not keep the process alive.
+    if (typeof deferredSaveTimer?.unref === "function") deferredSaveTimer.unref()
+  }
+}
+
+async function flushDeferredSave() {
+  if (deferredSaveTimer) {
+    clearTimeout(deferredSaveTimer)
+    deferredSaveTimer = null
+  }
+  try {
+    await writeDeferredMirror(dehydrate())
+  } catch (saveError) {
+    log.error("[xt:prefs] failed to persist preferences (cookie/store):", saveError)
+  }
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && deferredSaveTimer) void flushDeferredSave()
+  })
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("pagehide", () => {
+    if (deferredSaveTimer) void flushDeferredSave()
   })
 }
 
@@ -500,6 +556,14 @@ function dispatch(name, detail) {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/** @param {number|string} id numeric strings become numbers, other ids pass through */
+function normalizeFavoriteId(id) {
+  if (typeof id !== "string") return id
+  const trimmed = id.trim()
+  if (trimmed !== "" && String(Number(trimmed)) === trimmed) return Number(trimmed)
+  return id
+}
 
 /** @param {"live"|"vod"|"series"} kind */
 function favKey(kind) {
@@ -530,47 +594,49 @@ export function getFavorites(playlistId, kind) {
   return e ? e[favKey(kind)] : new Set()
 }
 
-/** @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number} id */
+/** @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number|string} id */
 export function isFavorite(playlistId, kind, id) {
   const e = cache.get(playlistId)
-  return !!e && e[favKey(kind)].has(id)
+  return !!e && e[favKey(kind)].has(normalizeFavoriteId(id))
 }
 
 /**
- * @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number} id
+ * @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number|string} id
  * @param {{ name?: string, logo?: string|null }} [extras]
  */
 export function toggleFavorite(playlistId, kind, id, extras) {
   if (!playlistId || id == null) return false
+  const normalizedId = normalizeFavoriteId(id)
   const e = getOrCreate(playlistId)
   const set = e[favKey(kind)]
   const meta = e[favMetaKey(kind)]
   let isFav
-  if (set.has(id)) {
-    set.delete(id)
-    delete meta[String(id)]
+  if (set.has(normalizedId)) {
+    set.delete(normalizedId)
+    delete meta[String(normalizedId)]
     isFav = false
   } else {
-    set.add(id)
+    set.add(normalizedId)
     if (extras && (extras.name || extras.logo !== undefined)) {
-      meta[String(id)] = {
-        name: extras.name || meta[String(id)]?.name || "",
-        logo: extras.logo === undefined ? meta[String(id)]?.logo || null : extras.logo,
+      meta[String(normalizedId)] = {
+        name: extras.name || meta[String(normalizedId)]?.name || "",
+        logo: extras.logo === undefined ? meta[String(normalizedId)]?.logo || null : extras.logo,
       }
     }
     isFav = true
   }
   scheduleSave()
-  dispatch(EVT_FAV_CHANGED, { playlistId, kind, id, isFav })
+  dispatch(EVT_FAV_CHANGED, { playlistId, kind, id: normalizedId, isFav })
   return isFav
 }
 
 export function setFavoriteMeta(playlistId, kind, id, meta) {
   if (!playlistId || id == null) return
+  const normalizedId = normalizeFavoriteId(id)
   const e = cache.get(playlistId)
-  if (!e || !e[favKey(kind)].has(Number(id))) return
+  if (!e || !e[favKey(kind)].has(normalizedId)) return
   const bag = e[favMetaKey(kind)]
-  const k = String(id)
+  const k = String(normalizedId)
   const prev = bag[k] || {}
   const next = {
     name: meta?.name || prev.name || "",
@@ -606,7 +672,7 @@ export function getWatchlist(playlistId, kind) {
   return e ? e[key] : {}
 }
 
-/** @param {string} playlistId @param {"vod"|"series"} kind @param {number} id */
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {number|string} id */
 export function isOnWatchlist(playlistId, kind, id) {
   const key = watchKey(kind)
   if (!key) return false
@@ -617,7 +683,7 @@ export function isOnWatchlist(playlistId, kind, id) {
 /**
  * @param {string} playlistId
  * @param {"vod"|"series"} kind
- * @param {number} id
+ * @param {number|string} id
  * @param {{ name?: string, logo?: string|null }} [extras]
  * @returns {boolean} new state (true = on watchlist)
  */
@@ -750,6 +816,7 @@ export function clearRecent(playlistId, kind, id) {
 /** Clear an entry's prefs (e.g. when its playlist is removed). */
 export function clearForPlaylist(playlistId) {
   if (!playlistId) return
+  seriesWatchedMapCache.delete(playlistId)
   if (cache.delete(playlistId)) scheduleSave()
 }
 
@@ -919,6 +986,7 @@ export function setProgress(playlistId, kind, id, position, duration, extras) {
   }
   bucket[String(id)] = next
   trimBucket(bucket)
+  progressRevision++
   scheduleSave()
 
   // Only fire the event when something the UI cares about flipped: a fresh
@@ -964,6 +1032,7 @@ export function markCompleted(playlistId, kind, id, extras) {
   }
   bucket[String(id)] = next
   trimBucket(bucket)
+  progressRevision++
   scheduleSave()
   dispatch(EVT_PROGRESS_CHANGED, {
     playlistId,
@@ -989,8 +1058,94 @@ export function clearProgress(playlistId, kind, id) {
   const bucket = e[progKey(kind)]
   if (!(String(id) in bucket)) return
   delete bucket[String(id)]
+  progressRevision++
   scheduleSave()
   dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, id, removed: true })
+}
+
+// ---------------------------------------------------------------------------
+// Per-title audio/subtitle track memory
+// ---------------------------------------------------------------------------
+/**
+ * @typedef {{ audioLang: string|null, audioId: number|null, audioTitle: string|null,
+ *   subLang: string|null, subId: number|null, subTitle: string|null,
+ *   subOff: boolean, updatedAt: number }} TrackPrefsEntry
+ */
+
+const TRACK_PREFS_DEFAULTS = {
+  audioLang: null,
+  audioId: null,
+  audioTitle: null,
+  subLang: null,
+  subId: null,
+  subTitle: null,
+  subOff: false,
+}
+
+/** @param {"vod"|"episode"} kind @param {number|string} id */
+function trackPrefsKey(kind, id) {
+  return `${kind}:${id}`
+}
+
+function trackPrefsEqual(a, b) {
+  return (
+    a.audioLang === b.audioLang &&
+    a.audioId === b.audioId &&
+    a.audioTitle === b.audioTitle &&
+    a.subLang === b.subLang &&
+    a.subId === b.subId &&
+    a.subTitle === b.subTitle &&
+    a.subOff === b.subOff
+  )
+}
+
+function trimTrackPrefsBucket(bucket) {
+  const keys = Object.keys(bucket)
+  if (keys.length <= TRACK_PREFS_CAP) return
+  keys.sort((a, b) => (bucket[a].updatedAt || 0) - (bucket[b].updatedAt || 0))
+  const drop = keys.slice(0, keys.length - TRACK_PREFS_CAP)
+  for (const key of drop) delete bucket[key]
+}
+
+/**
+ * @param {string} playlistId @param {"vod"|"episode"} kind @param {number|string} id
+ * @returns {TrackPrefsEntry|null}
+ */
+export function getTrackPrefs(playlistId, kind, id) {
+  if (!playlistId || id == null) return null
+  const entry = cache.get(playlistId)
+  if (!entry) return null
+  return entry.trackPrefs[trackPrefsKey(kind, String(id))] || null
+}
+
+/**
+ * @param {string} playlistId @param {"vod"|"episode"} kind @param {number|string} id
+ * @param {Partial<TrackPrefsEntry>} patch
+ */
+export function setTrackPrefs(playlistId, kind, id, patch) {
+  if (!playlistId || id == null) return
+  const entry = getOrCreate(playlistId)
+  const bucket = entry.trackPrefs
+  const key = trackPrefsKey(kind, String(id))
+  const prev = bucket[key]
+  const merged = { ...TRACK_PREFS_DEFAULTS, ...(prev || {}), ...(patch || {}) }
+  if (prev && trackPrefsEqual(prev, merged)) return
+  bucket[key] = { ...merged, updatedAt: Date.now() }
+  trimTrackPrefsBucket(bucket)
+  scheduleSave()
+  dispatch(TRACK_PREFS_EVENT, { playlistId, kind, id })
+}
+
+/** @param {string} playlistId @param {"vod"|"episode"} kind @param {number|string} id */
+export function clearTrackPrefs(playlistId, kind, id) {
+  if (!playlistId || id == null) return
+  const entry = cache.get(playlistId)
+  if (!entry) return
+  const key = trackPrefsKey(kind, String(id))
+  if (!(key in entry.trackPrefs)) return
+  delete entry.trackPrefs[key]
+  scheduleSave()
+  dispatch(TRACK_PREFS_EVENT, { playlistId, kind, id })
 }
 
 /** @returns {Promise<number>} total items removed */
@@ -1004,17 +1159,20 @@ export async function clearViewingHistory() {
       entry.recVod.length +
       entry.recSeries.length +
       Object.keys(entry.progVod).length +
-      Object.keys(entry.progEpisode).length
+      Object.keys(entry.progEpisode).length +
+      Object.keys(entry.trackPrefs).length
     if (!count) continue
     entry.recLive = []
     entry.recVod = []
     entry.recSeries = []
     entry.progVod = Object.create(null)
     entry.progEpisode = Object.create(null)
+    entry.trackPrefs = Object.create(null)
     removed += count
     affectedPlaylistIds.push(playlistId)
   }
   if (!removed) return 0
+  progressRevision++
   scheduleSave()
   for (const playlistId of affectedPlaylistIds) {
     for (const kind of ["live", "vod", "series"]) {
@@ -1022,6 +1180,7 @@ export async function clearViewingHistory() {
     }
     for (const kind of ["vod", "episode"]) {
       dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, removed: true })
+      dispatch(TRACK_PREFS_EVENT, { playlistId, kind, removed: true })
     }
   }
   return removed
@@ -1087,8 +1246,6 @@ export function getWatchedSignals(playlistId, limit = 20) {
   return out.slice(0, Math.max(0, limit))
 }
 
-export const PROGRESS_COMPLETED_THRESHOLD = COMPLETED_THRESHOLD
-
 /**
  * Roll up per-episode progress for a series. Used by the series poster badge
  * and the "next-up" autoplay handoff.
@@ -1152,6 +1309,45 @@ export function getSeriesEpisodeProgress(playlistId, seriesId) {
   return { completedIds, hasIncompleteEpisode }
 }
 
+// Bumped on every progress/override write so getSeriesWatchedMap knows to recompute.
+let progressRevision = 0
+const seriesWatchedMapCache = new Map()
+
+export function getProgressRevision() {
+  return progressRevision
+}
+
+/**
+ * Bulk "is this series watched" lookup, memoized per progress revision.
+ * @param {string} playlistId
+ * @returns {Map<number, boolean>}
+ */
+export function getSeriesWatchedMap(playlistId) {
+  if (!playlistId) return new Map()
+  const entry = cache.get(playlistId)
+  if (!entry) return new Map()
+  const cached = seriesWatchedMapCache.get(playlistId)
+  if (cached && cached.revision === progressRevision) return cached.map
+
+  const map = new Map()
+  for (const seriesIdKey of Object.keys(entry.watchedSeriesOverride)) {
+    map.set(Number(seriesIdKey), true)
+  }
+  const completedCountBySeries = new Map()
+  const incompleteSeries = new Set()
+  for (const prog of Object.values(entry.progEpisode)) {
+    const sid = Number(prog?.seriesId)
+    if (!Number.isFinite(sid)) continue
+    if (prog.completed) completedCountBySeries.set(sid, (completedCountBySeries.get(sid) || 0) + 1)
+    else incompleteSeries.add(sid)
+  }
+  for (const sid of completedCountBySeries.keys()) {
+    if (!incompleteSeries.has(sid)) map.set(sid, true)
+  }
+  seriesWatchedMapCache.set(playlistId, { revision: progressRevision, map })
+  return map
+}
+
 /**
  * Manual "mark as watched" override for a series, independent of per-episode
  * progress. Unmarking also clears any recorded episode progress for that
@@ -1182,6 +1378,7 @@ export function setSeriesWatchedOverride(playlistId, seriesId, watched) {
     if (!hadOverride && !progressRemoved) return
   }
 
+  progressRevision++
   scheduleSave()
   dispatch(EVT_PROGRESS_CHANGED, {
     playlistId,
@@ -1469,6 +1666,13 @@ export const CHANNEL_EPG_CHANGED_EVENT = EVT_CHANNEL_EPG_CHANGED
 // channel id: M3U ids are positional, so one added provider line would shift
 // every id and land these on the wrong channels.
 
+// Bumped on every channelOv write so a memoized overlay (live-catalog.ts) knows to recompute.
+let channelOverridesRevision = 0
+
+export function getChannelOverridesRevision() {
+  return channelOverridesRevision
+}
+
 /** @param {string} playlistId */
 export function getChannelOverrides(playlistId) {
   const entry = cache.get(playlistId)
@@ -1509,6 +1713,7 @@ export function setChannelOverride(playlistId, key, patch) {
   } else {
     entry.channelOv[key] = record
   }
+  channelOverridesRevision++
   scheduleSave()
   dispatch(EVT_CHANNEL_OV_CHANGED, { playlistId, key })
 }
@@ -1539,6 +1744,7 @@ export function setChannelOverrides(playlistId, patches) {
     changed++
   }
   if (!changed) return 0
+  channelOverridesRevision++
   scheduleSave()
   dispatch(EVT_CHANNEL_OV_CHANGED, { playlistId, key: null })
   return changed
@@ -1549,6 +1755,7 @@ export function clearChannelOverride(playlistId, key) {
   const entry = cache.get(playlistId)
   if (!entry || !(key in entry.channelOv)) return
   delete entry.channelOv[key]
+  channelOverridesRevision++
   scheduleSave()
   dispatch(EVT_CHANNEL_OV_CHANGED, { playlistId, key })
 }
@@ -1558,6 +1765,7 @@ export function clearAllChannelOverrides(playlistId) {
   const entry = cache.get(playlistId)
   if (!entry || !Object.keys(entry.channelOv).length) return
   entry.channelOv = Object.create(null)
+  channelOverridesRevision++
   scheduleSave()
   dispatch(EVT_CHANNEL_OV_CHANGED, { playlistId, key: null })
 }
@@ -1834,5 +2042,7 @@ export function snapshotPrefs() {
 
 export async function restorePrefs(snapshot) {
   hydrate(snapshot && typeof snapshot === "object" ? snapshot : {})
-  await writeRaw(dehydrate())
+  const data = dehydrate()
+  writeLocalMirror(data)
+  await writeDeferredMirror(data)
 }

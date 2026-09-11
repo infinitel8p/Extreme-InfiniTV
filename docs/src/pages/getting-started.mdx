@@ -3,9 +3,14 @@ layout: ../layouts/DocsLayout.astro
 title: "Getting started"
 description: "Install Extreme InfiniTV and add your first playlist."
 lede: "Install on your platform, sign in once, and start watching."
+icon: "rocket"
+cardOrder: 0
+featured: true
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
+import Steps from "../components/Steps.astro"
 
 ## Install
 
@@ -14,7 +19,8 @@ Pick the download that matches your device. All builds come from the same source
 | Platform | Where to get it |
 |---|---|
 | Windows 10 / 11 | [Microsoft Store](https://apps.microsoft.com/detail/9NN162Z0WXSR) or [NSIS installer](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
-| Android phone / tablet / TV | [Google Play](https://play.google.com/store/apps/details?id=com.infinitel8p.xtream) or APK from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
+| Android phone / tablet | [Google Play](https://play.google.com/store/apps/details?id=com.infinitel8p.xtream) or APK from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
+| Android TV / Fire TV | Google Play on Android TV; on Fire TV or any TV without Play, sideload with the [AFTVnews Downloader](https://www.aftvnews.com/downloader/) using code `8281651` (full app with the TV browse UI, what most TV users want) or `1317634` (receiver-only kiosk that just waits for a cast). See [TV & receiver mode](./tv-and-receiver-mode/) for the difference. |
 | macOS | `.dmg` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
 | Linux | [Snap Store](https://snapcraft.io/extreme-infinitv) (`sudo snap install extreme-infinitv`), or `.AppImage` / `.deb` / `.rpm` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
 | Raspberry Pi 4 / 5 | 64-bit OS required. Same Snap install, or the arm64 `.deb` / `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
@@ -49,23 +55,27 @@ Then open the app normally. You only need to do this once per install.
   This is a one-time step until a notarized macOS build ships. The command is safe: it strips the `com.apple.quarantine` extended attribute that Gatekeeper sets on downloads, nothing more.
 </Callout>
 
-### Android TV / Fire TV
-
-On a TV that isn't on the Play Store (Fire TV included), sideload with the [AFTVnews Downloader](https://www.aftvnews.com/downloader/) app using one of these codes:
-
-- **`8281651`** - the full app, with the TV browse UI (Home, Live TV, Movies, Series, and more built for the remote). Most TV users want this one.
-- **`1317634`** - the receiver-only kiosk build. No browse UI; it just waits for a cast from your phone or desktop.
-
-See [TV & receiver mode](./tv-and-receiver-mode/) for what each build does and how they differ.
-
 ## First launch
 
-1. Open the app. You'll land on the login screen.
+<Steps>
+
+1. Open the app. You'll land on the login screen, on the **I have a subscription** tab.
+
+   <Shot
+     src="Desktop/login-xtream"
+     alt="The add-playlist screen with the Server URL, Username and Password fields highlighted"
+     caption="Add playlist, with the Xtream tab selected."
+     zoom="#playlist-form"
+     markers={[{ at: "#serverUrl" }, { at: "#username" }, { at: "#password" }]}
+   />
+
 2. Paste your **Server URL**. Include the port if your provider gave you one.
-3. Fill in **Username** and **Password** if your provider gave you separate credentials. If they only gave you a single M3U URL, leave these blank.
+3. Fill in **Username** and **Password**. If your provider only sent a single M3U URL, paste that into Server URL instead and leave these two blank - the app switches tabs on its own.
 4. The app connects, loads your channels, and takes you to the home screen.
 
-You only need to sign in once. The app remembers your details for next time.
+</Steps>
+
+Everything else on that screen is optional. You only need to sign in once; the app remembers your details for next time.
 
 <Callout type="tip">
   No provider yet? The login screen offers a **Demo (iptv-org)** playlist - a free public playlist you can use to explore the app and remove any time. More on setting up Xtream credentials, M3U URLs, and multiple playlists in [Playlists (Xtream + M3U)](./playlists/).
@@ -73,10 +83,21 @@ You only need to sign in once. The app remembers your details for next time.
 
 ## What's on the home screen
 
-- **Live TV / Movies / Series** - three big tiles that take you to your channel list (with categories and now / next), and the movie and series poster grids.
-- **Content strips** below the tiles: by default **Continue watching**, **Favorites**, **Watchlist**, **Because you watched**, and **Recently added**. You choose which strips show and in what order under **Settings > Appearance > Home page sections**.
-- **Because you watched** matches titles against the rest of your library right on your device - no account or API key needed. Turn on [TMDB metadata](./tmdb-metadata/) for richer detail pages with cast, director, and similar titles.
-- **Sidebar** on desktop, or a **bottom tab bar** on phones, for jumping between Live TV, Movies, Series, Favorites, Watchlist, Downloads, Search, EPG, and Settings. On wider screens, collapse the sidebar to icons-only with the button at its top to free up space.
+The home screen is your starting point: a banner to resume, three tiles into your content, and strips of what's worth watching next.
+
+<Shot
+  src="Desktop/home-tour"
+  alt="The home screen: rotating banner at the top, three tiles for Live TV, Movies and Series, content strips below, sidebar on the left"
+  caption="The home screen on desktop; on phones the sidebar becomes a bottom tab bar."
+  markers={[
+    { at: "#hub-marquee", note: "Rotating banner. Resume or Watch starts it; the dots step through the rest." },
+    { at: "#hub-tiles", note: "Live TV, Movies and Series." },
+    { at: "#hub-strips", note: "Continue watching, Favorites, Watchlist, Because you watched, Recently added. Pick and reorder them under Settings > Appearance > Home page sections." },
+    { at: "#sidebar-collapse-toggle", note: "Collapse the sidebar to icons on wide screens." },
+  ]}
+/>
+
+Because you watched matches titles against your own library on the device, no account needed, and [TMDB metadata](./tmdb-metadata/) adds cast, director and similar titles to detail pages.
 
 ## Finding something to watch
 
@@ -84,6 +105,8 @@ You only need to sign in once. The app remembers your details for next time.
 - **Surprise me** - the dice button on the Movies and Series pages picks a random title for you, with optional filters for year and "not watched yet". Roll again if it's not what you're after.
 - **Hide watched** - the view menu on the Movies and Series grids can hide anything you've already finished.
 - **Recent searches** - open search with <kbd>Ctrl</kbd> <kbd>K</kbd> and your last few searches show up before you type anything, so you can jump back in or clear them.
+
+<Shot src="Desktop/search" alt="The search page with results grouped by channels, movies and series" caption="Search (Ctrl+K) looks across channels, movies, series and people at once." />
 
 ## Next steps
 

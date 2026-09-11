@@ -151,3 +151,14 @@ export function blendTowardSlate(color: OklchColor, amount: number): OklchColor 
     h: color.h,
   }
 }
+
+export const POSTER_TINT_DARK_LIGHTNESS: [number, number] = [0.3, 0.4]
+export const POSTER_TINT_LIGHT_LIGHTNESS: [number, number] = [0.8, 0.88]
+export const POSTER_TINT_MAX_CHROMA = 0.06
+
+/** `light-dark()` poster-skeleton tint, muted enough to read as background in both themes. */
+export function posterTintCss(rgb: RgbColor): string {
+  const lightVariant = toAmbient(rgb, { lightness: POSTER_TINT_LIGHT_LIGHTNESS, maxChroma: POSTER_TINT_MAX_CHROMA })
+  const darkVariant = toAmbient(rgb, { lightness: POSTER_TINT_DARK_LIGHTNESS, maxChroma: POSTER_TINT_MAX_CHROMA })
+  return `light-dark(${ambientCss(lightVariant)}, ${ambientCss(darkVariant)})`
+}

@@ -30,6 +30,13 @@
   import { searchPeople } from "@/scripts/lib/person-search.ts"
   import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
   import { isTvDevice } from "@/scripts/lib/tv-detect"
+  import { buildEntryCard } from "@/scripts/lib/entry-card.ts"
+  import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
+  import {
+    getSearchView,
+    setSearchView,
+    SEARCH_VIEW_EVENT,
+  } from "@/scripts/lib/app-settings.js"
 
   /** @type {{ focusOnMount?: boolean }} */
   let { focusOnMount = false } = $props()
@@ -62,6 +69,16 @@
   let kindFilter = $state("all")
   /** @type {Array<"all"|"live"|"vod"|"series"|"actors"|"epg">} */
   const kindOptions = ["all", "live", "vod", "series", "actors", "epg"]
+  /** @type {"cards"|"list"} */
+  let viewMode = $state(getSearchView())
+  const cardsMode = $derived(viewMode === "cards")
+  const viewModes = ["cards", "list"]
+  // Matches the /movies and /series grid tracks.
+  const GRID_CLASS =
+    "grid gap-3 sm:gap-4 auto-rows-min content-start p-2 " +
+    "grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] " +
+    "sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] " +
+    "lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]"
   let query = $state(initialFromUrl)
   let queryDebounced = $state(initialFromUrl)
   let _queryTimer = null
@@ -84,10 +101,14 @@
   let _personSearchToken = 0
 
   let activeIndex = $state(0)
+  // Left/Right move cards only after stepping out of the query box.
+  let navigatingResults = false
   /** @type {Array<{text: string, ts: number}>} */
   let recentSearches = $state([])
   /** @type {HTMLElement|null} */
   let recentSectionEl = null
+  /** @type {HTMLElement|null} */
+  let resultsEl = null
 
   /** @type {Array<{ kind: "live"|"vod"|"series"|"epg", id: string|number, name: string, logo: string|null, subtitle: string, href: string, norm: string }>} */
   let allItems = $state([])
@@ -194,6 +215,9 @@
           id: Number(movie.id),
           name: movie.name || "",
           logo: movie.logo || null,
+          rating: movie.rating || "",
+          year: movie.year || "",
+          category: movie.category || "",
           subtitle: movie.year ? `Movie · ${movie.year}` : "Movie",
           href: buildHref("vod", movie.id),
           norm: movie.norm || normalize(`${movie.name || ""} ${movie.category || ""}`),
@@ -205,7 +229,9 @@
           id: Number(series.id),
           name: series.name || "",
           logo: series.logo || null,
+          rating: series.rating || "",
           year: series.year || "",
+          category: series.category || "",
           genre: series.category || "",
           subtitle: series.year ? `Series · ${series.year}` : "Series",
           href: buildHref("series", series.id),
@@ -465,6 +491,84 @@
 
   let kindCounts = $derived({ ...scoredAll.counts, actors: actorResults.length })
 
+  function isCardable(result) {
+    return result.kind === "vod" || result.kind === "series" || result.kind === "person"
+  }
+
+  // Runs keep ranking order across the cards/rows split.
+  let resultRuns = $derived.by(() => {
+    const runs = []
+    for (let idx = 0; idx < results.length; idx++) {
+      const result = results[idx]
+      const layout = !cardsMode || !isCardable(result)
+        ? "rows"
+        : result.kind === "person"
+          ? "actors"
+          : "cards"
+      const last = runs[runs.length - 1]
+      if (last && last.layout === layout) last.entries.push({ result, idx })
+      else runs.push({ layout, entries: [{ result, idx }] })
+    }
+    return runs
+  })
+
+  function cardMeta(result) {
+    void locale
+    if (result.kind === "person") return result.knownFor || t("search.actorGeneric")
+    return displaySubtitle(result)
+  }
+
+  function setViewMode(mode) {
+    if (viewMode === mode) return
+    viewMode = mode
+    setSearchView(mode)
+  }
+
+  // Rebuilds on identity change only; a late season count just patches the meta.
+  function searchCard(node, params) {
+    let card = null
+    let key = ""
+    let current = params
+    const activate = () => (activeIndex = current.idx)
+    node.addEventListener("mouseenter", activate)
+    node.addEventListener("focusin", activate)
+    node.addEventListener("click", commitSearch)
+    function render(next) {
+      const nextKey = `${next.playlistId}|${next.locale}|${next.result.kind}:${next.result.id}`
+      if (card && nextKey === key) {
+        const meta = card.querySelector('[data-role="meta"]')
+        if (meta) meta.textContent = cardMeta(next.result)
+        return
+      }
+      key = nextKey
+      card?.remove()
+      card = buildEntryCard({
+        entry: next.result,
+        idx: next.idx,
+        kind: next.result.kind,
+        activePlaylistId: next.playlistId,
+        detailHref: (entry) => entry.href,
+        fallbackTitle: (entry) => entry.name || String(entry.id),
+        metaText: (entry) => cardMeta(entry),
+      })
+      node.appendChild(card)
+    }
+    render(current)
+    return {
+      update(next) {
+        current = next
+        render(next)
+      },
+      destroy() {
+        node.removeEventListener("mouseenter", activate)
+        node.removeEventListener("focusin", activate)
+        node.removeEventListener("click", commitSearch)
+        card?.remove()
+        card = null
+      },
+    }
+  }
+
   $effect(() => {
     void results
     if (activeIndex >= results.length) activeIndex = 0
@@ -503,6 +607,37 @@
     inputEl?.focus()
   }
 
+  function scrollActiveIntoView() {
+    tick().then(() => {
+      resultsEl
+        ?.querySelector(`[data-result-index="${activeIndex}"]`)
+        ?.scrollIntoView({ block: "nearest" })
+    })
+  }
+
+  // auto-fill column count is only knowable from the rendered grid.
+  function activeGridColumns() {
+    const grid = resultsEl
+      ?.querySelector(`[data-result-index="${activeIndex}"]`)
+      ?.closest("[data-result-grid]")
+    if (!grid) return 0
+    const columns = getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length
+    return columns > 0 ? columns : 1
+  }
+
+  function stepActive(delta) {
+    if (!results.length) return
+    const next = activeIndex + delta
+    activeIndex = next < 0 ? 0 : next >= results.length ? results.length - 1 : next
+    scrollActiveIntoView()
+  }
+
+  function wrapActive(delta) {
+    if (!results.length) return
+    activeIndex = (activeIndex + delta + results.length) % results.length
+    scrollActiveIntoView()
+  }
+
   function navigate(item) {
     if (!item) return
     if (item.kind === "person") {
@@ -528,15 +663,24 @@
       ev.preventDefault()
       ev.stopImmediatePropagation()
       recentSectionEl?.querySelector(".recent-search-row")?.focus()
-    } else if (onInput && ev.key === "ArrowDown") {
+    } else if (onInput && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) {
       ev.preventDefault()
       ev.stopImmediatePropagation()
-      if (results.length) activeIndex = (activeIndex + 1) % results.length
-    } else if (onInput && ev.key === "ArrowUp") {
+      navigatingResults = true
+      const columns = activeGridColumns()
+      const step = ev.key === "ArrowDown" ? 1 : -1
+      if (columns) stepActive(step * columns)
+      else wrapActive(step)
+    } else if (
+      onInput &&
+      cardsMode &&
+      navigatingResults &&
+      (ev.key === "ArrowRight" || ev.key === "ArrowLeft")
+    ) {
+      if (!activeGridColumns()) return
       ev.preventDefault()
       ev.stopImmediatePropagation()
-      if (results.length)
-        activeIndex = (activeIndex - 1 + results.length) % results.length
+      stepActive(ev.key === "ArrowRight" ? 1 : -1)
     } else if (ev.key === "Enter" && onInput) {
       ev.preventDefault()
       ev.stopImmediatePropagation()
@@ -565,6 +709,7 @@
       loadIndex({ warm: false, warmEpg: false })
     }
     const onLocale = () => { locale++ }
+    const onSearchView = () => { viewMode = getSearchView() }
     const onActiveChanged = () =>
       loadIndex().then(() => {
         if (personMode) resolvePersonMode()
@@ -576,6 +721,7 @@
     document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
     document.addEventListener("xt:active-changed", onActiveChanged)
     document.addEventListener(LOCALE_EVENT, onLocale)
+    document.addEventListener(SEARCH_VIEW_EVENT, onSearchView)
     document.addEventListener(EVT_SEARCH_RECENT_CHANGED, onSearchRecentChanged)
     window.addEventListener("keydown", onKey, true)
     if (focusOnMount) {
@@ -589,6 +735,7 @@
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.removeEventListener("xt:active-changed", onActiveChanged)
       document.removeEventListener(LOCALE_EVENT, onLocale)
+      document.removeEventListener(SEARCH_VIEW_EVENT, onSearchView)
       document.removeEventListener(EVT_SEARCH_RECENT_CHANGED, onSearchRecentChanged)
       window.removeEventListener("keydown", onKey, true)
       if (_queryTimer) clearTimeout(_queryTimer)
@@ -621,6 +768,7 @@
         oninput={(ev) => {
           const value = ev.currentTarget.value
           if (personMode) exitPersonMode()
+          navigatingResults = false
           query = value
           setQueryDebounced(value)
           scheduleActorSearch(value)
@@ -652,35 +800,65 @@
       {/if}
     </div>
 
-    <div class="flex items-center gap-1 overflow-x-auto custom-scroll -mx-1 px-1">
-      {#each kindOptions as kindOption}
-        <button
-          type="button"
-          onclick={() => (kindFilter = kindOption)}
-          aria-pressed={kindFilter === kindOption}
-          class="filter-chip rounded-lg px-3 py-1.5 text-sm whitespace-nowrap transition-colors outline-none border"
-          class:bg-accent-soft={kindFilter === kindOption}
-          class:text-accent={kindFilter === kindOption}
-          class:border-accent={kindFilter === kindOption}
-          class:text-fg-2={kindFilter !== kindOption}
-          class:border-line={kindFilter !== kindOption}
-          class:hover:bg-surface-2={kindFilter !== kindOption}>
-          {kindOption === "all"
-            ? tr("common.all")
-            : kindOption === "vod"
-            ? tr("nav.movies")
-            : kindOption === "live"
-            ? tr("nav.livetv")
-            : kindOption === "epg"
-            ? tr("nav.epg")
-            : kindOption === "actors"
-            ? tr("search.actors")
-            : tr("nav.series")}
-          {#if queryDebounced.trim()}
-            <span class="ml-1.5 text-2xs tabular-nums opacity-70">{kindCounts[kindOption]}</span>
-          {/if}
-        </button>
-      {/each}
+    <div class="flex items-center gap-2">
+      <div class="flex flex-1 min-w-0 items-center gap-1 overflow-x-auto custom-scroll -mx-1 px-1">
+        {#each kindOptions as kindOption}
+          <button
+            type="button"
+            onclick={() => (kindFilter = kindOption)}
+            aria-pressed={kindFilter === kindOption}
+            class="filter-chip rounded-lg px-3 py-1.5 text-sm whitespace-nowrap transition-colors outline-none border"
+            class:bg-accent-soft={kindFilter === kindOption}
+            class:text-accent={kindFilter === kindOption}
+            class:border-accent={kindFilter === kindOption}
+            class:text-fg-2={kindFilter !== kindOption}
+            class:border-line={kindFilter !== kindOption}
+            class:hover:bg-surface-2={kindFilter !== kindOption}>
+            {kindOption === "all"
+              ? tr("common.all")
+              : kindOption === "vod"
+              ? tr("nav.movies")
+              : kindOption === "live"
+              ? tr("nav.livetv")
+              : kindOption === "epg"
+              ? tr("nav.epg")
+              : kindOption === "actors"
+              ? tr("search.actors")
+              : tr("nav.series")}
+            {#if queryDebounced.trim()}
+              <span class="ml-1.5 text-2xs tabular-nums opacity-70">{kindCounts[kindOption]}</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+
+      <div role="group" aria-label={tr("search.viewToggle")} class="view-toggle shrink-0 flex items-center gap-0.5 p-0.5 rounded-lg border border-line bg-surface">
+        {#each viewModes as mode (mode)}
+          {@const label = mode === "cards" ? tr("search.viewCards") : tr("search.viewList")}
+          <button
+            type="button"
+            onclick={() => setViewMode(mode)}
+            aria-pressed={viewMode === mode}
+            aria-label={label}
+            title={label}
+            class="size-8 inline-flex items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent"
+            class:bg-accent-soft={viewMode === mode}
+            class:text-accent={viewMode === mode}
+            class:text-fg-3={viewMode !== mode}
+            class:hover:text-fg={viewMode !== mode}
+            class:hover:bg-surface-2={viewMode !== mode}>
+            {#if mode === "cards"}
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1.05rem" height="1.05rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+              </svg>
+            {:else}
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1.05rem" height="1.05rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3.5 6h.01"/><path d="M3.5 12h.01"/><path d="M3.5 18h.01"/>
+              </svg>
+            {/if}
+          </button>
+        {/each}
+      </div>
     </div>
   </div>
 
@@ -694,7 +872,7 @@
     <div class="text-2xs">{hint}</div>
   {/snippet}
 
-  <div class="flex-1 min-h-0 overflow-auto custom-scroll">
+  <div bind:this={resultsEl} class="flex-1 min-h-0 overflow-auto custom-scroll">
     {#if !personMode && !queryDebounced.trim()}
       {#if showRecentSearches}
         <div bind:this={recentSectionEl} class="recent-searches pt-3 pb-2">
@@ -740,17 +918,28 @@
         {/if}
       </div>
     {:else if personMode && personTitleIds === null}
-      <ul class="flex flex-col gap-1 pt-3 pb-4" aria-hidden="true">
-        {#each Array.from({ length: 6 }) as _, i (i)}
-          <li class="flex items-center gap-3 px-2.5 py-2">
-            <span class="size-12 shrink-0 rounded-full skel" style:--skel-delay={i * 90 + "ms"}></span>
-            <span class="flex-1 min-w-0 flex flex-col gap-1.5">
-              <span class="h-3 rounded skel" style:width={60 + ((i * 7) % 30) + "%"} style:--skel-delay={i * 90 + 70 + "ms"}></span>
-              <span class="h-2.5 rounded skel" style:width={30 + ((i * 5) % 25) + "%"} style:--skel-delay={i * 90 + 140 + "ms"}></span>
-            </span>
-          </li>
-        {/each}
-      </ul>
+      {#if cardsMode}
+        <ul class={GRID_CLASS} aria-hidden="true">
+          {#each Array.from({ length: 12 }) as _, i (i)}
+            <li>
+              <span class="block aspect-[2/3] rounded-xl skel" style:--skel-delay={i * 60 + "ms"}></span>
+              <span class="mt-2 block h-3 rounded skel" style:width={55 + ((i * 7) % 35) + "%"} style:--skel-delay={i * 60 + 70 + "ms"}></span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <ul class="flex flex-col gap-1 pt-3 pb-4" aria-hidden="true">
+          {#each Array.from({ length: 6 }) as _, i (i)}
+            <li class="flex items-center gap-3 px-2.5 py-2">
+              <span class="size-12 shrink-0 rounded-full skel" style:--skel-delay={i * 90 + "ms"}></span>
+              <span class="flex-1 min-w-0 flex flex-col gap-1.5">
+                <span class="h-3 rounded skel" style:width={60 + ((i * 7) % 30) + "%"} style:--skel-delay={i * 90 + 70 + "ms"}></span>
+                <span class="h-2.5 rounded skel" style:width={30 + ((i * 5) % 25) + "%"} style:--skel-delay={i * 90 + 140 + "ms"}></span>
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     {:else if !results.length}
       <div class="px-4 py-12 text-center text-sm text-fg-3 max-w-md mx-auto">
         {#if personMode}
@@ -770,91 +959,172 @@
         {/if}
       </div>
     {:else}
-      <ul class="flex flex-col gap-1 pb-4">
-        {#each results as result, idx (result.kind + ":" + result.id)}
-          {#if !personMode && result.kind === "person" && idx === 0}
-            <li class="px-2.5 pt-1 pb-1.5">
-              <span class="text-eyebrow font-medium uppercase tracking-wide text-fg-3">{tr("search.actors")}</span>
-            </li>
+      {#snippet resultRow(result, idx)}
+        <li class="result-row" data-result-index={idx} style:--enter-delay={Math.min(idx, 12) * 18 + "ms"}>
+          {#if result.kind === "person"}
+            <button
+              type="button"
+              onmouseenter={() => (activeIndex = idx)}
+              onfocus={() => (activeIndex = idx)}
+              onclick={() => enterPersonMode(result.candidate)}
+              class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
+              class:bg-surface-2={activeIndex === idx}>
+              <span class="size-12 shrink-0 rounded-full bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center text-2xs font-medium uppercase text-fg-3">
+                {#if result.profileUrl}
+                  <img
+                    use:cachedImg={{ url: result.profileUrl, kind: "poster" }}
+                    alt=""
+                    loading="lazy" fetchpriority="low"
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                    width="48" height="48"
+                    class="h-full w-full object-cover" />
+                {:else}
+                  {personInitials(result.name)}
+                {/if}
+              </span>
+              <span class="flex-1 min-w-0">
+                <span class="block truncate text-sm text-fg">{result.name}</span>
+                <span class="block truncate text-2xs text-fg-3">{result.knownFor || tr("search.actorGeneric")}</span>
+              </span>
+              <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
+                {tr("search.actorGeneric")}
+              </span>
+            </button>
+          {:else}
+            <a
+              href={result.href}
+              use:lazySeasons={result}
+              onmouseenter={() => (activeIndex = idx)}
+              onfocus={() => (activeIndex = idx)}
+              onclick={commitSearch}
+              class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
+              class:bg-surface-2={activeIndex === idx}>
+              <span class="size-12 shrink-0 rounded-md bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center">
+                {#if result.logo}
+                  <img
+                    use:cachedImg={{ url: result.logo, kind: result.kind === "live" ? "logo" : "poster" }}
+                    alt=""
+                    loading="lazy" fetchpriority="low"
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                    width="48" height="48"
+                    class="h-full w-full"
+                    class:object-cover={result.kind !== "live"}
+                    class:object-contain={result.kind === "live"} />
+                {:else}
+                  <span class="text-2xs text-fg-3 uppercase">{kl(result.kind)[0]}</span>
+                {/if}
+              </span>
+              <span class="flex-1 min-w-0">
+                <span class="block truncate text-sm text-fg">{result.name}</span>
+                <span class="block truncate text-2xs text-fg-3">{displaySubtitle(result)}</span>
+              </span>
+              <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
+                {kl(result.kind)}
+              </span>
+            </a>
           {/if}
-          <li class="result-row" style:--enter-delay={Math.min(idx, 12) * 18 + "ms"}>
-            {#if result.kind === "person"}
-              <button
-                type="button"
-                onmouseenter={() => (activeIndex = idx)}
-                onfocus={() => (activeIndex = idx)}
-                onclick={() => enterPersonMode(result.candidate)}
-                class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
-                class:bg-surface-2={activeIndex === idx}>
-                <span class="size-12 shrink-0 rounded-full bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center text-2xs font-medium uppercase text-fg-3">
-                  {#if result.profileUrl}
-                    <img
-                      use:cachedImg={{ url: result.profileUrl, kind: "poster" }}
-                      alt=""
-                      loading="lazy" fetchpriority="low"
-                      decoding="async"
-                      referrerpolicy="no-referrer"
-                      width="48" height="48"
-                      class="h-full w-full object-cover" />
-                  {:else}
-                    {personInitials(result.name)}
-                  {/if}
-                </span>
-                <span class="flex-1 min-w-0">
-                  <span class="block truncate text-sm text-fg">{result.name}</span>
-                  <span class="block truncate text-2xs text-fg-3">{result.knownFor || tr("search.actorGeneric")}</span>
-                </span>
-                <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
-                  {tr("search.actorGeneric")}
-                </span>
-              </button>
-            {:else}
-              <a
-                href={result.href}
-                use:lazySeasons={result}
-                onmouseenter={() => (activeIndex = idx)}
-                onfocus={() => (activeIndex = idx)}
-                onclick={commitSearch}
-                class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
-                class:bg-surface-2={activeIndex === idx}>
-                <span class="size-12 shrink-0 rounded-md bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center">
-                  {#if result.logo}
-                    <img
-                      use:cachedImg={{ url: result.logo, kind: result.kind === "live" ? "logo" : "poster" }}
-                      alt=""
-                      loading="lazy" fetchpriority="low"
-                      decoding="async"
-                      referrerpolicy="no-referrer"
-                      width="48" height="48"
-                      class="h-full w-full"
-                      class:object-cover={result.kind !== "live"}
-                      class:object-contain={result.kind === "live"} />
-                  {:else}
-                    <span class="text-2xs text-fg-3 uppercase">{kl(result.kind)[0]}</span>
-                  {/if}
-                </span>
-                <span class="flex-1 min-w-0">
-                  <span class="block truncate text-sm text-fg">{result.name}</span>
-                  <span class="block truncate text-2xs text-fg-3">{displaySubtitle(result)}</span>
-                </span>
-                <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
-                  {kl(result.kind)}
-                </span>
-              </a>
-            {/if}
-          </li>
+        </li>
+      {/snippet}
+
+      <div class="pb-4">
+        {#each resultRuns as run (run.layout + ":" + run.entries[0].idx)}
+          {#if run.layout === "rows"}
+            <ul class="flex flex-col gap-1">
+              {#each run.entries as entry (entry.result.kind + ":" + entry.result.id)}
+                {#if !personMode && entry.result.kind === "person" && entry.idx === 0}
+                  <li class="px-2.5 pt-1 pb-1.5">
+                    <span class="text-eyebrow font-medium uppercase tracking-wide text-fg-3">{tr("search.actors")}</span>
+                  </li>
+                {/if}
+                {@render resultRow(entry.result, entry.idx)}
+              {/each}
+            </ul>
+          {:else if run.layout === "actors"}
+            <div class="px-2.5 pt-1 pb-1.5">
+              <span class="text-eyebrow font-medium uppercase tracking-wide text-fg-3">{tr("search.actors")}</span>
+            </div>
+            <ul data-result-grid="1" class={GRID_CLASS}>
+              {#each run.entries as entry (entry.result.kind + ":" + entry.result.id)}
+                <li
+                  data-result-index={entry.idx}
+                  class="rounded-xl"
+                  class:result-active={activeIndex === entry.idx}>
+                  <button
+                    type="button"
+                    onmouseenter={() => (activeIndex = entry.idx)}
+                    onfocus={() => (activeIndex = entry.idx)}
+                    onclick={() => enterPersonMode(entry.result.candidate)}
+                    class="person-card group relative block w-full text-left rounded-xl overflow-hidden bg-surface-2 ring-1 ring-line outline-none
+                           transition-[transform,box-shadow] duration-150
+                           hover:ring-accent hover:[transform:translateY(-2px)]
+                           focus-visible:ring-accent focus-visible:[transform:translateY(-2px)]">
+                    <span class="aspect-[2/3] w-full block bg-surface-2 overflow-hidden relative">
+                      {#if entry.result.profileUrl}
+                        <img
+                          use:cachedImg={{ url: entry.result.profileUrl, kind: "poster" }}
+                          alt=""
+                          loading="lazy" fetchpriority="low"
+                          decoding="async"
+                          referrerpolicy="no-referrer"
+                          width="200" height="300"
+                          class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
+                      {:else}
+                        <span class="absolute inset-0 flex items-center justify-center text-xl font-medium text-fg-3">
+                          {personInitials(entry.result.name)}
+                        </span>
+                      {/if}
+                    </span>
+                    <span class="block px-2 py-2 min-w-0">
+                      <span class="block truncate text-sm font-medium text-fg">{entry.result.name}</span>
+                      <span class="block truncate text-2xs text-fg-3">{entry.result.knownFor || tr("search.actorGeneric")}</span>
+                    </span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <ul data-result-grid="1" class={GRID_CLASS}>
+              {#each run.entries as entry (entry.result.kind + ":" + entry.result.id)}
+                <li
+                  data-result-index={entry.idx}
+                  class="rounded-xl"
+                  class:result-active={activeIndex === entry.idx}
+                  use:lazySeasons={entry.result}
+                  use:hubCardMenu={{
+                    kind: entry.result.kind,
+                    id: entry.result.id,
+                    name: entry.result.name,
+                    logo: entry.result.logo,
+                    playlistId: activePlaylistId,
+                  }}
+                  use:searchCard={{
+                    result: entry.result,
+                    idx: entry.idx,
+                    playlistId: activePlaylistId,
+                    locale,
+                    seasonCount: seasonCounts[entry.result.id],
+                  }}></li>
+              {/each}
+            </ul>
+          {/if}
         {/each}
         {#if scoredAll.items.length >= 500}
-          <li class="px-3 py-3 text-center text-2xs text-fg-3 italic">
+          <p class="px-3 py-3 text-center text-2xs text-fg-3 italic">
             {tr("search.showingTop", { n: results.length })}
-          </li>
+          </p>
         {/if}
-      </ul>
+      </div>
     {/if}
   </div>
 </section>
 
 <style>
+  .result-active {
+    box-shadow: 0 0 0 2px var(--color-accent);
+  }
+
   .result-row {
     animation: result-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
     animation-delay: var(--enter-delay, 0ms);

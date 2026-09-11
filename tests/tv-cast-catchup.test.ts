@@ -19,6 +19,11 @@ vi.mock("@/scripts/lib/toast.js", () => ({
   toast: (...args: unknown[]) => toastMock(...args),
 }))
 
+const getPlaylistDnsOverrideMock = vi.fn()
+vi.mock("@/scripts/lib/creds.js", () => ({
+  getPlaylistDnsOverride: (...args: unknown[]) => getPlaylistDnsOverrideMock(...args),
+}))
+
 import {
   catchupMimeForKindHint,
   computeCatchupTimeline,
@@ -63,6 +68,7 @@ beforeEach(() => {
   memoryLocalStorage.clear()
   memorySessionStorage.clear()
   providerFetchMock.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) })
+  getPlaylistDnsOverrideMock.mockResolvedValue(null)
 })
 
 afterEach(() => {
@@ -325,6 +331,7 @@ describe("resolveCatchupCastDescriptor", () => {
       isLive: false,
       title: "News at Noon",
       logo: "https://provider.example/logo.png",
+      dns: null,
       durationSeconds: 30 * 60,
       timelineOffsetSeconds: 0,
     })

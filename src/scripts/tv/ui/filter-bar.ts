@@ -1,11 +1,16 @@
 // TV filter chip row (category / sort / hide-watched / search) shared by the movies and series grid views.
 
 import { debounce } from "@/scripts/lib/debounce.ts"
-import { registerFocusSection } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
+import { createVirtualRows, type VirtualRowsHandle } from "@/scripts/tv/ui/virtual-rows"
 import { ICON_CHEVRON_DOWN, ICON_CHECK, ICON_SEARCH } from "@/scripts/lib/icons"
 
 const QUERY_DEBOUNCE_MS = 150
+// Above this count the option list mounts only the rows near the focused one - a 2000-category
+// playlist would otherwise build 2000 buttons up front just to open the dialog.
+const OPTIONS_VIRTUALIZE_THRESHOLD = 60
+const OPTIONS_ROW_HEIGHT_PX = 44
 
 const CHIP_BASE_CLASS =
   "flex min-h-10 items-center gap-2 rounded-full px-4 text-sm font-medium outline-none tv-focus-inset"
@@ -46,6 +51,11 @@ export interface FilterBarHandle {
 }
 
 let optionsDialog: HTMLDialogElement | null = null
+// Reused across every open() call so keepFocusedInView's captured track reference (read once,
+// at first registration) never goes stale.
+let virtualTrack: HTMLElement | null = null
+let virtualTrackKeepInViewRegistered = false
+let optionsVirtualRows: VirtualRowsHandle<FilterOption> | null = null
 
 function ensureOptionsDialog(): HTMLDialogElement {
   if (optionsDialog?.isConnected) return optionsDialog
@@ -72,55 +82,102 @@ export interface OpenOptionsDialogParams {
   onSelect(value: string): void
 }
 
+function buildOptionRow(
+  option: FilterOption,
+  selectedValue: string,
+  onSelect: (value: string) => void,
+  dialog: HTMLDialogElement
+): HTMLElement {
+  const isSelected = option.value === selectedValue
+  const row = document.createElement("button")
+  row.type = "button"
+  row.dataset.focusKey = `tv-filter-option:${option.value}`
+  row.className =
+    "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-sm outline-none " +
+    "hover:bg-surface-2 tv-focus-inset " +
+    (isSelected ? "text-accent" : "text-fg")
+
+  const left = document.createElement("span")
+  left.className = "truncate"
+  left.textContent = option.label
+  row.appendChild(left)
+
+  const right = document.createElement("span")
+  right.className = "flex shrink-0 items-center gap-2"
+  if (option.count != null) {
+    const count = document.createElement("span")
+    count.className = "text-xs text-fg-3 tabular-nums"
+    count.textContent = String(option.count)
+    right.appendChild(count)
+  }
+  if (isSelected) {
+    const check = document.createElement("span")
+    check.className = "text-accent"
+    check.innerHTML = ICON_CHECK
+    right.appendChild(check)
+    row.dataset.tvAutofocus = ""
+  }
+  row.appendChild(right)
+
+  row.addEventListener("click", () => {
+    onSelect(option.value)
+    dialog.close()
+  })
+  return row
+}
+
+// Lazily creates the persistent virtualized-list track and registers its scroll-into-view
+// behavior exactly once: keepFocusedInView reads `scroller.firstElementChild` at call time,
+// so the same track node must keep being reinstalled as that first child on every later open.
+function ensureVirtualTrack(listEl: HTMLElement): HTMLElement {
+  if (!virtualTrack) {
+    virtualTrack = document.createElement("div")
+    virtualTrack.className = "relative"
+  }
+  if (listEl.firstElementChild !== virtualTrack) listEl.replaceChildren(virtualTrack)
+  if (!virtualTrackKeepInViewRegistered) {
+    keepFocusedInView(listEl, "y", 0)
+    virtualTrackKeepInViewRegistered = true
+  }
+  return virtualTrack
+}
+
 /** Shared TV-sized list dialog for the category / sort chips. */
 export function openTvOptionsDialog(params: OpenOptionsDialogParams): void {
   const dialog = ensureOptionsDialog()
   const titleEl = dialog.querySelector<HTMLElement>("#tv-filter-options-title")
   const listEl = dialog.querySelector<HTMLElement>("#tv-filter-options-list")
   if (titleEl) titleEl.textContent = params.title
+
+  optionsVirtualRows?.destroy()
+  optionsVirtualRows = null
+
   if (listEl) {
-    listEl.replaceChildren()
-    for (const option of params.options) {
-      const isSelected = option.value === params.selectedValue
-      const row = document.createElement("button")
-      row.type = "button"
-      row.dataset.focusKey = `tv-filter-option:${option.value}`
-      row.className =
-        "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-sm outline-none " +
-        "hover:bg-surface-2 tv-focus-inset " +
-        (isSelected ? "text-accent" : "text-fg")
-
-      const left = document.createElement("span")
-      left.className = "truncate"
-      left.textContent = option.label
-      row.appendChild(left)
-
-      const right = document.createElement("span")
-      right.className = "flex shrink-0 items-center gap-2"
-      if (option.count != null) {
-        const count = document.createElement("span")
-        count.className = "text-xs text-fg-3 tabular-nums"
-        count.textContent = String(option.count)
-        right.appendChild(count)
-      }
-      if (isSelected) {
-        const check = document.createElement("span")
-        check.className = "text-accent"
-        check.innerHTML = ICON_CHECK
-        right.appendChild(check)
-        row.dataset.tvAutofocus = ""
-      }
-      row.appendChild(right)
-
-      row.addEventListener("click", () => {
-        params.onSelect(option.value)
-        dialog.close()
+    if (params.options.length > OPTIONS_VIRTUALIZE_THRESHOLD) {
+      const track = ensureVirtualTrack(listEl)
+      const selectedIndex = Math.max(
+        0,
+        params.options.findIndex((option) => option.value === params.selectedValue)
+      )
+      const virtualRows = createVirtualRows<FilterOption>({
+        scroller: listEl,
+        track,
+        fallbackRowHeightPx: OPTIONS_ROW_HEIGHT_PX,
+        keyOf: (option) => option.value,
+        buildRow: (option) => buildOptionRow(option, params.selectedValue, params.onSelect, dialog),
       })
-      listEl.appendChild(row)
+      optionsVirtualRows = virtualRows
+      virtualRows.setItems(params.options, selectedIndex)
+    } else {
+      listEl.replaceChildren()
+      for (const option of params.options) {
+        listEl.appendChild(buildOptionRow(option, params.selectedValue, params.onSelect, dialog))
+      }
     }
   }
   if (typeof dialog.showModal === "function") dialog.showModal()
-  window.SpatialNavigation?.makeFocusable?.()
+  // attachDialogSpatialNav (ensureOptionsDialog) registers this section id from the dialog's id.
+  window.SpatialNavigation?.makeFocusable?.("tv-filter-options-dialog-section")
 }
 
 export function createFilterBar(options: FilterBarOptions): FilterBarHandle {

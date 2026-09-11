@@ -146,20 +146,34 @@ function getWorker(): Worker | null {
   }
 }
 
+// Never samples more than SAMPLE_MAX_DIM squared pixels: the canvas itself is capped to
+// that before getImageData runs, regardless of how large the source bitmap is (a resize
+// failure upstream in downscaledBitmapFrom can otherwise hand this a full-size bitmap).
 function drawToHiddenCanvas(bitmap: ImageBitmap): { bytes: Uint8ClampedArray | null; width: number; height: number } {
   if (typeof document === "undefined") return { bytes: null, width: 0, height: 0 }
+  const target = scaleToFit(bitmap.width, bitmap.height, SAMPLE_MAX_DIM)
+  const width = target?.width ?? bitmap.width
+  const height = target?.height ?? bitmap.height
   const canvas = document.createElement("canvas")
-  canvas.width = bitmap.width
-  canvas.height = bitmap.height
+  canvas.width = width
+  canvas.height = height
   const ctx = canvas.getContext("2d")
   if (!ctx) return { bytes: null, width: 0, height: 0 }
-  ctx.drawImage(bitmap, 0, 0)
-  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(bitmap, 0, 0, width, height)
+  const { data } = ctx.getImageData(0, 0, width, height)
   return { bytes: data, width, height }
 }
 
 async function sampleBitmap(bitmap: ImageBitmap): Promise<RgbColor | null> {
-  const activeWorker = typeof Worker === "undefined" ? null : getWorker()
+  const hasWorkerSupport = typeof Worker !== "undefined"
+  const hasOffscreenCanvas = typeof OffscreenCanvas !== "undefined"
+  // Neither a worker nor OffscreenCanvas: there's no way to sample without a synchronous
+  // main-thread canvas read on a device this constrained - skip ambient entirely.
+  if (!hasWorkerSupport && !hasOffscreenCanvas) {
+    bitmap.close()
+    return null
+  }
+  const activeWorker = hasWorkerSupport ? getWorker() : null
   if (!activeWorker) {
     const { bytes, width, height } = drawToHiddenCanvas(bitmap)
     bitmap.close()
@@ -167,7 +181,7 @@ async function sampleBitmap(bitmap: ImageBitmap): Promise<RgbColor | null> {
   }
   const requestId = ++requestSeq
   const resultPromise = new Promise<RgbColor | null>((resolve) => pendingByRequestId.set(requestId, resolve))
-  if (typeof OffscreenCanvas !== "undefined") {
+  if (hasOffscreenCanvas) {
     activeWorker.postMessage({ requestId, bitmap }, [bitmap])
   } else {
     const { bytes, width, height } = drawToHiddenCanvas(bitmap)
@@ -363,4 +377,22 @@ export function clearAmbient(element: HTMLElement, options?: ApplyAmbientOptions
   const vars = options?.vars ?? ALL_AMBIENT_VARS
   for (const name of vars) element.style.removeProperty(name)
   syncAmbientAttribute(element)
+}
+
+/**
+ * Releases the ambient colour cache and worker on Android memory pressure. The worker is
+ * terminated (not marked broken) so the next ambientFor() call lazily reconstructs it.
+ */
+function releaseAmbientMemory(): void {
+  memoryCache.clear()
+  if (worker) {
+    try { worker.terminate() } catch {}
+    worker = null
+    for (const resolve of pendingByRequestId.values()) resolve(null)
+    pendingByRequestId.clear()
+  }
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("xt:memory-pressure", releaseAmbientMemory)
 }

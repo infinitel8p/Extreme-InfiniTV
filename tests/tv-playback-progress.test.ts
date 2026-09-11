@@ -98,4 +98,16 @@ describe("siblingsToLiveContext", () => {
     const result = siblingsToLiveContext([channelA, channelB], initial)
     expect(result).toBeNull()
   })
+
+  it("keeps backupUrls when present and omits it when absent", () => {
+    const withBackups: SiblingChannelInput = {
+      id: 4,
+      name: "Channel D",
+      streamUrl: "https://example/d.m3u8",
+      backupUrls: ["http://b/1.ts"],
+    }
+    const result = siblingsToLiveContext([withBackups, channelB], withBackups)
+    expect(result?.channels[0].backupUrls).toEqual(["http://b/1.ts"])
+    expect(result?.channels[1].backupUrls).toBeUndefined()
+  })
 })

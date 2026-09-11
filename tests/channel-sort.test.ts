@@ -67,6 +67,16 @@ describe("sortChannelsForView", () => {
     ])
   })
 
+  it("ignores internal punctuation when sorting by name", () => {
+    const punctuated = [
+      { id: 30, name: "PPV: Boxing" },
+      { id: 31, name: "PPV Boxing" },
+    ]
+    const out = sortChannelsForView(punctuated, "az")
+    // Collating equal under ignorePunctuation, the stable sort keeps source order.
+    expect(out.map((channel) => channel.id)).toEqual([30, 31])
+  })
+
   it("groups by category then name in cataz mode", () => {
     const out = sortChannelsForView(channels, "cataz")
     expect(out.map((channel) => channel.id)).toEqual([3, 4, 1, 2])

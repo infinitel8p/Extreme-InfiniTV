@@ -3,13 +3,21 @@ layout: ../layouts/DocsLayout.astro
 title: "TV & receiver mode"
 description: "Turn a TV into a pairable playback receiver and send video to it from your phone or desktop."
 lede: "Pick something to watch on your phone or desktop, then send it to the TV with Play on TV."
+icon: "tv"
+cardOrder: 10
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
+import Steps from "../components/Steps.astro"
 
 ## What receiver mode is
 
 In receiver mode, the TV sits on an idle screen showing an address and a 6-digit pair code. You do the browsing, searching, and typing on your phone or computer, then choose **Play on TV** and pick that TV. Playback starts there, with transport controls (play/pause, seek, volume) working from the sender.
+
+<Callout type="note">
+  Requires Android 8.0 or newer with Android System WebView 111 or newer. If the receiver or TV browse screen shows unstyled HTML, see [old Android System WebView](./troubleshooting/#the-app-looks-unstyled-or-buttons-dont-react-old-android-system-webview).
+</Callout>
 
 ## The dedicated TV build (kiosk)
 
@@ -27,7 +35,9 @@ XTREAM_TV_BUILD=true PUBLIC_APP_MODE=receiver pnpm tauri android build --apk
 
 If you install the normal mobile APK (`Extreme-InfiniTV.apk`, or the versioned APK from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest)) on a TV, it detects the TV and still boots into the receiver screen by default. The difference: here you can leave. The idle screen shows an **Exit receiver** button, and the back key also exits, dropping you into a TV-native browse UI built for the remote: Home, Live TV (with a per-channel programme guide and catch-up), Movies, Series, Search, Downloads, and Settings.
 
-Sign in with the remote's on-screen keyboard, or paste a playlist link on the login screen and it fills in the server/username/password (or M3U URL) for you. Pushing credentials over from your phone is planned but not built yet. A few things are deliberately off this surface to keep it usable from the couch - the playlist editor, channel overrides, category management, external players, and a handful of other desktop/mobile-only settings stay on the phone/desktop app.
+<Shot src="Android-TV/tv" alt="The TV home screen with the left rail and content rails" caption="The full app on Android TV: left rail, hero and rails, all driven by the remote." />
+
+Sign in with the remote's on-screen keyboard, or paste a playlist link on the login screen and it fills in the server/username/password (or M3U URL) for you. If your provider gave you several server links, paste them all at once, one per line - the first becomes the main server and the rest are kept as backup servers the app fails over to automatically. Pushing credentials over from your phone is planned but not built yet. Custom EPG sources - your own XMLTV link, extra sources to stack, and turning off the provider's default guide - live under "Custom EPG sources" on the same add/edit playlist screen. A few things are deliberately off this surface to keep it usable from the couch - the playlist editor, channel overrides, category management, external players, and a handful of other desktop/mobile-only settings stay on the phone/desktop app.
 
 The dedicated TV build from the Play Store stays receiver-only; it never gets this browse UI. To get it on a TV, sideload the mobile APK instead - the same "Installing on Fire TV" instructions below work on any Android TV device, not just Fire TV.
 
@@ -40,13 +50,38 @@ On this install, receiver mode itself and whether it starts on boot are both tog
   These two toggles only appear on the mobile build. The dedicated TV build has no Settings screen to toggle them from - it's always on.
 </Callout>
 
+## Choosing the interface
+
+The TV browse UI isn't only for actual TVs. **Settings > Display > Interface** (in the TV browse UI itself: **Settings > Interface**, shown only on devices that aren't real Android TVs) picks which interface runs, regardless of the device:
+
+- **Auto** (default) - follows device detection, same as before.
+- **TV** - forces this TV browse UI on a PC, laptop, tablet, or phone. Useful for projectors, HTPCs, or anyone driving the app with a remote, keyboard, or mouse from the couch.
+- **Desktop** - forces the classic UI, for a device detection wrongly flagged as a TV.
+
+Real Android TV and Fire TV devices always get the TV browse UI, so the setting doesn't appear there. The dedicated receiver kiosk build is unaffected either way.
+
+In TV mode on a desktop, mouse and keyboard both work: the wheel moves focus one row or card at a time (no free scrolling), clicking activates cards and rows, hovering the left rail shows its labels, and playback runs through the same player backend as the classic app - including the embedded mpv engine on Windows, if that's selected in Settings.
+
 ## Switching between the two builds
 
 The receiver build carries a higher internal version number than the mobile build. Installing receiver over mobile works as a normal update, but going the other way - receiver back to mobile - needs an uninstall first, since Android won't let a lower version number install over a higher one.
 
 ## Pairing
 
-Sender and TV need to be on the same network. On the sender, open the **Play on TV** picker (from a poster's context menu, or the **Play on TV** section of the Casting card under **Settings > Network**) and either pick the TV from the scan or add it by address, then enter the pair code shown on the TV's idle screen. Once paired, the sender remembers the TV for next time.
+Sender and TV need to be on the same network - this is a LAN protocol, so nothing leaves your home.
+
+The TV's idle screen shows everything the sender asks you for: the device name, a pair code, and the LAN addresses it is listening on.
+
+<Steps>
+
+1. On the TV, open the receiver screen. The dedicated TV build boots straight into it; on the mobile build, turn on **Allow casting to this device** in Settings, or use **Start on receiver screen**.
+2. On the sender, open the **Play on TV** picker - from a poster's context menu, or the **Play on TV** section of the Casting card under **Settings > Network**.
+3. Pick the TV from the scan. If it doesn't appear, add it by one of the addresses shown on the TV.
+4. Enter the pair code from the TV's screen.
+
+</Steps>
+
+Once paired, the sender remembers the TV for next time.
 
 ## Controlling what's playing
 

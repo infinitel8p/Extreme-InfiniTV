@@ -1,0 +1,65 @@
+---
+// Numbered walkthrough: wrap an ordered list, each <li> becomes a step with a connecting rule.
+---
+
+<div class="steps">
+  <slot />
+</div>
+
+<style is:global>
+  .steps > ol {
+    list-style: none;
+    margin: 1.5rem 0;
+    padding: 0;
+    counter-reset: step;
+  }
+
+  .steps > ol > li {
+    counter-increment: step;
+    position: relative;
+    margin: 0;
+    padding: 0 0 1.75rem 2.75rem;
+  }
+
+  .steps > ol > li:last-child {
+    padding-bottom: 0;
+  }
+
+  .steps > ol > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: -0.1rem;
+    display: grid;
+    place-items: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-accent-ring);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  /* Rail joining one step to the next. */
+  .steps > ol > li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    left: 0.875rem;
+    top: 1.9rem;
+    bottom: 0.35rem;
+    width: 1px;
+    background: var(--color-line);
+  }
+
+  .steps > ol > li > :first-child {
+    margin-top: 0;
+  }
+
+  .steps > ol > li > :last-child {
+    margin-bottom: 0;
+  }
+</style>

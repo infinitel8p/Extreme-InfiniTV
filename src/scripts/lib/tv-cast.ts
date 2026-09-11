@@ -6,6 +6,7 @@ import { t } from "@/scripts/lib/i18n.js"
 import { log, redactUrl } from "@/scripts/lib/log.js"
 import { buildMovieStreamUrl, buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { getActivePlaylistIdSync, getConnectionLimitWarning } from "@/scripts/lib/account-info.js"
+import { getPlaylistDnsOverride } from "@/scripts/lib/creds.js"
 import {
   isCastableSrc,
   buildVodCastDescriptor,
@@ -1322,6 +1323,7 @@ export function castXtreamVodToTv(params: CastXtreamVodParams): () => void {
   return () => {
     void (async () => {
       const playlistId = params.playlistId || (await activePlaylistId())
+      const dns = playlistId ? (await getPlaylistDnsOverride(playlistId))?.raw ?? null : null
       await playOnTv({
         contentTitle: params.title || null,
         contentHref: params.contentHref ?? `/movies/detail?id=${params.vodId}`,
@@ -1335,6 +1337,7 @@ export function castXtreamVodToTv(params: CastXtreamVodParams): () => void {
             logo: params.logo || undefined,
             resumeSeconds: params.resumeSeconds,
             durationSeconds: params.durationSeconds,
+            dns,
           })
         },
       })
@@ -1363,28 +1366,32 @@ export interface CastXtreamEpisodeParams {
 /** Builds a "play on TV" click handler for a series episode (episode context menu + detail-page button). */
 export function castXtreamEpisodeToTv(params: CastXtreamEpisodeParams): () => void {
   return () => {
-    void playOnTv({
-      contentTitle: params.title || null,
-      contentHref: params.contentHref ?? null,
-      stopLocal: params.stopLocal,
-      seriesContext: {
-        playlistId: params.playlistId,
-        seriesId: String(params.seriesId),
-        season: params.season,
-        episodeNum: params.episodeNum,
-      },
-      buildDescriptor: () => {
-        const src = params.src || buildSeriesStreamUrl(params.creds, params.episodeId, params.containerExt)
-        if (!isCastableSrc(src)) return null
-        return buildVodCastDescriptor({
-          src,
-          title: params.title || "",
-          logo: params.logo || undefined,
-          resumeSeconds: params.resumeSeconds,
-          durationSeconds: params.durationSeconds,
-        })
-      },
-    })
+    void (async () => {
+      const dns = (await getPlaylistDnsOverride(params.playlistId))?.raw ?? null
+      await playOnTv({
+        contentTitle: params.title || null,
+        contentHref: params.contentHref ?? null,
+        stopLocal: params.stopLocal,
+        seriesContext: {
+          playlistId: params.playlistId,
+          seriesId: String(params.seriesId),
+          season: params.season,
+          episodeNum: params.episodeNum,
+        },
+        buildDescriptor: () => {
+          const src = params.src || buildSeriesStreamUrl(params.creds, params.episodeId, params.containerExt)
+          if (!isCastableSrc(src)) return null
+          return buildVodCastDescriptor({
+            src,
+            title: params.title || "",
+            logo: params.logo || undefined,
+            resumeSeconds: params.resumeSeconds,
+            durationSeconds: params.durationSeconds,
+            dns,
+          })
+        },
+      })
+    })()
   }
 }
 
@@ -1405,27 +1412,32 @@ export interface CastLiveChannelParams {
 /** Builds a "play on TV" click handler for a live channel (Live TV channel list + player more-menu). */
 export function castLiveChannelToTv(params: CastLiveChannelParams): () => void {
   return () => {
-    const channelId = params.liveContext?.channelIds[params.liveContext.index]
-    void playOnTv({
-      contentTitle: params.contentTitle,
-      contentHref: params.contentHref ?? (channelId ? `/livetv?channel=${channelId}` : "/livetv"),
-      stopLocal: params.stopLocal,
-      restoreLocal: params.restoreLocal,
-      liveContext: params.liveContext,
-      holdsProviderConnection: true,
-      buildDescriptor: () => {
-        const src = params.buildSrc()
-        if (!src) return null
-        if (!isCastableSrc(src, { live: true })) return castUncastableScheme(src)
-        return buildLiveCastDescriptor({
-          src,
-          title: params.title,
-          logo: params.logo || undefined,
-          drm: params.drm,
-          headers: params.headers,
-          preferNativeHls: params.preferNativeHls,
-        })
-      },
-    })
+    void (async () => {
+      const channelId = params.liveContext?.channelIds[params.liveContext.index]
+      const playlistId = params.liveContext?.playlistId || (await activePlaylistId())
+      const dns = playlistId ? (await getPlaylistDnsOverride(playlistId))?.raw ?? null : null
+      await playOnTv({
+        contentTitle: params.contentTitle,
+        contentHref: params.contentHref ?? (channelId ? `/livetv?channel=${channelId}` : "/livetv"),
+        stopLocal: params.stopLocal,
+        restoreLocal: params.restoreLocal,
+        liveContext: params.liveContext,
+        holdsProviderConnection: true,
+        buildDescriptor: () => {
+          const src = params.buildSrc()
+          if (!src) return null
+          if (!isCastableSrc(src, { live: true })) return castUncastableScheme(src)
+          return buildLiveCastDescriptor({
+            src,
+            title: params.title,
+            logo: params.logo || undefined,
+            drm: params.drm,
+            headers: params.headers,
+            preferNativeHls: params.preferNativeHls,
+            dns,
+          })
+        },
+      })
+    })()
   }
 }
