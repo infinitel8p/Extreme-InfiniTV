@@ -3,8 +3,8 @@
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { makeFallback } from "@/scripts/lib/entry-card.ts"
 import { fmtImdbRating } from "@/scripts/lib/format.ts"
-import { attachLongPress } from "@/scripts/tv/long-press.ts"
-import { memoryConservative } from "@/scripts/tv/motion"
+import { attachLongPress, type LongPressHandle } from "@/scripts/tv/long-press.ts"
+import { memoryConservative, effectTier, heavyBlurClass } from "@/scripts/tv/motion"
 import { navigate } from "astro:transitions/client"
 
 export type CardKind = "vod" | "series" | "episode" | "live"
@@ -121,7 +121,6 @@ export function keepCardMediaDecoded(card: HTMLElement): void {
   if (memoryConservative()) return
   for (const img of card.querySelectorAll<HTMLImageElement>("img")) {
     img.loading = "eager"
-    img.decoding = "sync"
   }
 }
 
@@ -132,7 +131,7 @@ export function formatCardMeta(year: unknown, rating: unknown): string {
   return [yearText, ratingText].filter(Boolean).join(" · ")
 }
 
-const CARD_FOCUS_CLASSES = "self-start outline-none tv-focus-card"
+const CARD_FOCUS_CLASSES = "self-start select-none outline-none tv-focus-card"
 
 interface CardBehavior {
   activate?: () => void
@@ -169,12 +168,19 @@ function wireCardActivation(
 ): void {
   const activate = buildActivate(card, href, onActivate)
   cardBehaviors.set(card, { activate, longPress: onLongPress })
-  attachLongPress<HTMLElement>({
-    container: card,
+}
+
+/**
+ * One delegated long-press listener set for a rail/grid track instead of one per card - each
+ * card only registers its behavior in `cardBehaviors` via `wireCardActivation`/`updateCardBehavior`.
+ */
+export function registerCardLongPress(container: HTMLElement): LongPressHandle {
+  return attachLongPress<HTMLElement>({
+    container,
     targetSelector: "[data-focus-key]",
-    resolveTarget: () => card,
-    onActivate: () => cardBehaviors.get(card)?.activate?.(),
-    onLongPress: () => cardBehaviors.get(card)?.longPress?.(),
+    resolveTarget: (row) => row,
+    onActivate: (card) => cardBehaviors.get(card)?.activate?.(),
+    onLongPress: (card) => cardBehaviors.get(card)?.longPress?.(),
   })
 }
 
@@ -194,7 +200,14 @@ function buildPosterImage(posterUrl: string | null, name: string, eager?: boolea
   img.alt = ""
   img.loading = eager ? "eager" : "lazy"
   img.decoding = "async"
+  img.draggable = false
   img.className = "block h-full w-full object-cover"
+  const markLoaded = (): void => {
+    const wrap = img.closest<HTMLElement>("[data-poster-wrap]")
+    if (wrap) wrap.dataset.loaded = "true"
+  }
+  img.onload = markLoaded
+  img.onerror = markLoaded
   mountCachedImage(img, posterUrl, "poster")
   return img
 }
@@ -223,8 +236,9 @@ function createPosterCard(item: PosterCardItem, options?: CardRenderOptions): HT
   posterWrap.dataset.posterWrap = "1"
   posterWrap.dataset.imageUrl = item.posterUrl || ""
   posterWrap.className =
-    "relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40 tv-edge-mask"
+    "poster-develop relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40 tv-edge-mask"
   posterWrap.appendChild(buildPosterImage(item.posterUrl, item.name, options?.eager))
+  if (!item.posterUrl) posterWrap.dataset.loaded = "true"
 
   if (item.progressPercent != null && item.progressPercent > 0) {
     posterWrap.appendChild(buildProgressTrack(item.progressPercent))
@@ -255,8 +269,12 @@ function updatePosterCard(card: HTMLAnchorElement, item: PosterCardItem): void {
   const posterWrap = card.querySelector<HTMLElement>("[data-poster-wrap]")
   if (posterWrap && posterWrap.dataset.imageUrl !== (item.posterUrl || "")) {
     posterWrap.dataset.imageUrl = item.posterUrl || ""
+    delete posterWrap.dataset.loaded
+    delete posterWrap.dataset.posterTint
+    posterWrap.style.removeProperty("--xt-poster-tint")
     const progressTrack = posterWrap.querySelector<HTMLElement>("[data-progress-track]")
     posterWrap.replaceChildren(buildPosterImage(item.posterUrl, item.name))
+    if (!item.posterUrl) posterWrap.dataset.loaded = "true"
     if (progressTrack) posterWrap.appendChild(progressTrack)
   }
 
@@ -290,13 +308,18 @@ function buildLiveTile(logoUrl: string | null, name: string): HTMLElement[] {
   backdrop.setAttribute("aria-hidden", "true")
   backdrop.loading = "lazy"
   backdrop.decoding = "async"
-  backdrop.className = "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-2xl saturate-150"
-  mountCachedImage(backdrop, logoUrl, "logo")
+  backdrop.draggable = false
+  backdrop.className = heavyBlurClass(
+    "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-2xl saturate-150",
+    "absolute inset-0 bg-surface-2"
+  )
+  if (effectTier() === "full") mountCachedImage(backdrop, logoUrl, "logo")
 
   const foreground = document.createElement("img")
   foreground.alt = ""
   foreground.loading = "lazy"
   foreground.decoding = "async"
+  foreground.draggable = false
   foreground.className = "absolute inset-0 m-auto max-h-[60%] max-w-[60%] object-contain"
   mountCachedImage(foreground, logoUrl, "logo")
 

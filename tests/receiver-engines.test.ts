@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   clampReceiverVolume,
   createEmbeddedReceiverEngine,
@@ -13,12 +13,31 @@ import type { CastDescriptorV1 } from "../src/scripts/lib/tv-cast-descriptor"
 
 vi.mock("@/scripts/lib/i18n.js", () => ({ t: (key: string) => key }))
 
-type MountResult = { kind: "embedded"; handle: FakeEmbeddedHandle } | null
+type MountResult = { kind: "embedded"; handle: FakeEmbeddedHandle; backend?: string } | null
 let pendingMount: { resolve: (result: MountResult) => void } | null = null
+let requestedMountBackend: string | null = null
 
 vi.mock("@/scripts/lib/player-runtime", () => ({
-  mountPlayer: () => new Promise<MountResult>((resolve) => { pendingMount = { resolve } }),
+  mountPlayer: (_videoEl: unknown, backend: string) => {
+    requestedMountBackend = backend
+    return new Promise<MountResult>((resolve) => { pendingMount = { resolve } })
+  },
   playWhenReady: () => {},
+}))
+
+let mockPlayerBackend = "artplayer"
+
+vi.mock("@/scripts/lib/app-settings.js", () => ({
+  getPlayerBackend: () => mockPlayerBackend,
+}))
+
+let mockDnsProxyAvailable = false
+let mockEnsureDnsProxyBase: string | null = null
+const ensureDnsProxyMock = vi.fn(async (_sessionKey: string, _server: unknown) => mockEnsureDnsProxyBase)
+
+vi.mock("@/scripts/lib/dns-proxy.ts", () => ({
+  dnsProxyAvailable: () => mockDnsProxyAvailable,
+  ensureDnsProxy: (sessionKey: string, server: unknown) => ensureDnsProxyMock(sessionKey, server),
 }))
 
 /** A function boundary so TS re-checks pendingMount instead of keeping it narrowed to its last assignment. */
@@ -46,11 +65,13 @@ class FakeClassList {
   }
 }
 
-class FakeElement {
+class FakeElement extends EventTarget {
   classList = new FakeClassList()
   textContent = ""
   offsetWidth = 0
-  focus(): void {}
+  focus(): void {
+    this.dispatchEvent(new Event("focus"))
+  }
 }
 
 class FakeEmbeddedHandle {
@@ -100,12 +121,23 @@ function embeddedDom(playerViewEl: HTMLElement): EmbeddedEngineDom {
   }
 }
 
-function liveDescriptor(title: string): CastDescriptorV1 {
+function liveDescriptor(title: string, dns?: string): CastDescriptorV1 {
   return {
     v: 1,
     src: `http://tv.example/live/user/pass/${title}.m3u8`,
     mime: "application/x-mpegURL",
     isLive: true,
+    title,
+    dns,
+  } as CastDescriptorV1
+}
+
+function vodDescriptor(title: string): CastDescriptorV1 {
+  return {
+    v: 1,
+    src: `http://tv.example/movie/user/pass/${title}.mp4`,
+    mime: "video/mp4",
+    isLive: false,
     title,
   } as CastDescriptorV1
 }
@@ -254,6 +286,54 @@ describe("normalizeReportedVolume", () => {
   })
 })
 
+describe("createEmbeddedReceiverEngine backend downgrade", () => {
+  beforeEach(() => {
+    pendingMount = null
+    requestedMountBackend = null
+    mockPlayerBackend = "artplayer"
+  })
+
+  it("downgrades mpv-embedded to artplayer, like the mpv/vlc external backends", async () => {
+    mockPlayerBackend = "mpv-embedded"
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    void engine.play(liveDescriptor("A"))
+    await Promise.resolve()
+
+    expect(requestedMountBackend).toBe("artplayer")
+  })
+})
+
+describe("createEmbeddedReceiverEngine backend reuse", () => {
+  beforeEach(() => {
+    pendingMount = null
+    requestedMountBackend = null
+    mockPlayerBackend = "artplayer"
+  })
+
+  it("reuses the mounted player when the requested backend is unchanged, even if mountPlayer resolved a different backend", async () => {
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    const firstPlay = engine.play(liveDescriptor("A"))
+    await Promise.resolve()
+    expect(requestedMountBackend).toBe("artplayer")
+    const handle = new FakeEmbeddedHandle()
+    // Simulates Android's artplayer -> videojs resolution inside mountPlayer.
+    takePendingMountResolve()({ kind: "embedded", handle, backend: "videojs" })
+    expect(await firstPlay).toBe(true)
+
+    requestedMountBackend = null
+    const secondPlay = engine.play(liveDescriptor("B"))
+    expect(await secondPlay).toBe(true)
+
+    expect(requestedMountBackend).toBeNull()
+    expect(pendingMount).toBeNull()
+    expect(handle.srcCalls).toHaveLength(2)
+  })
+})
+
 describe("createEmbeddedReceiverEngine play() staleness", () => {
   beforeEach(() => {
     pendingMount = null
@@ -279,27 +359,135 @@ describe("createEmbeddedReceiverEngine play() staleness", () => {
     expect(playerViewEl.classList.contains("hidden")).toBe(true)
   })
 
-  it("does not resume a play() that was superseded by a second play() during its mount", async () => {
+  it("does not resume a play() that was superseded by a second play() during its mount, and does not mount twice", async () => {
     const playerViewEl = fakeElement()
     const dom = embeddedDom(playerViewEl)
     const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
 
     const firstPlay = engine.play(liveDescriptor("A"))
     await Promise.resolve()
-    const resolveFirstMount = takePendingMountResolve()
+    const resolveMount = takePendingMountResolve()
 
     const secondPlay = engine.play(liveDescriptor("B"))
     await Promise.resolve()
-    const resolveSecondMount = takePendingMountResolve()
 
-    const firstHandle = new FakeEmbeddedHandle()
-    resolveFirstMount({ kind: "embedded", handle: firstHandle })
+    const handle = new FakeEmbeddedHandle()
+    resolveMount({ kind: "embedded", handle, backend: "artplayer" })
     expect(await firstPlay).toBe(false)
-    expect(firstHandle.srcCalls).toHaveLength(0)
+    expect(handle.srcCalls).toHaveLength(0)
 
-    const secondHandle = new FakeEmbeddedHandle()
-    resolveSecondMount({ kind: "embedded", handle: secondHandle })
     expect(await secondPlay).toBe(true)
-    expect(secondHandle.srcCalls).toHaveLength(1)
+    expect(handle.srcCalls).toHaveLength(1)
+    expect(pendingMount).toBeNull()
+  })
+})
+
+describe("createEmbeddedReceiverEngine play() DNS proxy wrapping", () => {
+  beforeEach(() => {
+    pendingMount = null
+    mockDnsProxyAvailable = false
+    mockEnsureDnsProxyBase = null
+    ensureDnsProxyMock.mockClear()
+  })
+
+  async function playAndMount(descriptor: CastDescriptorV1): Promise<FakeEmbeddedHandle> {
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+    const playPromise = engine.play(descriptor)
+    await Promise.resolve()
+    const handle = new FakeEmbeddedHandle()
+    takePendingMountResolve()({ kind: "embedded", handle })
+    await playPromise
+    return handle
+  }
+
+  it("mounts the raw src when the descriptor carries no dns override", async () => {
+    const handle = await playAndMount(liveDescriptor("A"))
+    expect(ensureDnsProxyMock).not.toHaveBeenCalled()
+    expect((handle.srcCalls[0] as { src: string }).src).toBe("http://tv.example/live/user/pass/A.m3u8")
+  })
+
+  it("mounts the raw src when the dns proxy is unavailable on this platform", async () => {
+    mockDnsProxyAvailable = false
+    const handle = await playAndMount(liveDescriptor("A", "1.1.1.1"))
+    expect(ensureDnsProxyMock).not.toHaveBeenCalled()
+    expect((handle.srcCalls[0] as { src: string }).src).toBe("http://tv.example/live/user/pass/A.m3u8")
+  })
+
+  it("wraps the src through the registered proxy base when a dns override resolves", async () => {
+    mockDnsProxyAvailable = true
+    mockEnsureDnsProxyBase = "http://127.0.0.1:5321/abc123"
+    const handle = await playAndMount(liveDescriptor("A", "1.1.1.1"))
+    expect(ensureDnsProxyMock).toHaveBeenCalledWith("dns:1.1.1.1", expect.objectContaining({ raw: "1.1.1.1" }))
+    expect((handle.srcCalls[0] as { src: string }).src).toBe(
+      "http://127.0.0.1:5321/abc123/http/tv.example/live/user/pass/A.m3u8"
+    )
+  })
+
+  it("falls back to the raw src when proxy registration fails", async () => {
+    mockDnsProxyAvailable = true
+    mockEnsureDnsProxyBase = null
+    const handle = await playAndMount(liveDescriptor("A", "1.1.1.1"))
+    expect(ensureDnsProxyMock).toHaveBeenCalled()
+    expect((handle.srcCalls[0] as { src: string }).src).toBe("http://tv.example/live/user/pass/A.m3u8")
+  })
+})
+
+describe("createEmbeddedReceiverEngine play() trackMemory forwarding", () => {
+  beforeEach(() => {
+    pendingMount = null
+  })
+
+  async function playAndMount(
+    descriptor: CastDescriptorV1,
+    playOptions?: Parameters<ReturnType<typeof createEmbeddedReceiverEngine>["play"]>[1],
+  ): Promise<FakeEmbeddedHandle> {
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+    const playPromise = engine.play(descriptor, playOptions)
+    await Promise.resolve()
+    const handle = new FakeEmbeddedHandle()
+    takePendingMountResolve()({ kind: "embedded", handle })
+    await playPromise
+    return handle
+  }
+
+  it("forwards trackMemory for a VOD descriptor", async () => {
+    const trackMemory = { playlistId: "p1", kind: "vod" as const, id: "7" }
+    const handle = await playAndMount(vodDescriptor("A"), { trackMemory })
+    expect((handle.srcCalls[0] as { trackMemory: unknown }).trackMemory).toEqual(trackMemory)
+  })
+
+  it("nulls out trackMemory for a live descriptor even if the caller passes one", async () => {
+    const trackMemory = { playlistId: "p1", kind: "vod" as const, id: "7" }
+    const handle = await playAndMount(liveDescriptor("A"), { trackMemory })
+    expect((handle.srcCalls[0] as { trackMemory: unknown }).trackMemory).toBeNull()
+  })
+
+  it("defaults trackMemory to null when no playOptions are passed", async () => {
+    const handle = await playAndMount(vodDescriptor("A"))
+    expect((handle.srcCalls[0] as { trackMemory: unknown }).trackMemory).toBeNull()
+  })
+})
+
+describe("createEmbeddedReceiverEngine error auto-hide", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("keeps the auto-hide timer armed after the retry button's initial focus", () => {
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    engine.showError("receiver.error.rejected")
+    expect(dom.errorEl?.classList.contains("hidden")).toBe(false)
+
+    vi.advanceTimersByTime(20000)
+
+    expect(dom.errorEl?.classList.contains("hidden")).toBe(true)
   })
 })

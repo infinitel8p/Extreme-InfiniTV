@@ -17,8 +17,8 @@ import { isAndroidFsActive, prettifyAndroidUri } from "@/scripts/lib/android-fs.
 import { getDownloadDir } from "@/scripts/lib/app-settings.js"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog.ts"
-import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.ts"
-import { ICON_X, ICON_DOTS } from "@/scripts/lib/icons.ts"
+import { createActionSheet, type ActionSheetItem } from "@/scripts/tv/ui/action-sheet.ts"
+import { ICON_DOTS } from "@/scripts/lib/icons.ts"
 
 const SKELETON_ROW_COUNT = 4
 const REPAINT_THROTTLE_MS = 250
@@ -157,7 +157,7 @@ const view: TvView = {
     let emptyEl: HTMLElement | null = null
     let countEl: HTMLElement | null = null
     let folderEl: HTMLElement | null = null
-    let actionDialog: HTMLDialogElement | null = null
+    const actionSheet = createActionSheet("tv-downloads-actions")
 
     let flushTimer: ReturnType<typeof setTimeout> | null = null
     let pendingFullRefresh = false
@@ -190,31 +190,6 @@ const view: TvView = {
       folderEl.classList.toggle("hidden", !label)
     }
 
-    function ensureActionDialog(): HTMLDialogElement {
-      if (actionDialog) return actionDialog
-      const dialog = document.createElement("dialog")
-      dialog.id = "tv-downloads-actions-dialog"
-      dialog.className =
-        "m-auto w-[22rem] max-w-[90vw] rounded-2xl border border-line bg-surface p-0 text-fg backdrop:bg-black/70"
-      dialog.innerHTML = `
-        <div class="flex items-center justify-between gap-4 border-b border-line px-5 py-4">
-          <h2 data-role="title" class="min-w-0 flex-1 truncate text-base font-semibold"></h2>
-          <button type="button" data-role="close" class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg" aria-label="${t("common.close")}">
-            <span class="inline-flex text-base">${ICON_X}</span>
-          </button>
-        </div>
-        <div data-role="actions" class="flex flex-col gap-1 p-2"></div>
-      `
-      document.body.appendChild(dialog)
-      dialog.querySelector('[data-role="close"]')?.addEventListener("click", () => dialog.close())
-      dialog.addEventListener("click", (event) => {
-        if (event.target === dialog) dialog.close()
-      })
-      attachDialogSpatialNav(dialog)
-      actionDialog = dialog
-      return dialog
-    }
-
     async function confirmRemove(item: DownloadItem): Promise<void> {
       const confirmed = await confirmDialog({
         title: t("downloads.delete.title"),
@@ -226,41 +201,20 @@ const view: TvView = {
     }
 
     function openActionSheet(item: DownloadItem): void {
-      const dialog = ensureActionDialog()
-      const titleEl = dialog.querySelector<HTMLElement>('[data-role="title"]')
-      const actionsEl = dialog.querySelector<HTMLElement>('[data-role="actions"]')
-      if (titleEl) titleEl.textContent = item.title
-      if (actionsEl) {
-        actionsEl.replaceChildren()
-        const actions: Array<{ label: string; destructive?: boolean; onSelect: () => void }> = []
-        if (item.status === "downloading" || item.status === "queued") {
-          actions.push({ label: t("downloads.action.pause"), onSelect: () => pauseDownload(item.id) })
-        } else if (item.status === "paused" || item.status === "stalled") {
-          actions.push({ label: t("downloads.action.resume"), onSelect: () => resumeDownload(item.id) })
-        } else if (item.status === "error") {
-          actions.push({ label: t("downloads.action.retry"), onSelect: () => resumeDownload(item.id) })
-        }
-        actions.push({
-          label: t("downloads.action.remove"),
-          destructive: true,
-          onSelect: () => void confirmRemove(item),
-        })
-        for (const action of actions) {
-          const button = document.createElement("button")
-          button.type = "button"
-          button.className =
-            "flex min-h-11 items-center rounded-xl px-4 text-start text-sm outline-none transition-colors " +
-            "hover:bg-surface-2 tv-focus-inset" +
-            (action.destructive ? " text-bad" : "")
-          button.textContent = action.label
-          button.addEventListener("click", () => {
-            dialog.close()
-            action.onSelect()
-          })
-          actionsEl.appendChild(button)
-        }
+      const actions: ActionSheetItem[] = []
+      if (item.status === "downloading" || item.status === "queued") {
+        actions.push({ label: t("downloads.action.pause"), onSelect: () => pauseDownload(item.id) })
+      } else if (item.status === "paused" || item.status === "stalled") {
+        actions.push({ label: t("downloads.action.resume"), onSelect: () => resumeDownload(item.id) })
+      } else if (item.status === "error") {
+        actions.push({ label: t("downloads.action.retry"), onSelect: () => resumeDownload(item.id) })
       }
-      if (typeof dialog.showModal === "function") dialog.showModal()
+      actions.push({
+        label: t("downloads.action.remove"),
+        destructive: true,
+        onSelect: () => void confirmRemove(item),
+      })
+      actionSheet.open(item.title, actions)
     }
 
     function onRowActivate(item: DownloadItem): void {
@@ -330,7 +284,7 @@ const view: TvView = {
       const menuButton = document.createElement("button")
       menuButton.type = "button"
       menuButton.dataset.focusKey = `dl-menu:${item.id}`
-      menuButton.setAttribute("aria-label", t("tv.downloads.moreAria", { title: item.title }))
+      menuButton.setAttribute("aria-label", t("common.moreOptionsAria", { title: item.title }))
       menuButton.className =
         "grid shrink-0 place-items-center rounded-xl p-3 text-fg-3 outline-none transition-colors " +
         "hover:bg-surface-2 hover:text-fg focus-visible:text-fg tv-focus-inset"
@@ -523,10 +477,7 @@ const view: TvView = {
       document.removeEventListener(THROUGHPUT_EVENT, onThroughputEvent)
       document.removeEventListener(LOCALE_EVENT, applyLocale)
       for (const unsub of unsubs) unsub()
-      try {
-        actionDialog?.close()
-      } catch {}
-      actionDialog?.remove()
+      actionSheet.destroy()
       rowsById.clear()
       root.replaceChildren()
     }

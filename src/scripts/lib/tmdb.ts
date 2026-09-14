@@ -1,5 +1,6 @@
 // Thin TMDb v3 API client. Auth via Bearer (v4 read token) or api_key query param.
 import { getTmdbApiKey, isTmdbActive } from "@/scripts/lib/app-settings.js"
+import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { log } from "@/scripts/lib/log.js"
 
 const TMDB_BASE = "https://api.themoviedb.org/3"
@@ -171,12 +172,14 @@ async function tmdbFetch<T>(
   const headers: Record<string, string> = { Accept: "application/json" }
   if (isBearerKey(key)) headers.Authorization = `Bearer ${key}`
 
-  let response = await fetch(url, { headers })
+  const init = { headers, logKind: "api", dns: "global" }
+
+  let response = await providerFetch(url, init)
   if (response.status === 429) {
     const retryAfterHeader = Number(response.headers.get("Retry-After"))
     const retryAfterSeconds = Math.max(Number.isFinite(retryAfterHeader) ? retryAfterHeader : 0, 1)
     await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000))
-    response = await fetch(url, { headers })
+    response = await providerFetch(url, init)
   }
 
   if (!response.ok) {

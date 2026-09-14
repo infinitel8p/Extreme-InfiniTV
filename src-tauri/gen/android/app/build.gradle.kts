@@ -106,6 +106,14 @@ android {
 
     buildFeatures { buildConfig = true }
 
+    packaging {
+        // dnsjava registers JVM-only name-service SPIs that Android has no interface for.
+        resources.excludes += setOf(
+            "META-INF/services/java.net.spi.InetAddressResolverProvider",
+            "META-INF/services/sun.net.spi.nameservice.NameServiceDescriptor",
+        )
+    }
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -129,8 +137,13 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-rtsp:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     implementation("androidx.media:media:1.7.0")
     implementation("io.coil-kt:coil:2.7.0")
+    // Custom per-playlist DNS resolution for the native player's OkHttp datasource.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
+    implementation("dnsjava:dnsjava:3.6.5")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20231013")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")

@@ -328,6 +328,58 @@ describe("createSubtitleManager MKV push cues", () => {
   })
 })
 
+describe("createSubtitleManager onSelectionChanged", () => {
+  let video: FakeVideo
+
+  beforeEach(() => {
+    video = new FakeVideo()
+    vi.stubGlobal("window", { VTTCue: FakeVTTCue })
+  })
+
+  function mountManager() {
+    const selections: ({ index: number; label: string; language: string } | null)[] = []
+    const manager = createSubtitleManager({
+      registrar: createNativeTrackRegistrar(() => video as unknown as HTMLVideoElement),
+      getCurrentTime: () => 0,
+      onSelectionChanged: (track) => selections.push(track),
+    })
+    return { manager, selections }
+  }
+
+  it("fires with the shown track on select, and null on turning off", async () => {
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+      { number: 3, codec: "S_TEXT/UTF8", language: "fre", name: null },
+    ])
+    const { manager, selections } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    manager.select(1)
+    manager.select(-1)
+
+    expect(selections).toEqual([
+      { index: 1, label: "French", language: "fre" },
+      null,
+    ])
+  })
+
+  it("does not fire for the manager's own initial auto-selection, only for a later select", async () => {
+    vi.mocked(getCaptionsAutoEnabled).mockReturnValueOnce(true)
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "en", name: null },
+    ])
+    const { manager, selections } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    expect(selections).toEqual([])
+
+    manager.select(0)
+    expect(selections).toEqual([{ index: 0, label: "English", language: "en" }])
+  })
+})
+
 describe("createSubtitleManager subtitle delay", () => {
   let video: FakeVideo
 

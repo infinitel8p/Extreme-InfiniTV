@@ -67,10 +67,10 @@ import {
         </div>
 
         <!-- Hero -->
-        <div class="w-full">
+        <div id="series-detail-hero" class="w-full">
           <div
             id="series-detail-poster"
-            class="dt-hero skel aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
+            class="dt-hero dt-hero--loading aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
                    max-h-[60dvh] max-w-[calc(60dvh*2/3)] sm:max-w-[calc(60dvh*16/9)]"
             style="view-transition-name: active-poster;">
           </div>
@@ -114,6 +114,8 @@ import {
             </div>
           </div>
         </div>
+
+        <div id="series-detail-scroll" class="flex flex-col gap-5 custom-scroll">
 
         <div class="dt-enter dt-stagger-2 flex flex-wrap items-center gap-2">
           <button
@@ -282,6 +284,8 @@ import {
         <div
           id="series-episode-list"
           class="flex flex-col gap-1.5">
+        </div>
+
         </div>
 
       </div>

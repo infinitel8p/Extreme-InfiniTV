@@ -20,7 +20,11 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -28,8 +32,11 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -39,6 +46,8 @@ import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
@@ -64,9 +73,13 @@ class VideoActivity : AppCompatActivity() {
     const val EXTRA_URL = "url"
     const val EXTRA_UA = "ua"
     const val EXTRA_REFERER = "referer"
+    const val EXTRA_DNS = "dns"
     const val EXTRA_TITLE = "title"
     const val EXTRA_POSTER = "posterUrl"
     const val EXTRA_START_MS = "startMs"
+    const val EXTRA_AUDIO_LANG = "audioLang"
+    const val EXTRA_SUB_LANG = "subLang"
+    const val EXTRA_SUB_ENABLED = "subEnabled"
     const val EXTRA_INITIAL_CHANNEL_ID = "initialChannelId"
     const val EXTRA_TV_OVERSCAN_PERCENT = "tvOverscanPercent"
 
@@ -77,6 +90,19 @@ class VideoActivity : AppCompatActivity() {
     // DefaultTimeBar defaults to a 20-step key increment, so a 100-minute movie steps 5
     // minutes per D-pad press; pin a fixed 15s step instead.
     private const val TIME_BAR_KEY_INCREMENT_MS = 15_000L
+
+    // media3 default rebuffer threshold (5s) is the black gap on channel switch.
+    private const val LOAD_CONTROL_MIN_BUFFER_MS = 15_000
+    private const val LOAD_CONTROL_MAX_BUFFER_MS = 50_000
+    private const val LOAD_CONTROL_BUFFER_FOR_PLAYBACK_MS = 1_000
+    private const val LOAD_CONTROL_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 1_500
+
+    // Live retune: same-url backoff, then hop to the next backup url.
+    private val LIVE_RETUNE_BACKOFF_MS = longArrayOf(1_000L, 2_000L, 4_000L)
+    private const val LIVE_RETUNE_SAME_URL_MAX = 2
+    private const val LIVE_RETUNE_TOTAL_MAX = 8
+    private const val LIVE_RETUNE_STABLE_MS = 15_000L
+    private val PROVIDER_REJECTION_STATUSES = setOf(401, 403, 407, 429, 458, 509)
 
     private const val PREF_PLAYER = "xt_native_player"
     private const val KEY_DISPLAY_MODE = "displayMode"
@@ -113,15 +139,34 @@ class VideoActivity : AppCompatActivity() {
   private var contentKey: String = ""
   private var defaultUa: String = ""
   private var defaultReferer: String = ""
+  private var defaultDns: String = ""
   private var initialTitle: String = ""
   private var posterUrl: String = ""
   private var resumeMs: Long = 0L
+  private var audioLangPref: String = ""
+  private var subLangPref: String = ""
+  private var subEnabledPref: Boolean = false
   private var tvOverscanPercent: Int = 0
   private var displayMode: Int = AspectRatioFrameLayout.RESIZE_MODE_FIT
 
   private var channels: List<ChannelLite> = emptyList()
   private var currentChannelIndex: Int = -1
   private var channelAdapter: ChannelListAdapter? = null
+
+  // Per-switch rebuilds cost a fresh OkHttp client and a cold DNS cache.
+  private var cachedMediaSourceFactory: MediaSource.Factory? = null
+  private var cachedFactoryUa: String? = null
+  private var cachedFactoryReferer: String? = null
+  private var cachedFactoryDns: String? = null
+
+  private data class SelectedTracks(
+    val audioLang: String?,
+    val audioLabel: String?,
+    val subLang: String?,
+    val subLabel: String?,
+    val subOff: Boolean,
+  )
+  private var lastEmittedTracks: SelectedTracks? = null
 
   private var overlayVisible = false
   private var controllerVisible = false
@@ -130,6 +175,14 @@ class VideoActivity : AppCompatActivity() {
   private var finishedEmitted = false
   // Records an onPause()-initiated stop so onResume() resumes without overriding a viewer pause.
   private var resumePlaybackOnReturn = false
+
+  private val retuneHandler = Handler(Looper.getMainLooper())
+  private var retuneRunnable: Runnable? = null
+  private var retuneSameUrlAttempts = 0
+  private var retuneTotalAttempts = 0
+  private var retuneCandidateIndex = 0
+  private var retuneStableRunnable: Runnable? = null
+  private var lastRetuneHttpStatus = 0
 
   private val progressHandler = Handler(Looper.getMainLooper())
   private val progressTick = object : Runnable {
@@ -154,6 +207,40 @@ class VideoActivity : AppCompatActivity() {
     )
   }
 
+  private fun selectedTrackFormat(tracks: Tracks, trackType: Int): Format? {
+    val group = tracks.groups.firstOrNull { it.type == trackType && it.isSelected } ?: return null
+    for (index in 0 until group.length) {
+      if (group.isTrackSelected(index)) return group.getTrackFormat(index)
+    }
+    return null
+  }
+
+  private fun emitTracksIfChanged(tracks: Tracks) {
+    val audioFormat = selectedTrackFormat(tracks, C.TRACK_TYPE_AUDIO)
+    val subFormat = selectedTrackFormat(tracks, C.TRACK_TYPE_TEXT)
+    val current = SelectedTracks(
+      audioLang = audioFormat?.language,
+      audioLabel = audioFormat?.label,
+      subLang = subFormat?.language,
+      subLabel = subFormat?.label,
+      subOff = subFormat == null,
+    )
+    if (current == lastEmittedTracks) return
+    lastEmittedTracks = current
+    EventQueue.append(
+      this,
+      "xt:android-native-tracks",
+      JSONObject().apply {
+        put("contentKey", contentKey)
+        current.audioLang?.let { put("audioLang", it) }
+        current.audioLabel?.let { put("audioLabel", it) }
+        current.subLang?.let { put("subLang", it) }
+        current.subLabel?.let { put("subLabel", it) }
+        put("subOff", current.subOff)
+      }
+    )
+  }
+
   // ---------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------
@@ -161,6 +248,7 @@ class VideoActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_video)
+    applyImmersiveBars()
 
     playerView = findViewById(R.id.player_view)
     // A focused PlayerView swallows D-pad into media3's show-controller path and derails
@@ -322,6 +410,7 @@ class VideoActivity : AppCompatActivity() {
     super.onNewIntent(intent)
     setIntent(intent)
     progressHandler.removeCallbacks(progressTick)
+    cancelLiveRetune()
     hideChannelOverlay()
     releasePlayer()
     finishedEmitted = false
@@ -330,20 +419,49 @@ class VideoActivity : AppCompatActivity() {
     progressHandler.postDelayed(progressTick, PROGRESS_INTERVAL_MS)
   }
 
+  private fun updateControllerTitle(title: String) {
+    controllerTitleView?.text = title
+  }
+
   private fun initializeFromIntent(intent: Intent) {
     mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_VOD
     contentKey = intent.getStringExtra(EXTRA_CONTENT_KEY) ?: ""
     defaultUa = intent.getStringExtra(EXTRA_UA) ?: ""
     defaultReferer = intent.getStringExtra(EXTRA_REFERER) ?: ""
+    defaultDns = intent.getStringExtra(EXTRA_DNS) ?: ""
     initialTitle = intent.getStringExtra(EXTRA_TITLE) ?: ""
     posterUrl = intent.getStringExtra(EXTRA_POSTER) ?: ""
     resumeMs = intent.getLongExtra(EXTRA_START_MS, 0L)
+    audioLangPref = intent.getStringExtra(EXTRA_AUDIO_LANG) ?: ""
+    subLangPref = intent.getStringExtra(EXTRA_SUB_LANG) ?: ""
+    subEnabledPref = intent.getBooleanExtra(EXTRA_SUB_ENABLED, false)
     applyTvOverscanPadding(intent.getIntExtra(EXTRA_TV_OVERSCAN_PERCENT, 0))
-    controllerTitleView?.text = initialTitle
+    updateControllerTitle(initialTitle)
 
     if (mode == MODE_LIVE) {
+      cancelLiveRetune()
+      retuneSameUrlAttempts = 0
+      retuneTotalAttempts = 0
+      retuneCandidateIndex = 0
       val json = NativePlayerPayload.takeChannels() ?: "[]"
       channels = ChannelLite.parseList(json)
+      // A non-empty payload that parsed to zero channels means ChannelLite.parseList's own
+      // catch swallowed a malformed JSON blob - surface it instead of silently starting
+      // native playback with an empty channel list.
+      if (channels.isEmpty() && json != "[]") {
+        Log.w(TAG, "channel list parse yielded zero channels for a non-empty payload")
+        EventQueue.append(
+          this,
+          "xt:android-native-error",
+          JSONObject().apply {
+            put("contentKey", contentKey)
+            put("code", "CHANNEL_LIST_PARSE_FAILED")
+            put("message", "native channel list parse failed or was empty")
+          }
+        )
+        finish()
+        return
+      }
       val initialId = intent.getStringExtra(EXTRA_INITIAL_CHANNEL_ID)
       currentChannelIndex = channels.indexOfFirst { it.id == initialId }
         .takeIf { it >= 0 } ?: 0
@@ -455,6 +573,7 @@ class VideoActivity : AppCompatActivity() {
   override fun onPause() {
     super.onPause()
     progressHandler.removeCallbacks(progressTick)
+    cancelLiveRetune()
     // Keep playing if we're transitioning into PiP. Android pauses the
     // Activity briefly during the PiP transition; we only really stop in
     // onStop().
@@ -466,6 +585,7 @@ class VideoActivity : AppCompatActivity() {
 
   override fun onStop() {
     super.onStop()
+    cancelLiveRetune()
     if (!releaseSuppressed && !isInPictureInPictureMode) {
       releasePlayer()
     }
@@ -473,6 +593,7 @@ class VideoActivity : AppCompatActivity() {
 
   override fun onDestroy() {
     progressHandler.removeCallbacks(progressTick)
+    cancelLiveRetune()
     NativePlayerControl.unregister(this)
     releasePlayer()
     if (!finishedEmitted) {
@@ -500,27 +621,66 @@ class VideoActivity : AppCompatActivity() {
     }
   }
 
+  // windowFullscreen alone is ignored by HyperOS; hide at runtime as well.
+  private fun applyImmersiveBars() {
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    controller.hide(WindowInsetsCompat.Type.systemBars())
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus) applyImmersiveBars()
+  }
+
   // ---------------------------------------------------------------------
   // Player setup
   // ---------------------------------------------------------------------
 
   private fun initializePlayer() {
     val view = playerView ?: return
+    val loadControl = DefaultLoadControl.Builder()
+      .setBufferDurationsMs(
+        LOAD_CONTROL_MIN_BUFFER_MS,
+        LOAD_CONTROL_MAX_BUFFER_MS,
+        LOAD_CONTROL_BUFFER_FOR_PLAYBACK_MS,
+        LOAD_CONTROL_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+      )
+      .setPrioritizeTimeOverSizeThresholds(true)
+      .build()
     val player = ExoPlayer.Builder(this)
-      .setMediaSourceFactory(buildMediaSourceFactory(defaultUa, defaultReferer))
+      .setMediaSourceFactory(mediaSourceFactoryFor(defaultUa, defaultReferer, defaultDns))
+      .setLoadControl(loadControl)
       .build()
     exoPlayer = player
     view.player = player
+    lastEmittedTracks = null
 
-    // Subs off by default; the controller's CC dialog re-enables the text type on pick.
-    player.trackSelectionParameters = player.trackSelectionParameters
-      .buildUpon()
-      .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-      .build()
+    // VOD restores the remembered audio/subtitle choice; subs stay off unless a prior pick
+    // enabled them. The controller's CC dialog can still override live.
+    val paramsBuilder = player.trackSelectionParameters.buildUpon()
+    if (mode == MODE_VOD) {
+      if (audioLangPref.isNotEmpty()) paramsBuilder.setPreferredAudioLanguage(audioLangPref)
+      if (subEnabledPref) {
+        paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+        if (subLangPref.isNotEmpty()) paramsBuilder.setPreferredTextLanguage(subLangPref)
+      } else {
+        paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+      }
+    } else {
+      paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+    }
+    player.trackSelectionParameters = paramsBuilder.build()
 
     player.addListener(object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
         val httpStatus = httpStatusOf(error)
+        if (mode == MODE_LIVE) {
+          val liveContentKey = channels.getOrNull(currentChannelIndex)?.id?.let { "live:$it" } ?: contentKey
+          Log.e(TAG, "playback error ($liveContentKey): ${error.errorCodeName} http=$httpStatus", error)
+          scheduleLiveRetune(httpStatus, error.errorCodeName)
+          return
+        }
         Log.e(TAG, "playback error: ${error.errorCodeName} http=$httpStatus", error)
         EventQueue.append(
           this@VideoActivity,
@@ -551,12 +711,21 @@ class VideoActivity : AppCompatActivity() {
       // Re-wire after the control view hides trackless buttons, so the chain never points through a GONE view.
       override fun onTracksChanged(tracks: Tracks) {
         playerView?.post { wireControllerFocusChain(mode == MODE_LIVE) }
+        if (mode == MODE_VOD) emitTracksIfChanged(tracks)
       }
 
       override fun onPlaybackStateChanged(state: Int) {
         updateKeepScreenOn(player)
         // STATE_READY knows the timeline; ticks only fire while playing, so report it right away.
         if (state == Player.STATE_READY && mode == MODE_VOD) emitProgress(player)
+        if (state == Player.STATE_READY && mode == MODE_LIVE && player.playWhenReady) {
+          scheduleLiveRetuneStableCheck()
+        }
+        // Provider closed the stream (e.g. connection slot taken elsewhere); mpegts/HLS end
+        // without a PlaybackException, so STATE_ENDED is the only signal we get here.
+        if (state == Player.STATE_ENDED && mode == MODE_LIVE) {
+          scheduleLiveRetune(httpStatus = 0, reason = "ended")
+        }
         if (state == Player.STATE_ENDED && mode == MODE_VOD) {
           finishedEmitted = true
           EventQueue.append(
@@ -617,14 +786,40 @@ class VideoActivity : AppCompatActivity() {
     return 0
   }
 
-  private fun buildMediaSourceFactory(ua: String, referer: String): MediaSource.Factory {
-    val httpFactory = DefaultHttpDataSource.Factory()
-      .setAllowCrossProtocolRedirects(true)
-    if (ua.isNotBlank()) httpFactory.setUserAgent(ua)
-    if (referer.isNotBlank()) {
-      httpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+  private fun mediaSourceFactoryFor(ua: String, referer: String, dns: String): MediaSource.Factory {
+    val cached = cachedMediaSourceFactory
+    if (cached != null && cachedFactoryUa == ua && cachedFactoryReferer == referer && cachedFactoryDns == dns) {
+      return cached
     }
-    return DefaultMediaSourceFactory(this).setDataSourceFactory(httpFactory)
+    val factory = buildMediaSourceFactory(ua, referer, dns)
+    cachedMediaSourceFactory = factory
+    cachedFactoryUa = ua
+    cachedFactoryReferer = referer
+    cachedFactoryDns = dns
+    return factory
+  }
+
+  private fun buildMediaSourceFactory(ua: String, referer: String, dns: String): MediaSource.Factory {
+    val dataSourceFactory: DataSource.Factory = if (dns.isBlank()) {
+      val httpFactory = DefaultHttpDataSource.Factory()
+        .setAllowCrossProtocolRedirects(true)
+      if (ua.isNotBlank()) httpFactory.setUserAgent(ua)
+      if (referer.isNotBlank()) httpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+      httpFactory
+    } else {
+      // OkHttp follows cross-protocol redirects by default, matching DefaultHttpDataSource above.
+      val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .dns(CustomDns.build(dns))
+        .build()
+      val okHttpFactory = OkHttpDataSource.Factory(client)
+      if (ua.isNotBlank()) okHttpFactory.setUserAgent(ua)
+      if (referer.isNotBlank()) okHttpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+      okHttpFactory
+    }
+    return DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory)
   }
 
   private fun buildMediaItem(url: String, title: String, poster: String): MediaItem {
@@ -783,6 +978,10 @@ class VideoActivity : AppCompatActivity() {
   private fun switchChannelByIndex(newIndex: Int) {
     if (newIndex !in channels.indices) return
     if (newIndex == currentChannelIndex) return
+    cancelLiveRetune()
+    retuneSameUrlAttempts = 0
+    retuneTotalAttempts = 0
+    retuneCandidateIndex = 0
     val previousIndex = currentChannelIndex
     currentChannelIndex = newIndex
     val channel = channels[newIndex]
@@ -799,13 +998,118 @@ class VideoActivity : AppCompatActivity() {
     switchChannelByIndex(next)
   }
 
-  private fun loadChannel(channel: ChannelLite, fireEvent: Boolean): Boolean {
+  // index 0 = the channel's primary url, index n = backupUrls[n - 1]; null past the end.
+  private fun candidateUrl(channel: ChannelLite, index: Int): String? {
+    return if (index <= 0) channel.streamUrl else channel.backupUrls.getOrNull(index - 1)
+  }
+
+  // Retries the current url on backoff, then hops to the next backupUrls candidate; gives up
+  // and finishes the activity after LIVE_RETUNE_TOTAL_MAX attempts or when candidates run out.
+  private fun scheduleLiveRetune(httpStatus: Int, reason: String) {
+    val channel = channels.getOrNull(currentChannelIndex) ?: return
+    if (retuneRunnable != null) return
+    lastRetuneHttpStatus = httpStatus
+    retuneTotalAttempts++
+
+    val rejected = httpStatus in PROVIDER_REJECTION_STATUSES
+    val previousCandidateIndex = retuneCandidateIndex
+    if (rejected || retuneSameUrlAttempts >= LIVE_RETUNE_SAME_URL_MAX) {
+      retuneCandidateIndex++
+      retuneSameUrlAttempts = 0
+    } else {
+      retuneSameUrlAttempts++
+    }
+
+    if (retuneTotalAttempts > LIVE_RETUNE_TOTAL_MAX || candidateUrl(channel, retuneCandidateIndex) == null) {
+      failLiveRetune(channel, reason)
+      return
+    }
+
+    val delay = if (rejected) {
+      300L
+    } else {
+      LIVE_RETUNE_BACKOFF_MS[minOf(retuneSameUrlAttempts - 1, LIVE_RETUNE_BACKOFF_MS.lastIndex).coerceAtLeast(0)]
+    }
+
+    playerView?.setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
+    if (retuneCandidateIndex > previousCandidateIndex && retuneCandidateIndex > 0) {
+      Toast.makeText(this, R.string.native_player_backup_server, Toast.LENGTH_SHORT).show()
+    }
+    Log.i(
+      TAG,
+      "live retune: reason=$reason http=$httpStatus candidate=$retuneCandidateIndex " +
+        "attempt=$retuneTotalAttempts delayMs=$delay"
+    )
+
+    val runnable = Runnable {
+      retuneRunnable = null
+      if (exoPlayer == null) return@Runnable
+      if (channels.getOrNull(currentChannelIndex) !== channel) return@Runnable
+      val url = candidateUrl(channel, retuneCandidateIndex)
+      if (url == null || !loadChannel(channel, fireEvent = false, urlOverride = url)) {
+        scheduleLiveRetune(0, "load-failed")
+      }
+    }
+    retuneRunnable = runnable
+    retuneHandler.postDelayed(runnable, delay)
+  }
+
+  private fun failLiveRetune(channel: ChannelLite, reason: String) {
+    val attempts = retuneTotalAttempts
+    val candidatesTried = minOf(retuneCandidateIndex + 1, 1 + channel.backupUrls.size)
+    val httpStatus = lastRetuneHttpStatus
+    cancelLiveRetune()
+    EventQueue.append(
+      this,
+      "xt:android-native-error",
+      JSONObject().apply {
+        put("contentKey", "live:${channel.id}")
+        put("code", "LIVE_RETUNE_EXHAUSTED")
+        put("message", reason)
+        put("attempts", attempts)
+        put("candidatesTried", candidatesTried)
+        if (httpStatus > 0) put("httpStatus", httpStatus)
+      }
+    )
+    Toast.makeText(this, R.string.native_player_stream_lost, Toast.LENGTH_SHORT).show()
+    Log.w(TAG, "live retune exhausted: reason=$reason attempts=$attempts candidatesTried=$candidatesTried http=$httpStatus")
+    finish()
+  }
+
+  // Resets the same-url backoff once playback has held steady for LIVE_RETUNE_STABLE_MS.
+  private fun scheduleLiveRetuneStableCheck() {
+    if (retuneRunnable == null && retuneTotalAttempts == 0) return
+    if (retuneStableRunnable != null) return
+    val runnable = Runnable {
+      retuneStableRunnable = null
+      if (exoPlayer?.isPlaying == true) {
+        retuneSameUrlAttempts = 0
+        retuneTotalAttempts = 0
+        retuneCandidateIndex = 0
+        playerView?.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+      }
+    }
+    retuneStableRunnable = runnable
+    retuneHandler.postDelayed(runnable, LIVE_RETUNE_STABLE_MS)
+  }
+
+  private fun cancelLiveRetune() {
+    retuneRunnable?.let { retuneHandler.removeCallbacks(it) }
+    retuneRunnable = null
+    retuneStableRunnable?.let { retuneHandler.removeCallbacks(it) }
+    retuneStableRunnable = null
+    playerView?.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+  }
+
+  private fun loadChannel(channel: ChannelLite, fireEvent: Boolean, urlOverride: String? = null): Boolean {
     val player = exoPlayer ?: return false
     val ua = channel.ua.ifBlank { defaultUa }
     val ref = channel.referer.ifBlank { defaultReferer }
+    val url = urlOverride ?: channel.streamUrl
+    updateControllerTitle(channel.name)
     try {
-      val factory = buildMediaSourceFactory(ua, ref)
-      val item = buildMediaItem(channel.streamUrl, channel.name, channel.logo)
+      val factory = mediaSourceFactoryFor(ua, ref, defaultDns)
+      val item = buildMediaItem(url, channel.name, channel.logo)
       val src = factory.createMediaSource(item)
       player.setMediaSource(src)
       player.prepare()
@@ -931,6 +1235,7 @@ class VideoActivity : AppCompatActivity() {
       hideChannelOverlay()
     } else {
       controls.useController = true
+      applyImmersiveBars()
     }
   }
 }
@@ -947,6 +1252,7 @@ data class ChannelLite(
   val ua: String,
   val referer: String,
   val nowProgramme: String,
+  val backupUrls: List<String> = emptyList(),
 ) {
   companion object {
     fun parseList(json: String): List<ChannelLite> {
@@ -962,12 +1268,18 @@ data class ChannelLite(
             ua = obj.optString("ua"),
             referer = obj.optString("referer"),
             nowProgramme = obj.optString("nowProgramme"),
+            backupUrls = parseBackupUrls(obj.optJSONArray("backupUrls")),
           )
         }.filter { it.id.isNotBlank() && it.streamUrl.isNotBlank() }
       } catch (error: Throwable) {
         Log.w("ChannelLite", "parse failed: $error")
         emptyList()
       }
+    }
+
+    private fun parseBackupUrls(arr: JSONArray?): List<String> {
+      if (arr == null) return emptyList()
+      return (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
     }
   }
 }
@@ -995,6 +1307,10 @@ object NativePlayerPayload {
     val payload = pendingChannelsJson
     pendingChannelsJson = null
     return payload
+  }
+
+  fun clearChannels() {
+    pendingChannelsJson = null
   }
 }
 
@@ -1063,6 +1379,8 @@ object EventQueue {
 
   @Synchronized
   fun append(activity: android.content.Context, type: String, payload: JSONObject) {
+    // Seen regardless of pushListener: MainActivity's WebView is suspended behind VideoActivity.
+    NativeReportMirror.onEvent(type, payload)
     val listener = pushListener
     if (listener != null && listener(type, payload)) return
     try {

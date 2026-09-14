@@ -4,9 +4,9 @@
 //   { entries: PlaylistEntry[], selectedId: string }
 //
 // PlaylistEntry =
-//   | { _id, title, type: "xtream",    serverUrl, username, password,  mirrors?, liveContainer?, epgUrl?, additionalEpgUrls?, disableProviderEpg?, addedAt, lastUsedAt? }
-//   | { _id, title, type: "m3u",       url,                            epgUrl?, additionalEpgUrls?, disableProviderEpg?, addedAt, lastUsedAt? }
-//   | { _id, title, type: "local-m3u", sourceName,                     epgUrl?, additionalEpgUrls?, disableProviderEpg?, addedAt, lastUsedAt? }
+//   | { _id, title, type: "xtream",    serverUrl, username, password,  mirrors?, liveContainer?, epgUrl?, additionalEpgUrls?, disableProviderEpg?, dns?, addedAt, lastUsedAt? }
+//   | { _id, title, type: "m3u",       url,                            epgUrl?, additionalEpgUrls?, disableProviderEpg?, dns?, addedAt, lastUsedAt? }
+//   | { _id, title, type: "local-m3u", sourceName,                     epgUrl?, additionalEpgUrls?, disableProviderEpg?, dns?, addedAt, lastUsedAt? }
 //
 // `mirrors` (xtream only) is an ordered list of backup `{ serverUrl, username,
 // password }` triples that callers fall back to when the primary credentials
@@ -32,12 +32,17 @@
 // Optional on every entry type: `emoji` (free-form, trimmed, capped) and `accent`
 // (must be an ACCENT_PRESETS value, else dropped); both absent when unset.
 //
+// `dns` (optional, every type) is a custom DNS server override for this
+// playlist's provider/M3U/EPG requests, stored as the normalizeDnsInput()
+// canonical string; entry overrides the global default (app-settings.js).
+//
 // Tauri builds persist via @tauri-apps/plugin-store; web/SSR via localStorage
 // + cookies. Old "xt_host" / "xt_port" / "xt_user" / "xt_pass" keys are
 // auto-migrated into one entry on first read.
 
 import { log } from "@/scripts/lib/log.js"
-import { ACCENT_PRESETS } from "@/scripts/lib/app-settings.js"
+import { ACCENT_PRESETS, getGlobalDns, DNS_EVENT } from "@/scripts/lib/app-settings.js"
+import { normalizeDnsInput, resolveDnsOverride } from "@/scripts/lib/dns-config.ts"
 import { Store } from "@tauri-apps/plugin-store"
 
 export const isTauri =
@@ -136,6 +141,10 @@ const uuid = () => {
 // same working host. Reset on entry list changes.
 const mirrorPin = new Map()
 
+// Sync mirror of the active entry, kept fresh by getActiveEntry() reads and
+// the xt:active-changed event, so getActiveDnsOverride() can stay sync.
+let cachedActiveEntry = null
+
 /** Mirror-aware candidate list for an xtream entry: primary first, then mirrors.
  *  Returns flat {host, port, user, pass, liveContainer} shape each. Empty for non-xtream. */
 export function xtreamCandidatesFor(entry) {
@@ -218,6 +227,12 @@ function sanitizeEmoji(value) {
 /** Returns `value` when it's a known accent preset, else "" (falls back to the global accent). */
 function sanitizeAccentOverride(value) {
   return typeof value === "string" && ACCENT_PRESETS.includes(value) ? value : ""
+}
+
+/** Canonical DNS string, or null when unset/unparseable (caller drops the key). */
+function sanitizeDnsField(value) {
+  if (typeof value !== "string" || !value.trim()) return null
+  return normalizeDnsInput(value)
 }
 
 // Xtream credentials ride in URL path segments, so interior whitespace can never authenticate.
@@ -397,7 +412,9 @@ export async function getEntries() {
 
 export async function getActiveEntry() {
   const s = await getState()
-  return s.entries.find((e) => e._id === s.selectedId) || null
+  const active = s.entries.find((e) => e._id === s.selectedId) || null
+  cachedActiveEntry = active
+  return active
 }
 
 export async function addEntry(partial) {
@@ -426,6 +443,9 @@ export async function addEntry(partial) {
         .filter(Boolean)
     : []
   entry.disableProviderEpg = !!entry.disableProviderEpg
+  const normalizedDns = sanitizeDnsField(entry.dns)
+  if (normalizedDns) entry.dns = normalizedDns
+  else delete entry.dns
   entry.emoji = sanitizeEmoji(entry.emoji)
   if (!entry.emoji) delete entry.emoji
   entry.accent = sanitizeAccentOverride(entry.accent)
@@ -480,6 +500,7 @@ export async function removeEntry(id) {
     const { deleteLocalContent } = await import("./local-content.js")
     deleteLocalContent(id).catch(() => {})
   }
+  releaseDnsProxyIfOrphaned(removed?.dns, remaining)
   dispatch(EVT_ENTRIES_UPDATED)
   dispatch(EVT_ACTIVE_CHANGED, await getActiveEntry())
 }
@@ -487,6 +508,7 @@ export async function removeEntry(id) {
 export async function updateEntry(id, patch) {
   const s = await getState()
   const existing = s.entries.find((e) => e._id === id)
+  const oldDns = existing?.dns || null
   const isLocal = patch?.type === "local-m3u" || existing?.type === "local-m3u"
   const incoming = { ...patch }
   let pendingLocalContent = null
@@ -508,6 +530,11 @@ export async function updateEntry(id, patch) {
     }
     if ("disableProviderEpg" in merged) {
       merged.disableProviderEpg = !!merged.disableProviderEpg
+    }
+    if ("dns" in merged) {
+      const normalizedDns = sanitizeDnsField(merged.dns)
+      if (normalizedDns) merged.dns = normalizedDns
+      else delete merged.dns
     }
     if ("emoji" in merged) {
       merged.emoji = sanitizeEmoji(merged.emoji)
@@ -533,6 +560,8 @@ export async function updateEntry(id, patch) {
   await writeRaw({ ...s, entries: next })
   const { invalidateEntry } = await import("./cache.js")
   invalidateEntry(id)
+  const newDns = next.find((e) => e._id === id)?.dns || null
+  if (oldDns && oldDns !== newDns) releaseDnsProxyIfOrphaned(oldDns, next)
   dispatch(EVT_ENTRIES_UPDATED)
   if (s.selectedId === id) dispatch(EVT_ACTIVE_CHANGED, await getActiveEntry())
 }
@@ -587,6 +616,88 @@ if (typeof document !== "undefined") {
   document.addEventListener(EVT_ENTRIES_UPDATED, () => {
     mirrorPin.clear()
   })
+  document.addEventListener(EVT_ACTIVE_CHANGED, (e) => {
+    cachedActiveEntry = e.detail || null
+    warmDnsProxyForActive()
+  })
+  let previousGlobalDns = getGlobalDns()
+  document.addEventListener(DNS_EVENT, () => {
+    const staleGlobalDns = previousGlobalDns
+    previousGlobalDns = getGlobalDns()
+    if (staleGlobalDns && staleGlobalDns !== previousGlobalDns) {
+      getEntries()
+        .then((entries) => releaseDnsProxyIfOrphaned(staleGlobalDns, entries))
+        .catch((err) => log.warn("[xt:creds] dns proxy release failed:", err))
+    }
+    warmDnsProxyForActive()
+  })
+  getActiveEntry().then(warmDnsProxyForActive).catch(() => {})
+}
+
+// ---------------------------------------------------------------------------
+// Custom DNS server overrides
+// ---------------------------------------------------------------------------
+export function getEntryDns(entry) {
+  return entry?.dns || null
+}
+
+/** Sync: entry's own dns wins, else the global default, else null (system DNS). */
+export function getEntryDnsOverride(entry) {
+  return resolveDnsOverride(getEntryDns(entry), getGlobalDns())
+}
+
+/** Sync: same as getEntryDnsOverride() but for the currently active playlist. */
+export function getActiveDnsOverride() {
+  return getEntryDnsOverride(cachedActiveEntry)
+}
+
+/** Async: same as getActiveDnsOverride(), but waits for the stored entry instead of the sync mirror. */
+export async function getActiveDnsOverrideAsync() {
+  return getEntryDnsOverride(await getActiveEntry())
+}
+
+/** Async: the override for a specific playlist entry (by id), not necessarily the active one. */
+export async function getPlaylistDnsOverride(playlistId) {
+  const entries = await getEntries()
+  return getEntryDnsOverride(entries.find((entry) => entry._id === playlistId) || null)
+}
+
+/** Resolves the active override and registers its proxy session; returns the override, or null when none applies. */
+export async function ensureDnsProxyReady() {
+  let override = null
+  try {
+    override = await getActiveDnsOverrideAsync()
+  } catch (err) {
+    log.warn("[xt:creds] dns override resolve failed:", err)
+    return null
+  }
+  if (!override) return null
+  try {
+    const { dnsProxyAvailable, ensureDnsProxy } = await import("./dns-proxy.ts")
+    if (!dnsProxyAvailable()) return null
+    await ensureDnsProxy(`dns:${override.raw}`, override)
+    return override
+  } catch (err) {
+    log.warn("[xt:creds] dns proxy warm failed:", err)
+    return null
+  }
+}
+
+/** Fire-and-forget: pre-registers the DNS proxy session for the active playlist, so the first play() is already proxied. */
+export function warmDnsProxyForActive() {
+  void ensureDnsProxyReady()
+}
+
+/** Fire-and-forget: tears down a DNS proxy session once no entry or the global default still uses it. */
+function releaseDnsProxyIfOrphaned(oldDns, remainingEntries) {
+  if (!oldDns) return
+  const stillUsed = remainingEntries.some((entry) => entry.dns === oldDns) || getGlobalDns() === oldDns
+  if (stillUsed) return
+  import("./dns-proxy.ts")
+    .then(({ dnsProxyAvailable, releaseDnsProxy }) => {
+      if (dnsProxyAvailable()) releaseDnsProxy(`dns:${oldDns}`)
+    })
+    .catch((err) => log.warn("[xt:creds] dns proxy release failed:", err))
 }
 
 // ---------------------------------------------------------------------------
@@ -762,9 +873,10 @@ export function parseXtreamUrl(input) {
  *   - no scheme + port 443/8443 → https first
  *   - no scheme + any other port (or none) → http first
  *
+ * @param {{ serverUrl: string, username: string, password: string, dns?: string|null }} params
  * @returns {Promise<{ serverUrl: string, scheme: "http"|"https", swapped: boolean, originalScheme: "http"|"https"|null, test: object }>}
  */
-export async function resolveServerScheme({ serverUrl, username, password }) {
+export async function resolveServerScheme({ serverUrl, username, password, dns }) {
   const trimmed = String(serverUrl || "").trim().replace(/\/+$/, "")
   if (!trimmed || !username || !password) {
     return {
@@ -792,7 +904,7 @@ export async function resolveServerScheme({ serverUrl, username, password }) {
   let lastResult = { status: "unavailable" }
   for (const scheme of order) {
     const candidateUrl = `${scheme}://${rest}`
-    const result = await testXtreamConnection({ serverUrl: candidateUrl, username, password })
+    const result = await testXtreamConnection({ serverUrl: candidateUrl, username, password, dns })
     // Any answer the provider could meaningfully return (active/expired/inactive)
     // means the scheme is right. Only "unavailable" warrants trying the other one.
     if (result.status !== "unavailable") {
@@ -823,9 +935,10 @@ export async function resolveServerScheme({ serverUrl, username, password }) {
  * actually serves a valid M3U body. Lets users paste `provider.com/get.php?...`
  * without the `http://` prefix on D-pad keyboards.
  *
+ * @param {{ dns?: string|null }} [options]
  * @returns {Promise<{ url: string, scheme: "http"|"https", swapped: boolean, originalScheme: "http"|"https"|null, test: object }>}
  */
-export async function resolveM3UScheme(url) {
+export async function resolveM3UScheme(url, { dns } = {}) {
   const trimmed = String(url || "").trim()
   if (!trimmed) {
     return {
@@ -853,7 +966,7 @@ export async function resolveM3UScheme(url) {
   let lastResult = { status: "unavailable" }
   for (const scheme of order) {
     const candidateUrl = `${scheme}://${rest}`
-    const result = await testM3UUrl(candidateUrl)
+    const result = await testM3UUrl(candidateUrl, { dns })
     if (result.status === "active") {
       return {
         url: candidateUrl,
@@ -883,9 +996,10 @@ export async function resolveM3UScheme(url) {
  * caller can render actionable copy without parsing free-form messages. See
  * `provider-error.js` for the full taxonomy.
  *
+ * @param {{ serverUrl: string, username: string, password: string, dns?: string|null }} params
  * @returns {Promise<{ status: "active"|"expired"|"inactive"|"unavailable", expDate?: number|null, reason?: string, httpStatus?: number, raw?: string, latencyMs?: number, allowedOutputFormats?: string[]|null }>}
  */
-export async function testXtreamConnection({ serverUrl, username, password }) {
+export async function testXtreamConnection({ serverUrl, username, password, dns }) {
   if (!serverUrl || !username || !password) {
     return { status: "unavailable", reason: "unknown", raw: "Missing fields" }
   }
@@ -899,7 +1013,9 @@ export async function testXtreamConnection({ serverUrl, username, password }) {
       "get_account_info"
     )
     const { providerFetch } = await import("./provider-fetch.js")
-    const response = await providerFetch(url, { logKind: "api" })
+    // A new/untried provider must never inherit the active playlist's DNS.
+    const dnsServer = getEntryDnsOverride({ dns })
+    const response = await providerFetch(url, { logKind: "api", dns: dnsServer })
     if (!response.ok) {
       const classified = classifyError({ response })
       return {
@@ -949,9 +1065,10 @@ export async function testXtreamConnection({ serverUrl, username, password }) {
 }
 
 /**
+ * @param {{ dns?: string|null }} [options]
  * @returns {Promise<{ status: "active"|"unavailable", count?: number, reason?: string, httpStatus?: number, raw?: string, latencyMs?: number }>}
  */
-export async function testM3UUrl(url) {
+export async function testM3UUrl(url, { dns } = {}) {
   if (!url) return { status: "unavailable", reason: "unknown", raw: "Missing URL" }
   if (!/^https?:\/\//i.test(url)) {
     return { status: "unavailable", reason: "unknown", raw: "Missing scheme" }
@@ -960,7 +1077,9 @@ export async function testM3UUrl(url) {
   const startedAt = Date.now()
   try {
     const { providerFetch } = await import("./provider-fetch.js")
-    const response = await providerFetch(url, { logKind: "api" })
+    // A new/untried provider must never inherit the active playlist's DNS.
+    const dnsServer = getEntryDnsOverride({ dns })
+    const response = await providerFetch(url, { logKind: "api", dns: dnsServer })
     if (!response.ok) {
       const classified = classifyError({ response })
       return {

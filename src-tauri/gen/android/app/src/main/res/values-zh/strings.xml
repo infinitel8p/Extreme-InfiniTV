@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">频道</string>
     <string name="native_player_unsupported_stream">无法在原生播放器中播放此频道</string>
+    <string name="native_player_backup_server">正在通过备用服务器重新连接…</string>
+    <string name="native_player_stream_lost">串流已中断 - 无法重新连接</string>
     <string name="xt_video_settings_title">播放器设置</string>
     <string name="xt_video_display_mode">显示模式</string>
     <string name="xt_video_display_fit">适应</string>
@@ -9,4 +11,9 @@
     <string name="xt_video_display_stretch">拉伸</string>
     <string name="xt_video_playback_speed">播放速度</string>
     <string name="xt_video_speed_normal">正常</string>
+    <string name="webview_floor_title">更新 Android System WebView</string>
+    <string name="webview_floor_message">Extreme InfiniTV 需要 Android System WebView %1$d 或更高版本。此设备的版本为 %2$s，因此页面可能显示无样式或没有反应。\n\n在 Android TV 上，Play 商店隐藏了常规的 WebView 更新。请从 Play 商店安装\"Android System WebView Beta\"，然后开启开发者选项，并在\"WebView implementation\"中选择它。</string>
+    <string name="webview_floor_get_beta">获取 WebView Beta</string>
+    <string name="webview_floor_developer_options">开发者选项</string>
+    <string name="webview_floor_continue">仍然继续</string>
 </resources>

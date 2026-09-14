@@ -101,6 +101,26 @@ export async function saveCustomDoc(entryId: string, doc: CustomPlaylistDoc): Pr
   return setLocalContent(entryId, JSON.stringify(doc))
 }
 
+const customDocMutationChains = new Map<string, Promise<unknown>>()
+
+/** Queues load-mutate-save per entryId so concurrent editors can't clobber each other; null return means nothing was saved. */
+export function mutateCustomDoc(
+  entryId: string,
+  mutate: (doc: CustomPlaylistDoc) => CustomPlaylistDoc | Promise<CustomPlaylistDoc | null> | null
+): Promise<CustomPlaylistDoc | null> {
+  const previous = customDocMutationChains.get(entryId) ?? Promise.resolve()
+  const step = previous.catch(() => undefined).then(async (): Promise<CustomPlaylistDoc | null> => {
+    const doc = await loadCustomDoc(entryId)
+    const result = await mutate(doc)
+    if (!result || result === doc) return null
+    const saved = await saveCustomDoc(entryId, result)
+    if (!saved) throw new Error("saveCustomDoc returned false")
+    return result
+  })
+  customDocMutationChains.set(entryId, step.catch(() => undefined))
+  return step
+}
+
 export function addChannel(
   doc: CustomPlaylistDoc,
   source: CustomSource,
@@ -170,6 +190,26 @@ export function moveChannel(
   return { ...doc, channels, groups }
 }
 
+export function moveChannelWithinGroup(
+  doc: CustomPlaylistDoc,
+  key: string,
+  direction: "up" | "down"
+): CustomPlaylistDoc {
+  const channel = doc.channels.find((item) => item.key === key)
+  if (!channel) return doc
+  const groupChannels = doc.channels.filter((item) => item.group === channel.group)
+  const index = groupChannels.findIndex((item) => item.key === key)
+  if (index === -1) return doc
+  if (direction === "up") {
+    if (index <= 0) return doc
+    return moveChannel(doc, key, groupChannels[index - 1].key, channel.group)
+  }
+  if (index >= groupChannels.length - 1) return doc
+  const afterNextIndex = index + 2
+  const beforeKey = afterNextIndex < groupChannels.length ? groupChannels[afterNextIndex].key : null
+  return moveChannel(doc, key, beforeKey, channel.group)
+}
+
 export function setOverrides(
   doc: CustomPlaylistDoc,
   key: string,
@@ -188,6 +228,23 @@ export function setCatchup(
 ): CustomPlaylistDoc {
   const channels = doc.channels.map((channel) => (channel.key === key ? { ...channel, catchup } : channel))
   return { ...doc, channels }
+}
+
+/** Identity key for a source reference, used to detect a channel already pulled into the doc. */
+export function customSourceKey(source: CustomSource): string {
+  if (source.kind === "xtream") return `x:${source.entryId}:${source.streamId}`
+  if (source.kind === "m3u") return `m:${source.entryId}:${source.url}`
+  return `d:${source.url}`
+}
+
+/** Source keys already present in the doc, one entry per channel's primary source. */
+export function presentSourceKeys(doc: CustomPlaylistDoc): Set<string> {
+  const keys = new Set<string>()
+  for (const channel of doc.channels) {
+    const source = channel.sources[0]
+    if (source) keys.add(customSourceKey(source))
+  }
+  return keys
 }
 
 export function setChannelGroup(doc: CustomPlaylistDoc, keys: string[], group: string): CustomPlaylistDoc {
@@ -209,6 +266,21 @@ export function renameGroup(doc: CustomPlaylistDoc, from: string, to: string): C
       ? doc.groups.filter((group) => group !== from)
       : doc.groups.map((group) => (group === from ? to : group))
   return { ...doc, groups, channels }
+}
+
+/** Removes a group, reassigning its channels to Uncategorized rather than dropping them. */
+export function removeGroup(doc: CustomPlaylistDoc, group: string): CustomPlaylistDoc {
+  if (!doc.groups.includes(group)) return doc
+  const channels = doc.channels.map((channel) =>
+    channel.group === group ? { ...channel, group: UNCATEGORIZED } : channel
+  )
+  const groups = doc.groups.filter((existing) => existing !== group)
+  const needsUncategorized = channels.some((channel) => channel.group === UNCATEGORIZED)
+  return {
+    ...doc,
+    groups: needsUncategorized && !groups.includes(UNCATEGORIZED) ? [...groups, UNCATEGORIZED] : groups,
+    channels,
+  }
 }
 
 export function reorderGroups(doc: CustomPlaylistDoc, orderedGroups: string[]): CustomPlaylistDoc {

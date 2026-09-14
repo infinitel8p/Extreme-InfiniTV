@@ -142,6 +142,15 @@ describe("429 rate limiting", () => {
     expect(await fetchTvdbTitle(1, "series")).toBeNull()
     expect(providerFetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it("also memoizes a path that threw (network error, abort/timeout), not just a non-ok response", async () => {
+    providerFetchMock.mockRejectedValue(new Error("network down"))
+    expect(await fetchTvdbTitle(1, "series")).toBeNull()
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+
+    expect(await fetchTvdbTitle(1, "series")).toBeNull()
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("fetchTvdbSeason", () => {

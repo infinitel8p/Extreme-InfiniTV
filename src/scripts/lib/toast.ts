@@ -68,6 +68,15 @@ function injectStyles() {
       }
     }
 
+    /* Opt-in: pages whose toolbar sits under the default top-center anchor
+       (e.g. the playlist editor) can set this on <html> to anchor toasts
+       to the bottom instead. */
+    :root[data-toast-position="bottom"] #${CONTAINER_ID} {
+      top: auto;
+      bottom: calc(max(1rem, env(safe-area-inset-bottom, 0px)) + var(--xt-tv-overscan, 0) * 1vh);
+      flex-direction: column-reverse;
+    }
+
     .xt-toast {
       pointer-events: auto;
       position: relative;

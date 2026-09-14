@@ -11,22 +11,27 @@ vi.mock("@/scripts/lib/local-content.js", () => ({
   }),
 }))
 
-import { getLocalContent } from "@/scripts/lib/local-content.js"
+import { getLocalContent, setLocalContent } from "@/scripts/lib/local-content.js"
 import {
   emptyCustomDoc,
   loadCustomDoc,
   saveCustomDoc,
+  mutateCustomDoc,
   addChannel,
   removeChannels,
   moveChannel,
+  moveChannelWithinGroup,
   setOverrides,
   setCatchup,
   setChannelGroup,
   renameGroup,
+  removeGroup,
   reorderGroups,
   resolveCustomChannels,
   collectSourceEntryIds,
   collectDependentCustomEntryIds,
+  customSourceKey,
+  presentSourceKeys,
   type CustomSource,
   type SourcePool,
 } from "@/scripts/lib/custom-playlist.ts"
@@ -183,6 +188,74 @@ describe("moveChannel", () => {
   })
 })
 
+describe("moveChannelWithinGroup", () => {
+  function buildThreeChannelDoc() {
+    let doc = emptyCustomDoc()
+    const first = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" })
+    doc = first.doc
+    const second = addChannel(doc, xtreamSource("p1", 2), { name: "B", group: "News" })
+    doc = second.doc
+    const third = addChannel(doc, xtreamSource("p1", 3), { name: "C", group: "News" })
+    doc = third.doc
+    return { doc, first: first.channel, second: second.channel, third: third.channel }
+  }
+
+  it("swaps with the previous channel in the same group when moved up", () => {
+    const { doc, first, second, third } = buildThreeChannelDoc()
+    const result = moveChannelWithinGroup(doc, second.key, "up")
+    expect(result.channels.map((channel) => channel.key)).toEqual([second.key, first.key, third.key])
+  })
+
+  it("swaps with the next channel in the same group when moved down", () => {
+    const { doc, first, second, third } = buildThreeChannelDoc()
+    const result = moveChannelWithinGroup(doc, second.key, "down")
+    expect(result.channels.map((channel) => channel.key)).toEqual([first.key, third.key, second.key])
+  })
+
+  it("is a no-op at the top edge of the group", () => {
+    const { doc, first } = buildThreeChannelDoc()
+    const result = moveChannelWithinGroup(doc, first.key, "up")
+    expect(result).toBe(doc)
+  })
+
+  it("is a no-op at the bottom edge of the group", () => {
+    const { doc, third } = buildThreeChannelDoc()
+    const result = moveChannelWithinGroup(doc, third.key, "down")
+    expect(result).toBe(doc)
+  })
+
+  it("is a no-op for an unknown key", () => {
+    const { doc } = buildThreeChannelDoc()
+    const result = moveChannelWithinGroup(doc, "missing-key", "up")
+    expect(result).toBe(doc)
+  })
+
+  it("only reorders within its own group, leaving other groups untouched", () => {
+    let doc = emptyCustomDoc()
+    const first = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" })
+    doc = first.doc
+    const second = addChannel(doc, xtreamSource("p1", 2), { name: "B", group: "News" })
+    doc = second.doc
+    const third = addChannel(doc, xtreamSource("p1", 3), { name: "C", group: "Sport" })
+    doc = third.doc
+
+    const result = moveChannelWithinGroup(doc, second.channel.key, "up")
+    expect(result.channels.map((channel) => channel.key)).toEqual([
+      second.channel.key,
+      first.channel.key,
+      third.channel.key,
+    ])
+    expect(result.channels.find((channel) => channel.key === third.channel.key)?.group).toBe("Sport")
+  })
+
+  it("does not mutate the input doc", () => {
+    const { doc, second } = buildThreeChannelDoc()
+    const snapshot = JSON.parse(JSON.stringify(doc))
+    moveChannelWithinGroup(doc, second.key, "up")
+    expect(doc).toEqual(snapshot)
+  })
+})
+
 describe("setOverrides", () => {
   it("patches only the target channel's overrides", () => {
     let doc = emptyCustomDoc()
@@ -304,6 +377,62 @@ describe("renameGroup", () => {
   })
 })
 
+describe("removeGroup", () => {
+  it("removes an empty group with no channels to reassign", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    doc = withNewGroupForTest(doc, "Empty")
+
+    const result = removeGroup(doc, "Empty")
+    expect(result.groups).toEqual(["News"])
+    expect(result.channels).toHaveLength(1)
+  })
+
+  it("reassigns the group's channels to Uncategorized instead of dropping them", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 2), { name: "B", group: "Sport" }).doc
+
+    const result = removeGroup(doc, "News")
+    expect(result.groups).toEqual(["Sport", "Uncategorized"])
+    expect(result.channels.find((channel) => channel.overrides.name === "A")?.group).toBe("Uncategorized")
+    expect(result.channels.find((channel) => channel.overrides.name === "B")?.group).toBe("Sport")
+  })
+
+  it("does not duplicate an already-existing Uncategorized group", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 2), { name: "B" }).doc // defaults to Uncategorized
+
+    const result = removeGroup(doc, "News")
+    expect(result.groups).toEqual(["Uncategorized"])
+    expect(result.channels.every((channel) => channel.group === "Uncategorized")).toBe(true)
+  })
+
+  it("is a no-op for an unknown group", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    const result = removeGroup(doc, "Missing")
+    expect(result).toBe(doc)
+  })
+
+  it("does not mutate the input doc", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 2), { name: "B", group: "Sport" }).doc
+    const snapshot = JSON.parse(JSON.stringify(doc))
+    removeGroup(doc, "News")
+    expect(doc).toEqual(snapshot)
+  })
+})
+
+// Local helper: mirrors the editor's own "New group" mutator, which has no
+// standalone export (it's folded into addChannel's group registration).
+function withNewGroupForTest(doc: ReturnType<typeof emptyCustomDoc>, name: string) {
+  if (doc.groups.includes(name)) return doc
+  return { ...doc, groups: [...doc.groups, name] }
+}
+
 describe("reorderGroups", () => {
   it("reorders when given the same set of groups", () => {
     let doc = emptyCustomDoc()
@@ -369,6 +498,60 @@ describe("loadCustomDoc", () => {
   it("throws instead of returning an empty doc when the storage read fails (null, not empty)", async () => {
     vi.mocked(getLocalContent).mockResolvedValueOnce(null)
     await expect(loadCustomDoc("entry-1")).rejects.toThrow(/storage read failed/)
+  })
+})
+
+describe("mutateCustomDoc", () => {
+  it("loads, mutates and saves, returning the new doc", async () => {
+    await saveCustomDoc("entry-1", emptyCustomDoc())
+    const result = await mutateCustomDoc("entry-1", (doc) => addChannel(doc, xtreamSource("p1", 1), { name: "A" }).doc)
+    expect(result?.channels).toHaveLength(1)
+    expect(await loadCustomDoc("entry-1")).toEqual(result)
+  })
+
+  it("returns null and does not save when mutate returns the same doc reference", async () => {
+    await saveCustomDoc("entry-1", emptyCustomDoc())
+    vi.mocked(setLocalContent).mockClear()
+    const result = await mutateCustomDoc("entry-1", (doc) => doc)
+    expect(result).toBeNull()
+    expect(setLocalContent).not.toHaveBeenCalled()
+  })
+
+  it("returns null and does not save when mutate returns null", async () => {
+    await saveCustomDoc("entry-1", emptyCustomDoc())
+    const result = await mutateCustomDoc("entry-1", () => null)
+    expect(result).toBeNull()
+  })
+
+  it("serializes concurrent mutations against the same entryId", async () => {
+    await saveCustomDoc("entry-1", emptyCustomDoc())
+    const [firstResult, secondResult] = await Promise.all([
+      mutateCustomDoc("entry-1", (doc) => addChannel(doc, xtreamSource("p1", 1), { name: "A" }).doc),
+      mutateCustomDoc("entry-1", (doc) => addChannel(doc, xtreamSource("p1", 2), { name: "B" }).doc),
+    ])
+    expect(firstResult?.channels).toHaveLength(1)
+    expect(secondResult?.channels).toHaveLength(2)
+    const final = await loadCustomDoc("entry-1")
+    expect(final.channels.map((channel) => channel.overrides.name)).toEqual(["A", "B"])
+  })
+
+  it("rejects when saveCustomDoc returns false", async () => {
+    await saveCustomDoc("entry-1", emptyCustomDoc())
+    vi.mocked(setLocalContent).mockResolvedValueOnce(false)
+    await expect(
+      mutateCustomDoc("entry-1", (doc) => addChannel(doc, xtreamSource("p1", 1), { name: "A" }).doc)
+    ).rejects.toThrow(/saveCustomDoc returned false/)
+  })
+
+  it("keeps queuing for later entryIds after a mutate rejects", async () => {
+    await saveCustomDoc("entry-1", emptyCustomDoc())
+    await expect(
+      mutateCustomDoc("entry-1", () => {
+        throw new Error("boom")
+      })
+    ).rejects.toThrow(/boom/)
+    const result = await mutateCustomDoc("entry-1", (doc) => addChannel(doc, xtreamSource("p1", 1), { name: "A" }).doc)
+    expect(result?.channels).toHaveLength(1)
   })
 })
 
@@ -938,5 +1121,24 @@ describe("resolveCustomChannels", () => {
     const malformedNoSourcesResolved = resolved.find((channel) => channel.id === 998)
     expect(malformedResolved?.unresolved).toBe(true)
     expect(malformedNoSourcesResolved?.unresolved).toBe(true)
+  })
+})
+
+describe("customSourceKey / presentSourceKeys", () => {
+  it("keys xtream, m3u, and direct sources by their identity, not display fields", () => {
+    expect(customSourceKey(xtreamSource("p1", 10))).toBe("x:p1:10")
+    expect(customSourceKey(m3uSource("p2", "http://host/a.m3u8", "A"))).toBe("m:p2:http://host/a.m3u8")
+    expect(customSourceKey(directSource("http://host/b.m3u8"))).toBe("d:http://host/b.m3u8")
+  })
+
+  it("collects one key per channel's primary source", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 10), { name: "A" }).doc
+    doc = addChannel(doc, m3uSource("p2", "http://host/a.m3u8", "B"), { name: "B" }).doc
+
+    const keys = presentSourceKeys(doc)
+    expect(keys).toEqual(new Set(["x:p1:10", "m:p2:http://host/a.m3u8"]))
+    expect(keys.has(customSourceKey(xtreamSource("p1", 10)))).toBe(true)
+    expect(keys.has(customSourceKey(xtreamSource("p1", 99)))).toBe(false)
   })
 })

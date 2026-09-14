@@ -31,6 +31,10 @@ function isEditing(el: HTMLElement): boolean {
 // De-dupes the native DPAD_CENTER forward on devices that also deliver a DOM Enter.
 let lastDomEnterAt = 0
 
+// Mirrors tv/router.ts's TV_VIEW_MOUNTED_EVENT string without importing the TV router into
+// this shared (classic + TV) module.
+const TV_VIEW_MOUNTED_EVENT = "xt:tv-view-mounted"
+
 function stampGuarded(el: HTMLElement): void {
   if (isEditing(el)) return
   if (el.dataset.tvGuarded !== "1") {
@@ -69,18 +73,31 @@ function stampAll(root: ParentNode): void {
 export function mountTvInputGuard(): void {
   if (!isTvDevice()) return
 
-  stampAll(document)
+  // The TV shell (TvLayout.astro) always has a #tv-main whose content the router replaces
+  // wholesale per view mount; scoping there (and re-stamping on those two events instead of
+  // reacting to every added node) is much cheaper than a document-wide observer. The classic
+  // UI has no #tv-main, so it keeps the original document-wide, mutation-driven behavior for
+  // dynamically inserted dialogs (category picker, etc).
+  const tvMain = document.getElementById("tv-main")
 
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      mutation.addedNodes.forEach((node) => {
-        if (!(node instanceof Element)) return
-        if (isGuardedElement(node)) stampGuarded(node)
-        stampAll(node)
-      })
-    }
-  })
-  observer.observe(document.documentElement, { childList: true, subtree: true })
+  stampAll(tvMain || document)
+
+  if (tvMain) {
+    const restamp = () => stampAll(document.getElementById("tv-main") || document)
+    document.addEventListener("astro:page-load", restamp)
+    document.addEventListener(TV_VIEW_MOUNTED_EVENT, restamp)
+  } else {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        mutation.addedNodes.forEach((node) => {
+          if (!(node instanceof Element)) return
+          if (isGuardedElement(node)) stampGuarded(node)
+          stampAll(node)
+        })
+      }
+    })
+    observer.observe(document.documentElement, { childList: true, subtree: true })
+  }
 
   window.addEventListener(
     "keydown",

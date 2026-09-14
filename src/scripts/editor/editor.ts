@@ -7,15 +7,17 @@ import {
   addChannel,
   removeChannels,
   moveChannel,
+  moveChannelWithinGroup,
   setOverrides,
   setCatchup,
   renameGroup,
   reorderGroups,
+  removeGroup,
   resolveCustomChannels,
+  customSourceKey,
+  presentSourceKeys,
   type CustomPlaylistDoc,
   type CustomChannel,
-  type CustomChannelOverrides,
-  type CustomChannelCatchup,
   type CustomSource,
   type ResolvedCustomChannel,
 } from "@/scripts/lib/custom-playlist.ts"
@@ -26,14 +28,15 @@ import { buildM3UEntriesForEntry, saveM3UText, sanitizeFilename } from "@/script
 import { probeStreamHead } from "@/scripts/lib/stream-diagnostic.js"
 import { normalize } from "@/scripts/lib/text.ts"
 import { debounce } from "@/scripts/lib/debounce.ts"
-import { t } from "@/scripts/lib/i18n.ts"
+import { t, tCount } from "@/scripts/lib/i18n.ts"
 import { toastSuccess, toastError, toastWarn } from "@/scripts/lib/toast.ts"
-import { confirmDialog } from "@/scripts/lib/confirm-dialog.ts"
-import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.ts"
-import { ICON_GRIP_VERTICAL, ICON_ARROW_UP, ICON_ARROW_DOWN, ICON_TRASH, ICON_PENCIL } from "@/scripts/lib/icons.ts"
+import { openCustomChannelEditDialog } from "@/scripts/lib/custom-channel-edit-dialog.ts"
+import { attachDialogSpatialNav, attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.ts"
+import { ICON_GRIP_VERTICAL, ICON_ARROW_UP, ICON_ARROW_DOWN, ICON_DOTS_VERTICAL, ICON_CHEVRON_DOWN, ICON_CHECK } from "@/scripts/lib/icons.ts"
 import { log } from "@/scripts/lib/log.ts"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { getDensityFactor } from "@/scripts/lib/app-settings.js"
+import { escapeHtml } from "@/scripts/lib/format.ts"
 
 const ROW_H = Math.max(44, Math.round(56 * getDensityFactor()))
 const SOURCE_OVERSCAN = 6
@@ -45,22 +48,43 @@ let doc: CustomPlaylistDoc = { version: 1, nextId: 1, groups: [], channels: [] }
 let allSourceChannels: any[] = []
 let filteredSourceChannels: any[] = []
 let selectedSourceEntryId = ""
+let selectedSourceEntryType = ""
 const selectedIds = new Set<number>()
 let lastClickedIndex = -1
 
 let orderedChannels: CustomChannel[] = []
 let resolvedChannels: ResolvedCustomChannel[] = []
-
-let editingChannelKey: string | null = null
+let sourceTitleById = new Map<string, string>()
+let presentSourceKeySet = new Set<string>()
 
 const MAX_UNDO_DEPTH = 20
 const undoStack: CustomPlaylistDoc[] = []
+const redoStack: CustomPlaylistDoc[] = []
 
-type LinkCheckStatus = "pending" | "ok" | "fail"
+type LinkCheckStatus = "pending" | "ok" | "fail" | "unchecked"
 const linkCheckStatus = new Map<string, LinkCheckStatus>()
 let checkLinksRunning = false
 let checkLinksAbort: AbortController | null = null
 let checkLinksProgress = { done: 0, total: 0 }
+
+type SaveStatus = "idle" | "saving" | "saved" | "failed"
+let saveShowSavingTimer: ReturnType<typeof setTimeout> | null = null
+let saveClearTimer: ReturnType<typeof setTimeout> | null = null
+
+// Settled (unedited-since-commit) inputs defer Ctrl+Z to the doc-level undo.
+const inputCommittedValues = new WeakMap<HTMLInputElement, string>()
+function markInputCommitted(input: HTMLInputElement): void {
+  inputCommittedValues.set(input, input.value)
+}
+function isSettledTrackedInput(input: HTMLInputElement): boolean {
+  return inputCommittedValues.has(input) && inputCommittedValues.get(input) === input.value
+}
+
+const PANE_STORAGE_KEY = "xt_editor_pane"
+let activePane: "source" | "playlist" = "playlist"
+
+const COLLAPSED_GROUPS_KEY_PREFIX = "xt_editor_collapsed_groups_"
+let collapsedGroups = new Set<string>()
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -70,6 +94,8 @@ const byId = <T extends HTMLElement>(id: string): T | null =>
 
 const titleInput = byId<HTMLInputElement>("editor-title-input")
 const channelCountEl = byId<HTMLElement>("editor-channel-count")
+const saveStatusEl = byId<HTMLElement>("editor-save-status")
+const saveRetryBtn = byId<HTMLButtonElement>("editor-save-retry")
 const sourceSelect = byId<HTMLSelectElement>("editor-source-select")
 const sourceSearchInput = byId<HTMLInputElement>("editor-source-search")
 const sourceCategorySelect = byId<HTMLSelectElement>("editor-source-category")
@@ -81,23 +107,34 @@ const sourceSelectedCountEl = byId<HTMLElement>("editor-source-selected-count")
 const sourceTargetGroupInput = byId<HTMLInputElement>("editor-source-target-group")
 const addSelectedBtn = byId<HTMLButtonElement>("editor-add-selected-btn")
 
+const panesEl = byId<HTMLElement>("editor-panes")
+const paneTabSourceBtn = byId<HTMLButtonElement>("editor-pane-tab-source")
+const paneTabPlaylistBtn = byId<HTMLButtonElement>("editor-pane-tab-playlist")
+
 const groupsContainer = byId<HTMLElement>("editor-groups")
 const emptyStateEl = byId<HTMLElement>("editor-empty-state")
+const emptyAddUrlBtn = byId<HTMLButtonElement>("editor-empty-add-url-btn")
+const emptySourceBtn = byId<HTMLButtonElement>("editor-empty-source-btn")
 
 const undoBtn = byId<HTMLButtonElement>("editor-undo-btn")
+const redoBtn = byId<HTMLButtonElement>("editor-redo-btn")
 
 const newGroupBtn = byId<HTMLButtonElement>("editor-new-group-btn")
 const newGroupDialog = byId<HTMLDialogElement>("editor-new-group-dialog")
 const newGroupNameInput = byId<HTMLInputElement>("editor-new-group-name")
 
-const bulkRenameBtn = byId<HTMLButtonElement>("editor-bulk-rename-btn")
 const bulkRenameDialog = byId<HTMLDialogElement>("editor-bulk-rename-dialog")
 const bulkRenameFindInput = byId<HTMLInputElement>("editor-bulk-rename-find")
 const bulkRenameReplaceInput = byId<HTMLInputElement>("editor-bulk-rename-replace")
+const bulkRenameMatchCaseInput = byId<HTMLInputElement>("editor-bulk-rename-matchcase")
 const bulkRenamePreviewEl = byId<HTMLElement>("editor-bulk-rename-preview")
+const bulkRenamePreviewSampleEl = byId<HTMLElement>("editor-bulk-rename-preview-sample")
 
-const checkLinksBtn = byId<HTMLButtonElement>("editor-check-links-btn")
-const checkLinksLabelEl = byId<HTMLElement>("editor-check-links-label")
+const checkLinksChipEl = byId<HTMLElement>("editor-check-links-chip")
+const checkLinksChipLabelEl = byId<HTMLElement>("editor-check-links-chip-label")
+const checkLinksChipCancelBtn = byId<HTMLButtonElement>("editor-check-links-chip-cancel")
+
+const toolbarMoreBtn = byId<HTMLButtonElement>("editor-toolbar-more-btn")
 
 const groupsDatalist = byId<HTMLDataListElement>("editor-groups-datalist")
 
@@ -113,16 +150,105 @@ const urlRefererInput = byId<HTMLInputElement>("editor-url-referer")
 const urlManifestSelect = byId<HTMLSelectElement>("editor-url-manifest")
 const urlLicenseInput = byId<HTMLInputElement>("editor-url-license")
 
-const editDialog = byId<HTMLDialogElement>("editor-channel-edit-dialog")
-const editNameInput = byId<HTMLInputElement>("editor-edit-name")
-const editLogoInput = byId<HTMLInputElement>("editor-edit-logo")
-const editChnoInput = byId<HTMLInputElement>("editor-edit-chno")
-const editTvgIdInput = byId<HTMLInputElement>("editor-edit-tvgid")
-const editCatchupModeSelect = byId<HTMLSelectElement>("editor-edit-catchup-mode")
-const editCatchupDaysInput = byId<HTMLInputElement>("editor-edit-catchup-days")
-const editCatchupSourceInput = byId<HTMLInputElement>("editor-edit-catchup-source")
+let exportRunning = false
 
-const exportBtn = byId<HTMLButtonElement>("editor-export-btn")
+// ---------------------------------------------------------------------------
+// Shared popover menu (mirrors stream.ts's openChannelMenu styling/behavior)
+// ---------------------------------------------------------------------------
+interface MenuItemDef {
+  key: string
+  label: string
+  onClick: () => void
+  destructive?: boolean
+  disabled?: boolean
+}
+
+const MENU_ID = "editor-popover-menu"
+const MENU_ITEM_CLASS =
+  "w-full text-left px-3 py-2 min-h-11 flex items-center rounded-lg text-sm " +
+  "hover:bg-surface-2 focus:bg-surface-2 outline-none"
+let menuEl: HTMLElement | null = null
+let menuReturnFocus: HTMLElement | null = null
+let menuAnchorRowKey: string | null = null
+let menuAnchorGroupName: string | null = null
+const menuSpatialNav = attachPopoverSpatialNav({
+  id: `${MENU_ID}-section`,
+  selector: `#${MENU_ID} [role="menuitem"]`,
+})
+
+function closeMenu(): void {
+  if (!menuEl) return
+  menuSpatialNav.close()
+  menuEl.remove()
+  menuEl = null
+  menuAnchorRowKey = null
+  menuAnchorGroupName = null
+  document.removeEventListener("pointerdown", onMenuOutside, true)
+  document.removeEventListener("keydown", onMenuKey, true)
+  window.removeEventListener("blur", closeMenu)
+  window.removeEventListener("resize", closeMenu)
+  const returnTo = menuReturnFocus
+  menuReturnFocus = null
+  returnTo?.focus()
+}
+function onMenuOutside(event: PointerEvent): void {
+  if (!menuEl) return
+  if (menuEl.contains(event.target as Node)) return
+  closeMenu()
+}
+function onMenuKey(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    event.preventDefault()
+    closeMenu()
+  }
+}
+
+function positionMenu(menu: HTMLElement, anchor: HTMLElement): void {
+  const rect = anchor.getBoundingClientRect()
+  const menuRect = menu.getBoundingClientRect()
+  let top = rect.bottom + 4
+  let left = rect.right - menuRect.width
+  if (top + menuRect.height > window.innerHeight - 8) top = Math.max(8, rect.top - menuRect.height - 4)
+  if (left < 8) left = 8
+  if (left + menuRect.width > window.innerWidth - 8) left = window.innerWidth - menuRect.width - 8
+  menu.style.top = `${top}px`
+  menu.style.left = `${left}px`
+}
+
+function openMenu(anchor: HTMLButtonElement, items: MenuItemDef[], ariaLabel: string): void {
+  closeMenu()
+  const menu = document.createElement("div")
+  menu.id = MENU_ID
+  menu.className =
+    "fixed z-50 min-w-[12rem] rounded-xl border border-line bg-surface text-fg shadow-2xl " +
+    "p-1 flex flex-col gap-0.5"
+  menu.setAttribute("role", "menu")
+  menu.setAttribute("aria-label", ariaLabel)
+  for (const item of items) {
+    const itemBtn = document.createElement("button")
+    itemBtn.type = "button"
+    itemBtn.setAttribute("role", "menuitem")
+    itemBtn.className = MENU_ITEM_CLASS + (item.destructive ? " hover:text-bad focus:text-bad" : "")
+    itemBtn.textContent = item.label
+    itemBtn.disabled = !!item.disabled
+    itemBtn.dataset.action = item.key
+    itemBtn.addEventListener("click", () => {
+      closeMenu()
+      item.onClick()
+    })
+    menu.appendChild(itemBtn)
+  }
+  document.body.appendChild(menu)
+  menuEl = menu
+  menuReturnFocus = anchor
+  positionMenu(menu, anchor)
+  menuSpatialNav.open()
+  document.addEventListener("pointerdown", onMenuOutside, true)
+  document.addEventListener("keydown", onMenuKey, true)
+  window.addEventListener("blur", closeMenu)
+  window.addEventListener("resize", closeMenu)
+  menu.querySelector<HTMLButtonElement>('[role="menuitem"]:not([disabled])')?.focus()
+}
 
 // ---------------------------------------------------------------------------
 // Ordering / pool helpers (mirrors the store's own bucketing)
@@ -146,20 +272,18 @@ async function refreshResolvedChannels(): Promise<void> {
   resolvedChannels = resolveCustomChannels(snapshot, pools)
 }
 
-function reorderWithinGroup(source: CustomPlaylistDoc, key: string, direction: "up" | "down"): CustomPlaylistDoc {
-  const channel = source.channels.find((item) => item.key === key)
-  if (!channel) return source
-  const groupChannels = source.channels.filter((item) => item.group === channel.group)
-  const idx = groupChannels.findIndex((item) => item.key === key)
-  if (idx === -1) return source
-  if (direction === "up") {
-    if (idx <= 0) return source
-    return moveChannel(source, key, groupChannels[idx - 1].key, channel.group)
-  }
-  if (idx >= groupChannels.length - 1) return source
-  const afterNextIdx = idx + 2
-  const beforeKey = afterNextIdx < groupChannels.length ? groupChannels[afterNextIdx].key : null
-  return moveChannel(source, key, beforeKey, channel.group)
+function findResolved(channel: CustomChannel): ResolvedCustomChannel | undefined {
+  return resolvedChannels.find((resolved) => resolved.id === channel.id)
+}
+
+function anyUnresolvedChannels(): boolean {
+  return resolvedChannels.some((resolved) => resolved.unresolved)
+}
+
+function sourceTitleForChannel(channel: CustomChannel): string | null {
+  const source = channel.sources[0]
+  if (!source || source.kind === "direct") return null
+  return sourceTitleById.get(source.entryId) || null
 }
 
 function reorderGroupPosition(source: CustomPlaylistDoc, groupName: string, direction: "up" | "down"): CustomPlaylistDoc {
@@ -182,17 +306,61 @@ function withNewGroup(source: CustomPlaylistDoc, name: string): CustomPlaylistDo
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
+function setSaveStatus(status: SaveStatus): void {
+  if (saveShowSavingTimer) {
+    clearTimeout(saveShowSavingTimer)
+    saveShowSavingTimer = null
+  }
+  if (saveClearTimer) {
+    clearTimeout(saveClearTimer)
+    saveClearTimer = null
+  }
+  if (status === "saving") {
+    // Debounced so a save that resolves in under 300ms never flashes "Saving…".
+    saveShowSavingTimer = setTimeout(() => {
+      if (!saveStatusEl) return
+      saveStatusEl.textContent = t("editor.savingStatus")
+      saveStatusEl.classList.remove("text-warn")
+      saveStatusEl.classList.add("text-fg-3")
+      saveRetryBtn?.classList.add("hidden")
+    }, 300)
+    return
+  }
+  if (!saveStatusEl) return
+  if (status === "saved") {
+    saveStatusEl.textContent = t("editor.savedStatus")
+    saveStatusEl.classList.remove("text-warn")
+    saveStatusEl.classList.add("text-fg-3")
+    saveRetryBtn?.classList.add("hidden")
+    saveClearTimer = setTimeout(() => {
+      if (saveStatusEl) saveStatusEl.textContent = ""
+    }, 2000)
+  } else if (status === "failed") {
+    saveStatusEl.textContent = t("editor.saveFailedStatus")
+    saveStatusEl.classList.remove("text-fg-3")
+    saveStatusEl.classList.add("text-warn")
+    saveRetryBtn?.classList.remove("hidden")
+  } else {
+    saveStatusEl.textContent = ""
+    saveRetryBtn?.classList.add("hidden")
+  }
+}
+
 async function flushSave(): Promise<void> {
+  setSaveStatus("saving")
   try {
     const saved = await saveCustomDoc(entryId, doc)
     if (!saved) {
+      setSaveStatus("failed")
       toastError(t("editor.toastSaveFailed"))
       return
     }
+    setSaveStatus("saved")
     invalidateEntry(entryId)
     document.dispatchEvent(new CustomEvent("xt:entries-updated"))
   } catch (err) {
     log.warn("[xt:editor] save failed:", err)
+    setSaveStatus("failed")
     toastError(t("editor.toastSaveFailed"))
   }
 }
@@ -208,43 +376,56 @@ const scheduleResolvedRefresh = debounce(() => {
 function commitDoc(nextDoc: CustomPlaylistDoc): void {
   doc = nextDoc
   orderedChannels = orderedChannelsByGroup(nextDoc)
+  presentSourceKeySet = presentSourceKeys(nextDoc)
   renderChannelCount()
   renderGroups()
   updateUndoButton()
   scheduleSave()
   scheduleResolvedRefresh()
+  scheduleSourceRender()
 }
 
-// Single chokepoint for every doc mutation: snapshots for undo, persists (debounced), re-renders.
+// Single chokepoint for every doc mutation: undo snapshot, debounced persist, re-render.
 function applyDoc(nextDoc: CustomPlaylistDoc): void {
   if (nextDoc === doc) return
   undoStack.push(doc)
   if (undoStack.length > MAX_UNDO_DEPTH) undoStack.shift()
+  redoStack.length = 0
   commitDoc(nextDoc)
 }
 
 function undo(): void {
   const previousDoc = undoStack.pop()
   if (!previousDoc) return
+  redoStack.push(doc)
   commitDoc(previousDoc)
+}
+
+function redo(): void {
+  const nextDoc = redoStack.pop()
+  if (!nextDoc) return
+  undoStack.push(doc)
+  commitDoc(nextDoc)
 }
 
 function updateUndoButton(): void {
   if (undoBtn) undoBtn.disabled = undoStack.length === 0
+  if (redoBtn) redoBtn.disabled = redoStack.length === 0
 }
 
 // ---------------------------------------------------------------------------
 // Header
 // ---------------------------------------------------------------------------
 function renderChannelCount(): void {
-  if (channelCountEl) channelCountEl.textContent = t("editor.channelCount", { count: doc.channels.length })
+  if (channelCountEl) channelCountEl.textContent = tCount("editor.channelCount", doc.channels.length)
 }
 
 function saveTitleNow(): void {
   if (!titleInput || !customEntry) return
   const value = titleInput.value.trim()
-  if (!value) return
+  if (!value || value === customEntry.title) return
   customEntry.title = value
+  markInputCommitted(titleInput)
   updateEntry(entryId, { title: value }).catch((err) => {
     log.warn("[xt:editor] title save failed:", err)
     toastError(t("editor.toastSaveFailed"))
@@ -301,7 +482,7 @@ function populateCategoryFilter(): void {
   for (const channel of allSourceChannels) {
     if (channel.category) categories.add(channel.category)
   }
-  const sorted = [...categories].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+  const sorted = [...categories].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
   sourceCategorySelect.replaceChildren()
   const allOpt = document.createElement("option")
   allOpt.value = ""
@@ -354,6 +535,7 @@ async function onSourceChange(): Promise<void> {
     mountSourceEmpty(t("editor.sourceEmpty"))
     return
   }
+  selectedSourceEntryType = sourceEntry.type
   try {
     const channels = await ensureLive(entryToCreds(sourceEntry), sourceEntry._id, { includeHidden: true })
     if (selectedSourceEntryId !== requestedSourceEntryId) return
@@ -413,6 +595,16 @@ function renderSourceList(): void {
   sourceViewport.style.transform = `translateY(${startIdx * ROW_H}px)`
 }
 
+/** Identity key for a source-browser row, matching `customSourceKey()`'s shape for the same channel once added. */
+function sourceRowKey(channel: any): string | null {
+  if (selectedSourceEntryType === "xtream") return `x:${selectedSourceEntryId}:${channel.id}`
+  if (selectedSourceEntryType === "m3u" || selectedSourceEntryType === "local-m3u") {
+    if (!channel.url) return null
+    return `m:${selectedSourceEntryId}:${channel.url}`
+  }
+  return null
+}
+
 function buildSourceRow(channel: any, idx: number): HTMLElement {
   const row = document.createElement("div")
   row.className =
@@ -422,11 +614,14 @@ function buildSourceRow(channel: any, idx: number): HTMLElement {
   row.tabIndex = 0
   const checked = selectedIds.has(channel.id)
   if (checked) row.classList.add("bg-accent-soft")
+  const rowKey = sourceRowKey(channel)
+  const alreadyAdded = !!rowKey && presentSourceKeySet.has(rowKey)
 
   const checkbox = document.createElement("input")
   checkbox.type = "checkbox"
   checkbox.className = "size-4 shrink-0"
   checkbox.checked = checked
+  checkbox.disabled = alreadyAdded
   checkbox.setAttribute("aria-label", channel.name || "")
   checkbox.addEventListener("click", (event) => {
     event.stopPropagation()
@@ -444,6 +639,14 @@ function buildSourceRow(channel: any, idx: number): HTMLElement {
   info.append(nameEl, metaEl)
 
   row.append(checkbox, info)
+
+  if (alreadyAdded) {
+    const badge = document.createElement("span")
+    badge.className = "inline-flex items-center gap-1 shrink-0 text-2xs text-fg-3"
+    badge.innerHTML = `${ICON_CHECK}<span>${escapeHtml(t("editor.addedBadge"))}</span>`
+    row.appendChild(badge)
+  }
+
   row.addEventListener("click", (event) => handleSourceRowClick(idx, event as MouseEvent))
   row.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -457,6 +660,8 @@ function buildSourceRow(channel: any, idx: number): HTMLElement {
 function handleSourceRowClick(idx: number, event: MouseEvent): void {
   const channel = filteredSourceChannels[idx]
   if (!channel) return
+  const rowKey = sourceRowKey(channel)
+  if (rowKey && presentSourceKeySet.has(rowKey)) return
   if (event.shiftKey && lastClickedIndex !== -1) {
     const [start, end] = idx < lastClickedIndex ? [idx, lastClickedIndex] : [lastClickedIndex, idx]
     for (let i = start; i <= end; i++) {
@@ -499,12 +704,20 @@ async function addSelectedChannels(): Promise<void> {
   const sourceEntry = entries.find((entry: any) => entry._id === requestedSourceEntryId)
   if (!sourceEntry) return
   const overrideGroup = sourceTargetGroupInput?.value.trim() || ""
+  const seenKeys = new Set(presentSourceKeySet)
   let nextDoc = doc
   let addedCount = 0
+  let skippedCount = 0
   for (const channel of channelsSnapshot) {
     if (!selectedIds.has(channel.id)) continue
     const source = buildSourceForChannel(sourceEntry, channel)
     if (!source) continue
+    const key = customSourceKey(source)
+    if (seenKeys.has(key)) {
+      skippedCount++
+      continue
+    }
+    seenKeys.add(key)
     const result = addChannel(nextDoc, source, {
       name: channel.name || "",
       logo: channel.logo || null,
@@ -515,13 +728,90 @@ async function addSelectedChannels(): Promise<void> {
     nextDoc = result.doc
     addedCount++
   }
-  if (!addedCount) return
+  if (!addedCount && !skippedCount) return
   selectedIds.clear()
   lastClickedIndex = -1
   updateSelectedCount()
-  renderSourceList()
-  applyDoc(nextDoc)
-  toastSuccess(t("editor.toastAdded", { count: addedCount }))
+  if (addedCount) applyDoc(nextDoc)
+  else renderSourceList()
+  if (addedCount) toastSuccess(t("editor.toastAdded", { count: addedCount }))
+  if (skippedCount) toastWarn(t("editor.toastAlreadyAdded", { count: skippedCount }))
+}
+
+// ---------------------------------------------------------------------------
+// Mobile pane switcher
+// ---------------------------------------------------------------------------
+const PANE_TAB_ACTIVE_CLASSES = ["bg-accent-soft", "text-accent", "ring-1", "ring-accent/30"]
+const PANE_TAB_IDLE_CLASSES = ["text-fg-2"]
+
+function loadActivePane(): void {
+  try {
+    const stored = sessionStorage.getItem(PANE_STORAGE_KEY)
+    if (stored === "source" || stored === "playlist") activePane = stored
+  } catch {
+    // sessionStorage unavailable (private browsing etc); keep the default.
+  }
+}
+
+function updatePaneTabStyles(): void {
+  if (paneTabSourceBtn) {
+    paneTabSourceBtn.classList.remove(...PANE_TAB_ACTIVE_CLASSES, ...PANE_TAB_IDLE_CLASSES)
+    paneTabSourceBtn.classList.add(...(activePane === "source" ? PANE_TAB_ACTIVE_CLASSES : PANE_TAB_IDLE_CLASSES))
+    paneTabSourceBtn.setAttribute("aria-selected", String(activePane === "source"))
+    paneTabSourceBtn.tabIndex = activePane === "source" ? 0 : -1
+  }
+  if (paneTabPlaylistBtn) {
+    paneTabPlaylistBtn.classList.remove(...PANE_TAB_ACTIVE_CLASSES, ...PANE_TAB_IDLE_CLASSES)
+    paneTabPlaylistBtn.classList.add(...(activePane === "playlist" ? PANE_TAB_ACTIVE_CLASSES : PANE_TAB_IDLE_CLASSES))
+    paneTabPlaylistBtn.setAttribute("aria-selected", String(activePane === "playlist"))
+    paneTabPlaylistBtn.tabIndex = activePane === "playlist" ? 0 : -1
+  }
+}
+
+function setActivePane(pane: "source" | "playlist"): void {
+  activePane = pane
+  try {
+    sessionStorage.setItem(PANE_STORAGE_KEY, pane)
+  } catch {
+    // Best-effort only.
+  }
+  panesEl?.setAttribute("data-active-pane", pane)
+  updatePaneTabStyles()
+}
+
+function wirePaneSwitcher(): void {
+  panesEl?.setAttribute("data-active-pane", activePane)
+  updatePaneTabStyles()
+  paneTabSourceBtn?.addEventListener("click", () => setActivePane("source"))
+  paneTabPlaylistBtn?.addEventListener("click", () => setActivePane("playlist"))
+  const tablist = paneTabSourceBtn?.closest<HTMLElement>('[role="tablist"]')
+  tablist?.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+    event.preventDefault()
+    const next = activePane === "source" ? "playlist" : "source"
+    setActivePane(next)
+    ;(next === "source" ? paneTabSourceBtn : paneTabPlaylistBtn)?.focus()
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Group collapse state
+// ---------------------------------------------------------------------------
+function loadCollapsedGroups(): void {
+  try {
+    const raw = sessionStorage.getItem(COLLAPSED_GROUPS_KEY_PREFIX + entryId)
+    collapsedGroups = raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch {
+    collapsedGroups = new Set()
+  }
+}
+
+function saveCollapsedGroups(): void {
+  try {
+    sessionStorage.setItem(COLLAPSED_GROUPS_KEY_PREFIX + entryId, JSON.stringify([...collapsedGroups]))
+  } catch {
+    // Best-effort only.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +820,7 @@ async function addSelectedChannels(): Promise<void> {
 function iconButton(svg: string, label: string): HTMLButtonElement {
   const btn = document.createElement("button")
   btn.type = "button"
-  btn.className = "btn h-9 w-9 p-0 shrink-0"
+  btn.className = "btn min-h-11 min-w-11 h-11 w-11 p-0 shrink-0"
   btn.innerHTML = svg
   btn.setAttribute("aria-label", label)
   btn.title = label
@@ -547,15 +837,170 @@ function refreshGroupsDatalist(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Focus preservation across full re-renders
+// ---------------------------------------------------------------------------
+interface FocusSnapshot {
+  rowKey?: string
+  groupName?: string
+  action?: string
+}
+
+function captureFocus(): FocusSnapshot | null {
+  const active = document.activeElement as HTMLElement | null
+  if (!active || !groupsContainer?.contains(active)) return null
+  const row = active.closest<HTMLElement>(".editor-channel-row[data-key]")
+  if (row?.dataset.key) {
+    return { rowKey: row.dataset.key, action: active.dataset.action }
+  }
+  const section = active.closest<HTMLElement>(".editor-group-section[data-group]")
+  if (section?.dataset.group) {
+    return { groupName: section.dataset.group, action: active.dataset.action }
+  }
+  return null
+}
+
+function restoreFocus(saved: FocusSnapshot | null): void {
+  if (!saved || !groupsContainer) return
+  if (saved.rowKey) {
+    const row = groupsContainer.querySelector<HTMLElement>(`.editor-channel-row[data-key="${CSS.escape(saved.rowKey)}"]`)
+    if (row) {
+      const control =
+        (saved.action && row.querySelector<HTMLElement>(`[data-action="${CSS.escape(saved.action)}"]`)) ||
+        row.querySelector<HTMLElement>('[data-action="more"]')
+      control?.focus()
+      return
+    }
+    // Row is gone (removed): fall back to the nearest row's More button.
+    groupsContainer.querySelector<HTMLElement>('.editor-channel-row [data-action="more"]')?.focus()
+    return
+  }
+  if (saved.groupName) {
+    const section = groupsContainer.querySelector<HTMLElement>(`.editor-group-section[data-group="${CSS.escape(saved.groupName)}"]`)
+    if (section) {
+      const control =
+        (saved.action && section.querySelector<HTMLElement>(`[data-action="${CSS.escape(saved.action)}"]`)) ||
+        section.querySelector<HTMLElement>('[data-action="more"]')
+      control?.focus()
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering (with signature-keyed row reuse to avoid rebuilding unchanged rows)
+// ---------------------------------------------------------------------------
+interface ChannelRowRefs {
+  el: HTMLElement
+  upBtn: HTMLButtonElement
+  downBtn: HTMLButtonElement
+}
+const channelRowCache = new Map<string, { signature: string; refs: ChannelRowRefs }>()
+
+function computeRowSignature(
+  channel: CustomChannel,
+  resolved: ResolvedCustomChannel | undefined,
+  sourceTitle: string | null
+): string {
+  return JSON.stringify([
+    channel.group,
+    channel.overrides.name,
+    channel.overrides.logo,
+    channel.overrides.chno,
+    resolved?.name,
+    resolved?.logo,
+    resolved?.chno,
+    resolved?.unresolved ?? false,
+    linkCheckStatus.get(channel.key) ?? null,
+    sourceTitle,
+    doc.groups.length,
+  ])
+}
+
+function getOrBuildChannelRow(
+  channel: CustomChannel,
+  resolved: ResolvedCustomChannel | undefined,
+  groupSize: number,
+  rowIdx: number
+): HTMLElement {
+  const sourceTitle = sourceTitleForChannel(channel)
+  const signature = computeRowSignature(channel, resolved, sourceTitle)
+  const cached = channelRowCache.get(channel.key)
+  let refs: ChannelRowRefs
+  if (cached && cached.signature === signature) {
+    refs = cached.refs
+  } else {
+    refs = buildChannelRow(channel, resolved, sourceTitle)
+    channelRowCache.set(channel.key, { signature, refs })
+  }
+  refs.upBtn.disabled = rowIdx === 0
+  refs.downBtn.disabled = rowIdx === groupSize - 1
+  return refs.el
+}
+
+// Re-anchors an open popover to its row/group's rebuilt element, or closes it if that's gone.
+function reconcileOpenMenu(): void {
+  if (!menuEl || !groupsContainer) return
+  let newAnchor: HTMLElement | null
+  if (menuAnchorRowKey) {
+    newAnchor = groupsContainer.querySelector<HTMLElement>(
+      `.editor-channel-row[data-key="${CSS.escape(menuAnchorRowKey)}"] [data-action="more"]`
+    )
+  } else if (menuAnchorGroupName) {
+    newAnchor = groupsContainer.querySelector<HTMLElement>(
+      `.editor-group-section[data-group="${CSS.escape(menuAnchorGroupName)}"] [data-action="more"]`
+    )
+  } else {
+    return
+  }
+  if (newAnchor) {
+    menuReturnFocus = newAnchor
+    positionMenu(menuEl, newAnchor)
+    return
+  }
+  closeMenu()
+  groupsContainer.querySelector<HTMLElement>(".editor-group-header [data-action=\"more\"]")?.focus()
+}
+
+let renderGroupsInProgress = false
+let renderGroupsQueued = false
+
+// Defers a re-render requested mid-render (e.g. a blur commit fired by the DOM swap below).
 function renderGroups(): void {
+  if (renderGroupsInProgress) {
+    renderGroupsQueued = true
+    return
+  }
+  renderGroupsInProgress = true
+  try {
+    renderGroupsNow()
+  } finally {
+    renderGroupsInProgress = false
+    if (renderGroupsQueued) {
+      renderGroupsQueued = false
+      renderGroups()
+    }
+  }
+}
+
+function renderGroupsNow(): void {
   refreshGroupsDatalist()
   if (!groupsContainer || !emptyStateEl) return
+  const savedFocus = captureFocus()
   groupsContainer.replaceChildren()
   if (!doc.channels.length) {
     emptyStateEl.classList.remove("hidden")
+    emptyStateEl.classList.add("flex")
+    channelRowCache.clear()
+    reconcileOpenMenu()
     return
   }
   emptyStateEl.classList.add("hidden")
+  emptyStateEl.classList.remove("flex")
+
+  const liveKeys = new Set(doc.channels.map((channel) => channel.key))
+  for (const key of channelRowCache.keys()) {
+    if (!liveKeys.has(key)) channelRowCache.delete(key)
+  }
 
   const resolvedById = new Map<number, ResolvedCustomChannel>()
   for (const resolved of resolvedChannels) resolvedById.set(resolved.id, resolved)
@@ -574,6 +1019,8 @@ function renderGroups(): void {
     frag.appendChild(buildGroupSection(groupName, rows, groupIdx, groupNames.length))
   })
   groupsContainer.appendChild(frag)
+  restoreFocus(savedFocus)
+  reconcileOpenMenu()
 }
 
 function buildGroupSection(
@@ -586,48 +1033,150 @@ function buildGroupSection(
   section.className = "editor-group-section flex flex-col gap-1.5"
   section.dataset.group = groupName
 
-  const header = document.createElement("div")
-  header.className = "editor-group-header flex items-center gap-2"
+  const collapsed = collapsedGroups.has(groupName)
 
-  const nameInput = document.createElement("input")
-  nameInput.type = "text"
-  nameInput.value = groupName
-  nameInput.className = "field-input h-9 flex-1 min-w-0 font-semibold text-sm"
-  nameInput.addEventListener("change", () => {
-    const nextName = nameInput.value.trim()
-    if (!nextName || nextName === groupName) {
-      nameInput.value = groupName
-      return
+  const header = document.createElement("div")
+  header.className = "editor-group-header flex items-center gap-1.5"
+
+  const collapseBtn = iconButton(
+    ICON_CHEVRON_DOWN,
+    collapsed ? t("editor.expandGroup") : t("editor.collapseGroup")
+  )
+  collapseBtn.dataset.action = "collapse"
+  collapseBtn.setAttribute("aria-expanded", String(!collapsed))
+  const collapseIcon = collapseBtn.querySelector("svg")
+  collapseIcon?.classList.add("transition-transform")
+  if (collapsed) collapseIcon?.classList.add("-rotate-90")
+  collapseBtn.addEventListener("click", () => {
+    if (collapsedGroups.has(groupName)) collapsedGroups.delete(groupName)
+    else collapsedGroups.add(groupName)
+    saveCollapsedGroups()
+    renderGroups()
+  })
+
+  const nameButton = document.createElement("button")
+  nameButton.type = "button"
+  nameButton.textContent = groupName
+  nameButton.className =
+    "editor-group-name flex-1 min-w-0 min-h-11 flex items-center rounded-lg px-1.5 -mx-1.5 text-start text-sm font-semibold truncate transition-colors hover:bg-surface-2"
+  nameButton.dataset.action = "rename-trigger"
+  nameButton.title = t("editor.rename")
+  nameButton.setAttribute("aria-label", `${groupName}: ${t("editor.rename")}`)
+  // Keyboard activation (Enter/Space) dispatches a click with detail 0; a mouse
+  // click has detail >= 1, so only the keyboard path and dblclick enter rename.
+  nameButton.addEventListener("click", (event) => {
+    if (event.detail === 0) startGroupRename(header, groupName)
+  })
+  nameButton.addEventListener("dblclick", () => startGroupRename(header, groupName))
+  nameButton.addEventListener("keydown", (event) => {
+    if (event.key === "F2") {
+      event.preventDefault()
+      startGroupRename(header, groupName)
     }
-    applyDoc(renameGroup(doc, groupName, nextName))
   })
 
   const count = document.createElement("span")
   count.className = "text-2xs text-fg-3 tabular-nums shrink-0"
   count.textContent = String(rows.length)
 
-  const upBtn = iconButton(ICON_ARROW_UP, t("editor.moveGroupUp"))
-  upBtn.disabled = groupIdx === 0
-  upBtn.addEventListener("click", () => applyDoc(reorderGroupPosition(doc, groupName, "up")))
+  const moreBtn = iconButton(ICON_DOTS_VERTICAL, t("common.moreOptionsAria", { title: groupName }))
+  moreBtn.dataset.action = "more"
+  moreBtn.addEventListener("click", () => openGroupMenu(moreBtn, groupName, groupIdx, groupCount))
 
-  const downBtn = iconButton(ICON_ARROW_DOWN, t("editor.moveGroupDown"))
-  downBtn.disabled = groupIdx === groupCount - 1
-  downBtn.addEventListener("click", () => applyDoc(reorderGroupPosition(doc, groupName, "down")))
-
-  header.append(nameInput, count, upBtn, downBtn)
+  header.append(collapseBtn, nameButton, count, moreBtn)
   addGroupDropHandlers(header, groupName)
   section.appendChild(header)
 
-  const list = document.createElement("div")
-  list.className = "editor-group flex flex-col gap-1 rounded-lg"
-  list.dataset.group = groupName
-  rows.forEach((row, rowIdx) => {
-    list.appendChild(buildChannelRow(row.channel, row.resolved, rows.length, rowIdx))
-  })
-  addGroupDropHandlers(list, groupName)
-  section.appendChild(list)
+  if (!collapsed) {
+    const list = document.createElement("div")
+    list.className = "editor-group flex flex-col gap-1 rounded-lg"
+    list.dataset.group = groupName
+    rows.forEach((row, rowIdx) => {
+      list.appendChild(getOrBuildChannelRow(row.channel, row.resolved, rows.length, rowIdx))
+    })
+    addGroupDropHandlers(list, groupName)
+    section.appendChild(list)
+  }
 
   return section
+}
+
+function startGroupRename(header: HTMLElement, groupName: string): void {
+  if (header.querySelector('[data-action="rename-input"]')) return
+  const nameButton = header.querySelector<HTMLButtonElement>('[data-action="rename-trigger"]')
+  if (!nameButton) return
+  const input = document.createElement("input")
+  input.type = "text"
+  input.value = groupName
+  input.className = "field-input h-9 flex-1 min-w-0 font-semibold text-sm"
+  input.dataset.action = "rename-input"
+  input.setAttribute("aria-label", t("editor.groupNameLabel"))
+  markInputCommitted(input)
+  nameButton.replaceWith(input)
+  input.focus()
+  input.select()
+
+  let settled = false
+  const commit = (): void => {
+    if (settled) return
+    if (!input.isConnected) return
+    settled = true
+    const nextName = input.value.trim()
+    if (!nextName || nextName === groupName) {
+      renderGroups()
+      return
+    }
+    applyDoc(renameGroup(doc, groupName, nextName))
+  }
+  const cancel = (): void => {
+    if (settled) return
+    settled = true
+    renderGroups()
+  }
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault()
+      commit()
+    } else if (event.key === "Escape") {
+      event.preventDefault()
+      cancel()
+    }
+  })
+  input.addEventListener("blur", commit)
+}
+
+function focusGroupNameInput(groupName: string): void {
+  const section = groupsContainer?.querySelector<HTMLElement>(`.editor-group-section[data-group="${CSS.escape(groupName)}"]`)
+  const header = section?.querySelector<HTMLElement>(".editor-group-header")
+  if (header) startGroupRename(header, groupName)
+}
+
+function deleteGroupWithToast(groupName: string): void {
+  applyDoc(removeGroup(doc, groupName))
+  toastSuccess(t("editor.toastGroupRemoved", { name: groupName }), {
+    action: { label: t("common.undo"), onClick: () => undo() },
+  })
+}
+
+function openGroupMenu(anchor: HTMLButtonElement, groupName: string, groupIdx: number, groupCount: number): void {
+  const items: MenuItemDef[] = [
+    { key: "rename", label: t("editor.rename"), onClick: () => focusGroupNameInput(groupName) },
+    {
+      key: "up",
+      label: t("editor.moveGroupUp"),
+      disabled: groupIdx === 0,
+      onClick: () => applyDoc(reorderGroupPosition(doc, groupName, "up")),
+    },
+    {
+      key: "down",
+      label: t("editor.moveGroupDown"),
+      disabled: groupIdx === groupCount - 1,
+      onClick: () => applyDoc(reorderGroupPosition(doc, groupName, "down")),
+    },
+    { key: "delete", label: t("editor.deleteGroup"), destructive: true, onClick: () => deleteGroupWithToast(groupName) },
+  ]
+  openMenu(anchor, items, t("common.moreOptionsAria", { title: groupName }))
+  menuAnchorGroupName = groupName
 }
 
 function addGroupDropHandlers(listEl: HTMLElement, groupName: string): void {
@@ -648,55 +1197,173 @@ function addGroupDropHandlers(listEl: HTMLElement, groupName: string): void {
   })
 }
 
-function buildChannelRow(
+type MetaSegment = { text: string } | { dotClass: string; label: string }
+
+// Link-check status renders inline in the meta line (dot + label) instead of a
+// leading row slot, so a check never shifts the name's x position.
+function buildMetaSegments(
   channel: CustomChannel,
   resolved: ResolvedCustomChannel | undefined,
-  groupSize: number,
-  rowIdx: number
-): HTMLElement {
-  const row = document.createElement("div")
-  row.className =
-    "editor-channel-row flex items-center gap-2 rounded-lg border border-line bg-bg px-2 py-1.5"
-  row.draggable = true
-  row.dataset.key = channel.key
-
-  const grip = document.createElement("span")
-  grip.className = "text-fg-3 shrink-0 inline-flex cursor-grab"
-  grip.innerHTML = ICON_GRIP_VERTICAL
-  grip.setAttribute("aria-hidden", "true")
-  grip.title = t("editor.dragHandleLabel")
-
-  // Shape differs per status so it never reads by hue alone.
-  const statusDot = document.createElement("span")
-  statusDot.className = "size-2 shrink-0 bg-transparent"
-  const status = linkCheckStatus.get(channel.key)
-  if (status === "pending") {
-    statusDot.classList.add("rounded-full", "border", "border-fg-3", "animate-pulse")
-  } else if (status === "ok") {
-    statusDot.classList.add("rounded-full", "bg-ok")
-  } else if (status === "fail") {
-    statusDot.classList.add("rotate-45", "rounded-xs", "bg-bad")
+  sourceTitle: string | null,
+  status: LinkCheckStatus | undefined
+): MetaSegment[] {
+  const segments: MetaSegment[] = []
+  const chno = channel.overrides.chno ?? resolved?.chno
+  if (chno != null) segments.push({ text: String(chno) })
+  if (resolved?.unresolved) {
+    segments.push({
+      text: sourceTitle
+        ? t("editor.unresolvedFromSource", { source: sourceTitle })
+        : t("editor.unresolvedSourceRemoved"),
+    })
+  } else if (sourceTitle) {
+    segments.push({ text: sourceTitle })
   }
   if (status) {
-    const statusLabel = t(
+    const dotClass =
+      status === "pending"
+        ? "rounded-full border border-fg-3 animate-pulse"
+        : status === "ok"
+          ? "rounded-full bg-ok"
+          : status === "fail"
+            ? "rotate-45 rounded-xs bg-bad"
+            : "rounded-full border-2 border-warn"
+    const labelKey =
       status === "pending"
         ? "editor.linkStatusChecking"
         : status === "ok"
           ? "editor.linkStatusOk"
-          : "editor.linkStatusFail"
-    )
-    statusDot.setAttribute("role", "img")
-    statusDot.setAttribute("aria-label", statusLabel)
-    statusDot.title = statusLabel
-  } else {
-    statusDot.setAttribute("aria-hidden", "true")
+          : status === "fail"
+            ? "editor.linkStatusFail"
+            : "editor.linkStatusUnchecked"
+    segments.push({ dotClass, label: t(labelKey) })
+  }
+  return segments
+}
+
+function startRowRename(nameRow: HTMLElement, nameEl: HTMLElement, channel: CustomChannel): void {
+  if (nameRow.querySelector("input")) return
+  const input = document.createElement("input")
+  input.type = "text"
+  input.value = channel.overrides.name ?? ""
+  input.className = "field-input h-8 flex-1 min-w-0 text-sm py-0"
+  input.setAttribute("aria-label", t("editor.nameLabel"))
+  input.dataset.action = "rename-input"
+  markInputCommitted(input)
+  nameEl.replaceWith(input)
+  input.focus()
+  input.select()
+
+  let settled = false
+  const commit = (): void => {
+    if (settled) return
+    if (!input.isConnected) return
+    settled = true
+    const value = input.value.trim() || null
+    if (value === (channel.overrides.name ?? null)) return
+    applyDoc(setOverrides(doc, channel.key, { name: value }))
+  }
+  const cancel = (): void => {
+    if (settled) return
+    settled = true
+    input.replaceWith(nameEl)
+  }
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault()
+      commit()
+    } else if (event.key === "Escape") {
+      event.preventDefault()
+      cancel()
+    }
+  })
+  input.addEventListener("blur", commit)
+}
+
+function removeChannelWithUndo(channel: CustomChannel, displayName: string): void {
+  applyDoc(removeChannels(doc, [channel.key]))
+  toastSuccess(t("editor.toastChannelRemoved", { name: displayName || t("common.untitled") }), {
+    action: { label: t("common.undo"), onClick: () => undo() },
+  })
+}
+
+function openMoveToGroupMenu(trigger: HTMLButtonElement, channel: CustomChannel): void {
+  const items: MenuItemDef[] = [
+    { key: "back", label: t("common.back"), onClick: () => openRowMenu(trigger, channel) },
+  ]
+  for (const group of doc.groups) {
+    items.push({
+      key: `group:${group}`,
+      label: group,
+      disabled: group === channel.group,
+      onClick: () => applyDoc(moveChannel(doc, channel.key, null, group)),
+    })
+  }
+  openMenu(trigger, items, t("editor.moveToGroupLabel"))
+  menuAnchorRowKey = channel.key
+}
+
+function openRowMenu(trigger: HTMLButtonElement, channel: CustomChannel): void {
+  const resolved = findResolved(channel)
+  const displayName = channel.overrides.name ?? resolved?.name ?? ""
+  const items: MenuItemDef[] = []
+  if (!resolved?.unresolved) {
+    items.push({
+      key: "rename",
+      label: t("editor.rename"),
+      onClick: () => {
+        const row = trigger.closest<HTMLElement>(".editor-channel-row")
+        const nameRow = row?.querySelector<HTMLElement>('[data-role="name-row"]')
+        const nameEl = row?.querySelector<HTMLElement>('[data-role="name-text"]')
+        if (nameRow && nameEl) startRowRename(nameRow, nameEl, channel)
+      },
+    })
+  }
+  items.push({
+    key: "move",
+    label: t("editor.moveToGroupLabel"),
+    disabled: doc.groups.length < 2,
+    onClick: () => openMoveToGroupMenu(trigger, channel),
+  })
+  if (!resolved?.unresolved) {
+    items.push({ key: "edit", label: t("editor.editDetails"), onClick: () => void openEditDialog(channel) })
+  }
+  items.push({
+    key: "remove",
+    label: t("editor.removeChannel"),
+    destructive: true,
+    onClick: () => removeChannelWithUndo(channel, displayName),
+  })
+  openMenu(trigger, items, t("common.moreOptionsAria", { title: displayName || t("common.untitled") }))
+  menuAnchorRowKey = channel.key
+}
+
+function buildChannelRow(
+  channel: CustomChannel,
+  resolved: ResolvedCustomChannel | undefined,
+  sourceTitle: string | null
+): ChannelRowRefs {
+  const row = document.createElement("div")
+  row.className = "editor-channel-row flex items-center gap-2 rounded-lg border border-line bg-bg px-2 py-1.5"
+  row.dataset.key = channel.key
+
+  // Drag-reorder is mouse-only; touch uses the Move up/down buttons + the More menu instead.
+  const isCoarsePointer = matchMedia("(pointer: coarse)").matches
+  row.draggable = !isCoarsePointer
+  if (!isCoarsePointer) {
+    const grip = document.createElement("span")
+    grip.className = "text-fg-3 shrink-0 inline-flex cursor-grab"
+    grip.innerHTML = ICON_GRIP_VERTICAL
+    grip.setAttribute("aria-hidden", "true")
+    grip.title = t("editor.dragHandleLabel")
+    row.appendChild(grip)
   }
 
-  const logo = document.createElement("div")
-  logo.className =
-    "h-8 w-8 shrink-0 rounded overflow-hidden ring-1 ring-inset ring-line bg-surface-2 flex items-center justify-center"
   const logoUrl = resolved?.logo || channel.overrides.logo
   if (logoUrl) {
+    const logo = document.createElement("div")
+    logo.className =
+      "h-8 w-8 shrink-0 rounded overflow-hidden ring-1 ring-inset ring-line bg-surface-2 flex items-center justify-center"
     const img = document.createElement("img")
     img.alt = ""
     img.loading = "lazy"
@@ -705,71 +1372,67 @@ function buildChannelRow(
     img.onerror = () => img.remove()
     logo.appendChild(img)
     mountCachedImage(img, logoUrl, "logo")
+    row.appendChild(logo)
   }
 
   const nameWrap = document.createElement("div")
-  nameWrap.className = "flex items-center gap-1.5 flex-1 min-w-0"
+  nameWrap.className = "flex flex-col min-w-0 flex-1 gap-0.5"
 
-  const nameInput = document.createElement("input")
-  nameInput.type = "text"
-  nameInput.value = channel.overrides.name ?? resolved?.name ?? ""
-  nameInput.placeholder = resolved?.name || ""
-  nameInput.className = "field-input h-9 flex-1 min-w-0 text-sm"
-  nameInput.addEventListener("change", () => {
-    const value = nameInput.value.trim()
-    applyDoc(setOverrides(doc, channel.key, { name: value || null }))
-  })
-  nameWrap.appendChild(nameInput)
+  const nameRow = document.createElement("div")
+  nameRow.className = "flex items-center gap-1.5 min-w-0"
+  nameRow.dataset.role = "name-row"
+
+  const displayName = channel.overrides.name ?? resolved?.name ?? ""
+  const nameEl = document.createElement("span")
+  nameEl.className = "truncate text-sm font-medium"
+  nameEl.textContent = displayName || t("common.untitled")
+  nameEl.dataset.role = "name-text"
+  nameRow.appendChild(nameEl)
 
   if (resolved?.unresolved) {
     const badge = document.createElement("span")
     badge.className = "shrink-0 rounded-md border border-line bg-surface-2 px-1.5 text-2xs text-fg-3"
     badge.textContent = t("editor.unresolvedBadge")
-    nameWrap.appendChild(badge)
+    nameRow.appendChild(badge)
   }
+  nameWrap.appendChild(nameRow)
 
-  const moveSelect = document.createElement("select")
-  moveSelect.className = "field-input h-9 w-32 shrink-0 text-xs"
-  moveSelect.setAttribute("aria-label", t("editor.moveToGroupLabel"))
-  for (const groupOption of doc.groups) {
-    const opt = document.createElement("option")
-    opt.value = groupOption
-    opt.textContent = groupOption
-    if (groupOption === channel.group) opt.selected = true
-    moveSelect.appendChild(opt)
+  const metaSegments = buildMetaSegments(channel, resolved, sourceTitle, linkCheckStatus.get(channel.key))
+  if (metaSegments.length) {
+    const metaEl = document.createElement("div")
+    metaEl.className = "truncate text-2xs text-fg-3"
+    metaSegments.forEach((segment, index) => {
+      if (index > 0) metaEl.append(" · ")
+      if ("text" in segment) {
+        metaEl.append(segment.text)
+        return
+      }
+      const statusWrap = document.createElement("span")
+      statusWrap.className = "inline-flex items-center gap-1"
+      const statusDot = document.createElement("span")
+      statusDot.className = `size-2 shrink-0 ${segment.dotClass}`
+      statusDot.setAttribute("aria-hidden", "true")
+      statusWrap.append(statusDot, segment.label)
+      metaEl.appendChild(statusWrap)
+    })
+    nameWrap.appendChild(metaEl)
   }
-  moveSelect.addEventListener("change", () => {
-    const target = moveSelect.value
-    if (target === channel.group) return
-    applyDoc(moveChannel(doc, channel.key, null, target))
-  })
+  row.appendChild(nameWrap)
 
   const upBtn = iconButton(ICON_ARROW_UP, t("editor.moveUp"))
-  upBtn.disabled = rowIdx === 0
-  upBtn.addEventListener("click", () => applyDoc(reorderWithinGroup(doc, channel.key, "up")))
+  upBtn.dataset.action = "moveUp"
+  upBtn.addEventListener("click", () => applyDoc(moveChannelWithinGroup(doc, channel.key, "up")))
+  row.appendChild(upBtn)
 
   const downBtn = iconButton(ICON_ARROW_DOWN, t("editor.moveDown"))
-  downBtn.disabled = rowIdx === groupSize - 1
-  downBtn.addEventListener("click", () => applyDoc(reorderWithinGroup(doc, channel.key, "down")))
+  downBtn.dataset.action = "moveDown"
+  downBtn.addEventListener("click", () => applyDoc(moveChannelWithinGroup(doc, channel.key, "down")))
+  row.appendChild(downBtn)
 
-  const editBtn = iconButton(ICON_PENCIL, t("editor.editDetails"))
-  editBtn.addEventListener("click", () => openEditDialog(channel))
-
-  const removeBtn = iconButton(ICON_TRASH, t("editor.removeChannel"))
-  removeBtn.classList.add("hover:text-bad", "hover:border-bad/40")
-  removeBtn.addEventListener("click", async () => {
-    const displayName = channel.overrides.name || resolved?.name || ""
-    const ok = await confirmDialog({
-      title: t("editor.removeChannel"),
-      message: t("editor.removeChannelConfirm", { name: displayName }),
-      confirmLabel: t("common.delete"),
-      destructive: true,
-    })
-    if (!ok) return
-    applyDoc(removeChannels(doc, [channel.key]))
-  })
-
-  row.append(grip, statusDot, logo, nameWrap, moveSelect, upBtn, downBtn, editBtn, removeBtn)
+  const moreBtn = iconButton(ICON_DOTS_VERTICAL, t("common.moreOptionsAria", { title: displayName || t("common.untitled") }))
+  moreBtn.dataset.action = "more"
+  moreBtn.addEventListener("click", () => openRowMenu(moreBtn, channel))
+  row.appendChild(moreBtn)
 
   row.addEventListener("dragstart", (event) => {
     row.dataset.dragging = "true"
@@ -795,30 +1458,43 @@ function buildChannelRow(
     applyDoc(moveChannel(doc, draggedKey, channel.key, channel.group))
   })
 
-  return row
+  return { el: row, upBtn, downBtn }
 }
 
-function openEditDialog(channel: CustomChannel): void {
-  if (!editDialog || !editNameInput || !editLogoInput || !editChnoInput || !editTvgIdInput) return
-  editingChannelKey = channel.key
-  editNameInput.value = channel.overrides.name ?? ""
-  editLogoInput.value = channel.overrides.logo ?? ""
-  editChnoInput.value = channel.overrides.chno != null ? String(channel.overrides.chno) : ""
-  editTvgIdInput.value = channel.overrides.tvgId ?? ""
-  if (editCatchupModeSelect) editCatchupModeSelect.value = channel.catchup?.catchup ?? ""
-  if (editCatchupDaysInput) {
-    editCatchupDaysInput.value = channel.catchup?.catchupDays != null ? String(channel.catchup.catchupDays) : ""
-  }
-  if (editCatchupSourceInput) editCatchupSourceInput.value = channel.catchup?.catchupSource ?? ""
-  editDialog.showModal()
+async function openEditDialog(channel: CustomChannel): Promise<void> {
+  const resolved = findResolved(channel)
+  const result = await openCustomChannelEditDialog({
+    channel,
+    resolvedName: resolved?.name || "",
+    resolvedLogo: resolved?.logo ?? null,
+    catchup: { value: channel.catchup ?? null },
+  })
+  if (!result) return
+  let nextDoc = setOverrides(doc, channel.key, result.overrides)
+  if (result.catchup !== undefined) nextDoc = setCatchup(nextDoc, channel.key, result.catchup)
+  applyDoc(nextDoc)
+}
+
+// ---------------------------------------------------------------------------
+// Remove unavailable (unresolved) channels
+// ---------------------------------------------------------------------------
+function removeUnavailableChannels(): void {
+  const unresolvedKeys = doc.channels
+    .filter((channel) => findResolved(channel)?.unresolved)
+    .map((channel) => channel.key)
+  if (!unresolvedKeys.length) return
+  applyDoc(removeChannels(doc, unresolvedKeys))
+  toastSuccess(tCount("editor.toastUnavailableRemoved", unresolvedKeys.length), {
+    action: { label: t("common.undo"), onClick: () => undo() },
+  })
 }
 
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 async function exportPlaylist(): Promise<void> {
-  if (!customEntry || !exportBtn) return
-  exportBtn.disabled = true
+  if (!customEntry || exportRunning) return
+  exportRunning = true
   try {
     await flushSave()
     const { entries, skippedCount } = await buildM3UEntriesForEntry(customEntry)
@@ -831,12 +1507,12 @@ async function exportPlaylist(): Promise<void> {
     const outcome = await saveM3UText(filename, text)
     if (outcome.cancelled) return
     toastSuccess(t("editor.toastExportDone"), { description: outcome.savedTo || undefined })
-    if (skippedCount > 0) toastError(t("editor.toastExportSkipped", { count: skippedCount }))
+    if (skippedCount > 0) toastWarn(t("editor.toastExportSkipped", { count: skippedCount }))
   } catch (err) {
     log.warn("[xt:editor] export failed:", err)
     toastError(t("editor.toastExportFail"), { description: (err as any)?.message })
   } finally {
-    exportBtn.disabled = false
+    exportRunning = false
   }
 }
 
@@ -914,39 +1590,15 @@ function wireAddUrlDialog(): void {
       drmScheme: licenseKey ? "clearkey" : null,
       licenseKey,
     }
+    if (presentSourceKeySet.has(customSourceKey(source))) {
+      addUrlDialog.close()
+      toastWarn(t("editor.toastAlreadyAdded", { count: 1 }))
+      return
+    }
     const result = addChannel(doc, source, { name, logo, group })
     applyDoc(result.doc)
     addUrlDialog.close()
     toastSuccess(t("editor.toastUrlAdded"))
-  })
-}
-
-function wireEditDialog(): void {
-  if (!editDialog) return
-  attachDialogSpatialNav(editDialog, { defaultElement: "#editor-edit-name" })
-  editDialog.querySelector('[data-role="cancel"]')?.addEventListener("click", () => editDialog.close())
-  editDialog.querySelector("form")?.addEventListener("submit", (event) => {
-    event.preventDefault()
-    editDialog.close()
-    if (!editingChannelKey) return
-    const patch: Partial<CustomChannelOverrides> = {
-      name: editNameInput?.value.trim() || null,
-      logo: editLogoInput?.value.trim() || null,
-      chno: editChnoInput?.value.trim() ? Math.max(0, Number(editChnoInput.value)) : null,
-      tvgId: editTvgIdInput?.value.trim() || null,
-    }
-    const catchupMode = editCatchupModeSelect?.value || ""
-    const catchup: CustomChannelCatchup | null = catchupMode
-      ? {
-          catchup: catchupMode,
-          catchupDays: editCatchupDaysInput?.value.trim() ? Math.max(0, Number(editCatchupDaysInput.value)) : null,
-          catchupSource: editCatchupSourceInput?.value.trim() || null,
-          catchupCorrection: null,
-        }
-      : null
-    const nextDoc = setCatchup(setOverrides(doc, editingChannelKey, patch), editingChannelKey, catchup)
-    applyDoc(nextDoc)
-    editingChannelKey = null
   })
 }
 
@@ -963,58 +1615,115 @@ function bulkResolvedById(): Map<number, ResolvedCustomChannel> {
   return resolvedById
 }
 
-function countBulkRenameMatches(findText: string): number {
+function textIncludes(haystack: string, needle: string, matchCase: boolean): boolean {
+  if (!needle) return false
+  return matchCase ? haystack.includes(needle) : haystack.toLowerCase().includes(needle.toLowerCase())
+}
+
+function replaceAllText(haystack: string, needle: string, replacement: string, matchCase: boolean): string {
+  if (matchCase) return haystack.split(needle).join(replacement)
+  const lowerHaystack = haystack.toLowerCase()
+  const lowerNeedle = needle.toLowerCase()
+  let result = ""
+  let cursor = 0
+  for (;;) {
+    const foundAt = lowerHaystack.indexOf(lowerNeedle, cursor)
+    if (foundAt === -1) {
+      result += haystack.slice(cursor)
+      break
+    }
+    result += haystack.slice(cursor, foundAt) + replacement
+    cursor = foundAt + needle.length
+  }
+  return result
+}
+
+function countBulkRenameMatches(findText: string, matchCase: boolean): number {
   if (!findText) return 0
   const resolvedById = bulkResolvedById()
   let count = 0
   for (const channel of doc.channels) {
-    if (effectiveChannelName(channel, resolvedById).includes(findText)) count++
+    if (textIncludes(effectiveChannelName(channel, resolvedById), findText, matchCase)) count++
   }
   return count
 }
 
-function applyBulkRename(findText: string, replaceText: string): { doc: CustomPlaylistDoc; count: number } {
+function applyBulkRename(
+  findText: string,
+  replaceText: string,
+  matchCase: boolean
+): { doc: CustomPlaylistDoc; count: number } {
   const resolvedById = bulkResolvedById()
   let nextDoc = doc
   let count = 0
   for (const channel of doc.channels) {
     const currentName = effectiveChannelName(channel, resolvedById)
-    if (!currentName.includes(findText)) continue
-    const nextName = currentName.split(findText).join(replaceText)
+    if (!textIncludes(currentName, findText, matchCase)) continue
+    const nextName = replaceAllText(currentName, findText, replaceText, matchCase)
     nextDoc = setOverrides(nextDoc, channel.key, { name: nextName || null })
     count++
   }
   return { doc: nextDoc, count }
 }
 
+let bulkRenameSubmitBtn: HTMLButtonElement | null = null
+
+function updateBulkRenamePreview(): void {
+  if (!bulkRenameFindInput) return
+  const findText = bulkRenameFindInput.value
+  const replaceText = bulkRenameReplaceInput?.value || ""
+  const matchCase = !!bulkRenameMatchCaseInput?.checked
+  const count = countBulkRenameMatches(findText, matchCase)
+  if (bulkRenamePreviewEl) {
+    bulkRenamePreviewEl.textContent = findText ? tCount("editor.bulkRenameMatchCount", count) : ""
+  }
+  if (bulkRenamePreviewSampleEl) {
+    const resolvedById = bulkResolvedById()
+    const firstMatch = findText
+      ? doc.channels.find((channel) => textIncludes(effectiveChannelName(channel, resolvedById), findText, matchCase))
+      : undefined
+    bulkRenamePreviewSampleEl.replaceChildren()
+    if (firstMatch) {
+      const beforeName = effectiveChannelName(firstMatch, resolvedById)
+      const afterName = replaceAllText(beforeName, findText, replaceText, matchCase)
+      const beforeLine = document.createElement("div")
+      beforeLine.textContent = beforeName || t("common.untitled")
+      const afterLine = document.createElement("div")
+      afterLine.textContent = t("editor.bulkRenamePreviewBecomes", { name: afterName || t("common.untitled") })
+      bulkRenamePreviewSampleEl.append(beforeLine, afterLine)
+      bulkRenamePreviewSampleEl.classList.remove("hidden")
+      bulkRenamePreviewSampleEl.classList.add("flex")
+    } else {
+      bulkRenamePreviewSampleEl.classList.add("hidden")
+      bulkRenamePreviewSampleEl.classList.remove("flex")
+    }
+  }
+  if (bulkRenameSubmitBtn) bulkRenameSubmitBtn.disabled = !findText || count === 0
+}
+
+function openBulkRenameDialog(): void {
+  if (!bulkRenameDialog || !bulkRenameFindInput || !bulkRenameReplaceInput) return
+  bulkRenameDialog.querySelector("form")?.reset()
+  updateBulkRenamePreview()
+  bulkRenameDialog.showModal()
+}
+
 function wireBulkRenameDialog(): void {
-  if (!bulkRenameBtn || !bulkRenameDialog || !bulkRenameFindInput || !bulkRenameReplaceInput) return
-  const submitBtn = bulkRenameDialog.querySelector<HTMLButtonElement>('[data-role="submit"]')
+  if (!bulkRenameDialog || !bulkRenameFindInput || !bulkRenameReplaceInput) return
+  bulkRenameSubmitBtn = bulkRenameDialog.querySelector<HTMLButtonElement>('[data-role="submit"]')
   attachDialogSpatialNav(bulkRenameDialog, { defaultElement: "#editor-bulk-rename-find" })
 
-  const updatePreview = (): void => {
-    const findText = bulkRenameFindInput.value
-    const count = countBulkRenameMatches(findText)
-    if (bulkRenamePreviewEl) {
-      bulkRenamePreviewEl.textContent = findText ? t("editor.bulkRenameMatchCount", { count }) : ""
-    }
-    if (submitBtn) submitBtn.disabled = !findText || count === 0
-  }
-
-  bulkRenameBtn.addEventListener("click", () => {
-    bulkRenameDialog.querySelector("form")?.reset()
-    updatePreview()
-    bulkRenameDialog.showModal()
-  })
-  bulkRenameFindInput.addEventListener("input", updatePreview)
-  bulkRenameReplaceInput.addEventListener("input", updatePreview)
+  bulkRenameFindInput.addEventListener("input", updateBulkRenamePreview)
+  bulkRenameReplaceInput.addEventListener("input", updateBulkRenamePreview)
+  bulkRenameMatchCaseInput?.addEventListener("change", updateBulkRenamePreview)
   bulkRenameDialog.querySelector('[data-role="cancel"]')?.addEventListener("click", () => bulkRenameDialog.close())
   bulkRenameDialog.querySelector("form")?.addEventListener("submit", (event) => {
     event.preventDefault()
     const findText = bulkRenameFindInput.value
     const replaceText = bulkRenameReplaceInput.value
+    const matchCase = !!bulkRenameMatchCaseInput?.checked
     if (!findText) return
-    const result = applyBulkRename(findText, replaceText)
+    const result = applyBulkRename(findText, replaceText, matchCase)
     if (!result.count) return
     bulkRenameDialog.close()
     applyDoc(result.doc)
@@ -1025,14 +1734,13 @@ function wireBulkRenameDialog(): void {
 // ---------------------------------------------------------------------------
 // Check links
 // ---------------------------------------------------------------------------
-function updateCheckLinksButton(): void {
-  if (!checkLinksBtn) return
-  if (checkLinksLabelEl) {
-    checkLinksLabelEl.textContent = checkLinksRunning
-      ? t("editor.checkLinksProgress", checkLinksProgress)
-      : t("editor.checkLinksBtn")
+function updateCheckLinksChip(): void {
+  if (!checkLinksChipEl) return
+  checkLinksChipEl.classList.toggle("hidden", !checkLinksRunning)
+  checkLinksChipEl.classList.toggle("flex", checkLinksRunning)
+  if (checkLinksChipLabelEl) {
+    checkLinksChipLabelEl.textContent = checkLinksRunning ? t("editor.checkLinksProgress", checkLinksProgress) : ""
   }
-  checkLinksBtn.title = checkLinksRunning ? t("common.cancel") : ""
 }
 
 async function runCheckLinks(): Promise<void> {
@@ -1050,11 +1758,12 @@ async function runCheckLinks(): Promise<void> {
   checkLinksRunning = true
   checkLinksAbort = new AbortController()
   checkLinksProgress = { done: 0, total: targets.length }
-  updateCheckLinksButton()
+  updateCheckLinksChip()
   renderGroups()
 
   let okCount = 0
   let failCount = 0
+  let uncheckedCount = 0
   let rerenderScheduled = false
   const scheduleRerender = (): void => {
     if (rerenderScheduled) return
@@ -1076,11 +1785,14 @@ async function runCheckLinks(): Promise<void> {
         linkCheckStatus.delete(target.key)
         break
       }
-      linkCheckStatus.set(target.key, result.ok ? "ok" : "fail")
-      if (result.ok) okCount++
-      else failCount++
+      // A browser CORS/mixed-content block reports as "couldn't check", not "failed".
+      const status: LinkCheckStatus = result.ok ? "ok" : result.blocked ? "unchecked" : "fail"
+      linkCheckStatus.set(target.key, status)
+      if (status === "ok") okCount++
+      else if (status === "fail") failCount++
+      else uncheckedCount++
       checkLinksProgress = { done: checkLinksProgress.done + 1, total: checkLinksProgress.total }
-      updateCheckLinksButton()
+      updateCheckLinksChip()
       scheduleRerender()
     }
   }
@@ -1095,17 +1807,94 @@ async function runCheckLinks(): Promise<void> {
   const wasCancelled = signal.aborted
   checkLinksRunning = false
   checkLinksAbort = null
-  updateCheckLinksButton()
+  updateCheckLinksChip()
   renderGroups()
   if (wasCancelled) {
-    toastWarn(t("editor.toastCheckLinksCancelled", { ok: okCount, fail: failCount }))
+    toastWarn(t("editor.toastCheckLinksCancelled", { ok: okCount, failed: failCount }))
   } else {
-    toastSuccess(t("editor.toastCheckLinksDone", { ok: okCount, fail: failCount }))
+    let message = t("editor.toastCheckLinksDone", { ok: okCount, failed: failCount })
+    if (uncheckedCount > 0) message += t("editor.toastCheckLinksUncheckedSuffix", { unchecked: uncheckedCount })
+    toastSuccess(message)
   }
 }
 
 function cancelCheckLinks(): void {
   checkLinksAbort?.abort()
+}
+
+function toggleCheckLinks(): void {
+  if (checkLinksRunning) cancelCheckLinks()
+  else void runCheckLinks()
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar "More" menu: folds the secondary toolbar actions into one button.
+// ---------------------------------------------------------------------------
+function openToolbarMoreMenu(anchor: HTMLButtonElement): void {
+  const items: MenuItemDef[] = [
+    { key: "bulk-rename", label: t("editor.bulkRenameBtn"), onClick: () => openBulkRenameDialog() },
+    {
+      key: "check-links",
+      label: checkLinksRunning ? t("common.cancel") : t("editor.checkLinksBtn"),
+      onClick: toggleCheckLinks,
+    },
+    { key: "export", label: t("editor.export"), onClick: () => void exportPlaylist() },
+  ]
+  if (anyUnresolvedChannels()) {
+    items.push({
+      key: "remove-unavailable",
+      label: t("editor.removeUnavailable"),
+      destructive: true,
+      onClick: () => removeUnavailableChannels(),
+    })
+  }
+  openMenu(anchor, items, t("livetv.moreActions"))
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard accelerators
+// ---------------------------------------------------------------------------
+function wireKeyboardShortcuts(): void {
+  document.addEventListener("keydown", (event) => {
+    const key = event.key.toLowerCase()
+    const isUndoCombo = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === "z"
+    const isRedoCombo =
+      ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "z") ||
+      ((event.ctrlKey || event.metaKey) && !event.shiftKey && key === "y")
+    if (isUndoCombo || isRedoCombo) {
+      if (document.querySelector("dialog[open]")) return
+      const target = event.target as HTMLElement | null
+      const tagName = target?.tagName
+      if (tagName === "INPUT" || tagName === "TEXTAREA" || target?.isContentEditable) {
+        if (!isSettledTrackedInput(target as HTMLInputElement)) return
+      } else if (tagName === "SELECT") {
+        return
+      }
+      event.preventDefault()
+      if (isUndoCombo) undo()
+      else redo()
+      return
+    }
+
+    const target = event.target as HTMLElement | null
+    const row = target?.closest<HTMLElement>(".editor-channel-row[data-key]")
+    if (!row?.dataset.key) return
+    const rowKey = row.dataset.key
+    if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault()
+      applyDoc(moveChannelWithinGroup(doc, rowKey, event.key === "ArrowUp" ? "up" : "down"))
+      return
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      if (target?.tagName === "INPUT" || target?.isContentEditable) return
+      event.preventDefault()
+      const channel = doc.channels.find((item) => item.key === rowKey)
+      if (!channel) return
+      const resolved = findResolved(channel)
+      const displayName = channel.overrides.name ?? resolved?.name ?? ""
+      removeChannelWithUndo(channel, displayName)
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -1122,6 +1911,9 @@ function showNotFound(title: string, body: string): void {
 }
 
 async function init(): Promise<void> {
+  // Toasts anchored top-center would sit over the toolbar on this page.
+  document.documentElement.setAttribute("data-toast-position", "bottom")
+
   entryId = new URLSearchParams(location.search).get("id") || ""
   let entries: any[]
   try {
@@ -1138,6 +1930,10 @@ async function init(): Promise<void> {
     return
   }
 
+  sourceTitleById = new Map(entries.map((entry: any) => [entry._id, entry.title || entry._id]))
+  loadActivePane()
+  loadCollapsedGroups()
+
   try {
     doc = await loadCustomDoc(entryId)
   } catch (err) {
@@ -1146,12 +1942,16 @@ async function init(): Promise<void> {
     showNotFound(t("editor.loadErrorTitle"), t("editor.loadErrorBody"))
     return
   }
+  presentSourceKeySet = presentSourceKeys(doc)
 
   byId("editor-main")?.classList.remove("hidden")
   byId("editor-main")?.classList.add("flex")
 
   invalidateEntry(entryId)
-  if (titleInput) titleInput.value = customEntry.title || ""
+  if (titleInput) {
+    titleInput.value = customEntry.title || ""
+    markInputCommitted(titleInput)
+  }
   renderChannelCount()
 
   populateSourceSelect(entries)
@@ -1166,25 +1966,19 @@ async function init(): Promise<void> {
   sourceCategorySelect?.addEventListener("change", () => applySourceFilter())
   sourceListEl?.addEventListener("scroll", scheduleSourceRender)
   addSelectedBtn?.addEventListener("click", () => void addSelectedChannels())
-  exportBtn?.addEventListener("click", () => void exportPlaylist())
   undoBtn?.addEventListener("click", () => undo())
-  checkLinksBtn?.addEventListener("click", () => {
-    if (checkLinksRunning) cancelCheckLinks()
-    else void runCheckLinks()
-  })
-  document.addEventListener("keydown", (event) => {
-    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return
-    const target = event.target as HTMLElement | null
-    const tagName = target?.tagName
-    if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || target?.isContentEditable) return
-    if (document.querySelector("dialog[open]")) return
-    event.preventDefault()
-    undo()
-  })
+  redoBtn?.addEventListener("click", () => redo())
+  toolbarMoreBtn?.addEventListener("click", () => openToolbarMoreMenu(toolbarMoreBtn))
+  checkLinksChipCancelBtn?.addEventListener("click", () => cancelCheckLinks())
+  saveRetryBtn?.addEventListener("click", () => void flushSave())
+  emptyAddUrlBtn?.addEventListener("click", () => addUrlBtn?.click())
+  emptySourceBtn?.addEventListener("click", () => setActivePane("source"))
+  groupsContainer?.addEventListener("scroll", closeMenu)
 
+  wirePaneSwitcher()
+  wireKeyboardShortcuts()
   wireNewGroupDialog()
   wireAddUrlDialog()
-  wireEditDialog()
   wireBulkRenameDialog()
   updateUndoButton()
 }
@@ -1202,7 +1996,7 @@ function flushOnTeardown(): void {
 }
 
 window.addEventListener("pagehide", flushOnTeardown)
-// visibilitychange fires earlier and more reliably than pagehide on mobile/Android WebView; best-effort since IndexedDB has no synchronous flush.
+// Fires earlier than pagehide on mobile WebView; flush is still best-effort.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") flushOnTeardown()
 })

@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">चैनल</string>
     <string name="native_player_unsupported_stream">इस चैनल को नेटिव प्लेयर में नहीं चलाया जा सकता</string>
+    <string name="native_player_backup_server">बैकअप सर्वर के ज़रिए फिर से कनेक्ट किया जा रहा है…</string>
+    <string name="native_player_stream_lost">स्ट्रीम खो गई - फिर से कनेक्ट नहीं हो सका</string>
     <string name="xt_video_settings_title">प्लेयर सेटिंग्स</string>
     <string name="xt_video_display_mode">डिस्प्ले मोड</string>
     <string name="xt_video_display_fit">फ़िट</string>
@@ -9,4 +11,9 @@
     <string name="xt_video_display_stretch">खींचें</string>
     <string name="xt_video_playback_speed">प्लेबैक गति</string>
     <string name="xt_video_speed_normal">सामान्य</string>
+    <string name="webview_floor_title">Android System WebView अपडेट करें</string>
+    <string name="webview_floor_message">Extreme InfiniTV को Android System WebView %1$d या नया वर्शन चाहिए। इस डिवाइस में वर्शन %2$s है, इसलिए पेज बिना स्टाइल के दिख सकते हैं या रिएक्ट नहीं कर सकते।\n\nAndroid TV पर Play Store सामान्य WebView अपडेट को छुपा देता है। Play Store से \"Android System WebView Beta\" इंस्टॉल करें, फिर डेवलपर विकल्प चालू करें और \"WebView implementation\" में इसे चुनें।</string>
+    <string name="webview_floor_get_beta">WebView Beta पाएं</string>
+    <string name="webview_floor_developer_options">डेवलपर विकल्प</string>
+    <string name="webview_floor_continue">फिर भी जारी रखें</string>
 </resources>
