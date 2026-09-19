@@ -2,17 +2,26 @@
  * Tiny logging boundary for browser-side code.
  *
  * `error` and `warn` always reach the console so production users can attach
- * stack traces to a bug report. `info` / `debug` / `log` are gated to dev so
- * they don't pollute the console in shipping builds.
- *
- * Future: route through `@tauri-apps/plugin-log` when the plugin is installed
- * on the Rust side - the JS shim accepts the same arg shape, so swapping in is
- * a one-file change here.
- *
- * Existing call sites keep their `[xt:component]` prefix as the first arg.
+ * stack traces to a bug report; `info` / `debug` / `log` are console-gated to
+ * dev. `error` / `warn` / `info` are mirrored, redacted, into the app log file
+ * via `@tauri-apps/plugin-log`; `debug` joins them only while verbose logging
+ * is on (`setVerboseLogging`). Call sites keep their `[xt:component]` prefix.
  */
 
 const isDev = Boolean(import.meta.env?.DEV)
+
+let verboseEnabled = false
+try {
+    verboseEnabled = localStorage.getItem("xt_verbose_log") === "1"
+} catch {}
+
+export function setVerboseLogging(enabled: boolean): void {
+    verboseEnabled = !!enabled
+}
+
+export function isVerboseLogging(): boolean {
+    return verboseEnabled
+}
 
 type LogFn = (...args: unknown[]) => void
 const noop: LogFn = () => {}
@@ -25,7 +34,7 @@ const isTauri =
 // users can attach it to a bug report. Redacted first - the file may be shared.
 type PluginLog = typeof import("@tauri-apps/plugin-log")
 let pluginLogPromise: Promise<PluginLog> | null = null
-function toFile(level: "error" | "warn" | "info", args: unknown[]): void {
+function toFile(level: "error" | "warn" | "info" | "debug", args: unknown[]): void {
     const text = redactUrl(stringifyArgs(args))
     toSinks(level, text)
     if (!isTauri) return
@@ -35,8 +44,8 @@ function toFile(level: "error" | "warn" | "info", args: unknown[]): void {
     } catch {}
 }
 
-// Extra destinations for warn/error/info, fed the same redacted text the file mirror gets.
-export type LogSink = (level: "error" | "warn" | "info", text: string) => void
+// Extra destinations for warn/error/info/debug, fed the same redacted text the file mirror gets.
+export type LogSink = (level: "error" | "warn" | "info" | "debug", text: string) => void
 
 const sinks = new Set<LogSink>()
 
@@ -45,7 +54,7 @@ export function addLogSink(sink: LogSink): () => void {
     return () => sinks.delete(sink)
 }
 
-function toSinks(level: "error" | "warn" | "info", text: string): void {
+function toSinks(level: "error" | "warn" | "info" | "debug", text: string): void {
     if (sinks.size === 0) return
     for (const sink of sinks) {
         // A throwing sink must never take down the call site it was logging for.
@@ -102,7 +111,11 @@ export const log: {
     error: (...args) => { console.error(...args.map(redactArg)); toFile("error", args) },
     warn: (...args) => { console.warn(...args.map(redactArg)); toFile("warn", args) },
     info: (...args) => { if (isDev) console.info(...args.map(redactArg)); toFile("info", args) },
-    debug: isDev ? console.debug.bind(console) : noop,
+    debug: (...args) => {
+        if (!isDev && !verboseEnabled) return
+        if (isDev) console.debug(...args.map(redactArg))
+        if (verboseEnabled) toFile("debug", args)
+    },
     log: isDev ? console.log.bind(console) : noop,
 }
 

@@ -85,7 +85,8 @@ export function createChannelPickerSource(options: ChannelSourceOptions): Picker
           list = await ensureLive(creds, options.playlistId)
         }
       }
-      channels = Array.isArray(list) ? list : []
+      // This picker has no header-row treatment: drop non-playable custom-playlist headers outright.
+      channels = (Array.isArray(list) ? list : []).filter((channel) => !channel.isHeader)
       await attachProgrammes()
 
       const preferences = await import("@/scripts/lib/preferences.js")

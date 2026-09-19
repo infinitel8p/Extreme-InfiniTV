@@ -1,0 +1,141 @@
+---
+// ES5 + inline styles only: this must render when Tailwind and the bundle fail to parse
+import enMessages from "@/i18n/en.json"
+import { MIN_CHROMIUM_MAJOR } from "@/scripts/lib/webview-floor"
+import { CHROMIUM_UA_PATTERN } from "@/scripts/lib/codec-hints"
+---
+
+<script
+  is:inline
+  define:vars={{
+    minMajor: MIN_CHROMIUM_MAJOR,
+    chromiumPatternSource: CHROMIUM_UA_PATTERN,
+    titleText: enMessages["webviewFloor.title"],
+    bodyText: enMessages["webviewFloor.body"],
+    androidStepsText: enMessages["webviewFloor.androidSteps"],
+    getBetaText: enMessages["webviewFloor.getBeta"],
+    continueText: enMessages["webviewFloor.continue"],
+  }}
+>
+  (function () {
+    try {
+      // MainActivity's own dialog already covers Android app installs.
+      if (window.AndroidDeviceInfo) return;
+      var userAgent = navigator.userAgent || "";
+      var chromiumMatch = new RegExp(chromiumPatternSource).exec(userAgent);
+      var chromiumMajor = chromiumMatch ? parseInt(chromiumMatch[1], 10) : null;
+      if (chromiumMajor === null || !isFinite(chromiumMajor) || chromiumMajor >= minMajor) return;
+
+      function isDismissed() {
+        try {
+          return sessionStorage.getItem("xt_webview_floor_dismissed") === "1";
+        } catch (e) {
+          return false;
+        }
+      }
+      if (isDismissed()) return;
+
+      function localizedCopy() {
+        var messages = null;
+        try {
+          var rawMessages = localStorage.getItem("xt_locale_messages_v3");
+          if (rawMessages) {
+            var cached = JSON.parse(rawMessages);
+            if (cached && cached.code && cached.code !== "en" && cached.messages) {
+              messages = cached.messages;
+            }
+          }
+        } catch (e) {}
+        function pick(key, fallback) {
+          return messages && messages[key] != null ? messages[key] : fallback;
+        }
+        return {
+          title: pick("webviewFloor.title", titleText),
+          body: pick("webviewFloor.body", bodyText),
+          androidSteps: pick("webviewFloor.androidSteps", androidStepsText),
+          getBeta: pick("webviewFloor.getBeta", getBetaText),
+          continueLabel: pick("webviewFloor.continue", continueText),
+        };
+      }
+
+      function interpolate(template) {
+        return template
+          .replace("{min}", String(minMajor))
+          .replace("{version}", String(chromiumMajor));
+      }
+
+      function insertBanner() {
+        if (isDismissed()) return;
+        if (document.getElementById("xt-webview-floor")) return;
+        if (!document.body) return;
+
+        var copy = localizedCopy();
+
+        var banner = document.createElement("div");
+        banner.id = "xt-webview-floor";
+        banner.setAttribute("role", "alert");
+        banner.style.cssText =
+          "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;" +
+          "background: #0e1628; color: #f1f5f9; padding: 16px; box-sizing: border-box;" +
+          "font-size: 16px; line-height: 1.5; z-index: 99999;" +
+          "position: fixed; top: 0; left: 0; right: 0;";
+
+        var titleLine = document.createElement("div");
+        titleLine.style.cssText = "font-weight: 700; font-size: 18px; margin-bottom: 6px;";
+        titleLine.textContent = copy.title;
+        banner.appendChild(titleLine);
+
+        var bodyLine = document.createElement("p");
+        bodyLine.style.cssText = "margin: 0 0 8px 0;";
+        bodyLine.textContent = interpolate(copy.body);
+        banner.appendChild(bodyLine);
+
+        var isAndroid = userAgent.indexOf("Android") !== -1;
+        if (isAndroid) {
+          var androidLine = document.createElement("p");
+          androidLine.style.cssText = "margin: 0 0 8px 0;";
+          androidLine.textContent = copy.androidSteps;
+          banner.appendChild(androidLine);
+        }
+
+        var actions = document.createElement("div");
+        actions.style.cssText = "display: flex; flex-wrap: wrap; align-items: center; margin-top: 8px;";
+
+        if (isAndroid) {
+          var link = document.createElement("a");
+          link.href = "https://play.google.com/store/apps/details?id=com.google.android.webview.beta";
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = copy.getBeta;
+          link.style.cssText =
+            "display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; margin: 0 10px 10px 0;" +
+            "border: 1px solid #d946ef; border-radius: 8px; color: #f1f5f9; text-decoration: none; font-size: 16px;";
+          actions.appendChild(link);
+        }
+
+        var continueButton = document.createElement("button");
+        continueButton.type = "button";
+        continueButton.textContent = copy.continueLabel;
+        continueButton.style.cssText =
+          "display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; margin: 0 10px 10px 0;" +
+          "border: 1px solid #d946ef; border-radius: 8px; background: transparent; color: #f1f5f9;" +
+          "font-size: 16px; cursor: pointer;";
+        continueButton.addEventListener("click", function () {
+          try {
+            sessionStorage.setItem("xt_webview_floor_dismissed", "1");
+          } catch (e) {}
+          if (banner.parentNode) banner.parentNode.removeChild(banner);
+        });
+        actions.appendChild(continueButton);
+
+        banner.appendChild(actions);
+        document.body.insertBefore(banner, document.body.firstChild);
+      }
+
+      if (document.body) insertBanner();
+      else document.addEventListener("DOMContentLoaded", insertBanner);
+      // ClientRouter (TvLayout) can swap the body without re-running head scripts.
+      document.addEventListener("astro:page-load", insertBanner);
+    } catch (e) {}
+  })();
+</script>

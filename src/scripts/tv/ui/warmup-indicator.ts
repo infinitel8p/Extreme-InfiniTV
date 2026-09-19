@@ -18,9 +18,11 @@ function ensurePill(): HTMLDivElement {
   pill.id = "tv-warmup-indicator"
   pill.setAttribute("role", "status")
   pill.setAttribute("aria-live", "polite")
+  // Opaque background instead of backdrop-blur: this pill can be visible for the whole
+  // catalog warmup, so it must never hold a compositor blur filter alive that long.
   pill.className =
-    "fixed z-9000 hidden items-center gap-2 rounded-full border border-line bg-bg/90 px-3.5 py-2 " +
-    "text-xs text-fg-2 backdrop-blur-md pointer-events-none"
+    "fixed z-9000 hidden items-center gap-2 rounded-full border border-line bg-bg px-3.5 py-2 " +
+    "text-xs text-fg-2 pointer-events-none"
   pill.style.bottom = "max(1rem, calc(env(safe-area-inset-bottom) + var(--xt-tv-overscan, 0) * 1vh))"
   pill.style.right = "max(1rem, calc(env(safe-area-inset-right) + var(--xt-tv-overscan, 0) * 1vw))"
 

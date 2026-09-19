@@ -1,6 +1,10 @@
 // Display-time sorting for live channel lists. "default" preserves the
 // source (provider) order; during a search, relevance wins instead.
 
+// Its own collator, not catalog-mappers.js's NAME_COLLATOR: channel names commonly carry
+// punctuation ("PPV: Boxing") that should sort the same as the unpunctuated form.
+const CHANNEL_NAME_COLLATOR = new Intl.Collator("en", { sensitivity: "base", ignorePunctuation: true })
+
 export type ChannelSortMode = "default" | "number" | "az" | "za" | "cataz"
 export type CategorySortMode = "default" | "az" | "za"
 
@@ -24,14 +28,24 @@ function textSortKey(text: string): string {
 }
 
 function compareText(first: string, second: string): number {
-  return textSortKey(first).localeCompare(textSortKey(second), "en", {
-    sensitivity: "base",
-    ignorePunctuation: true,
-  })
+  return CHANNEL_NAME_COLLATOR.compare(textSortKey(first), textSortKey(second))
+}
+
+// A channel object recurs across several buckets (Favorites, All channels, its own category) in
+// buildCastChannelGroups, so its sort key is computed once and reused instead of once per bucket.
+const nameSortKeyCache = new WeakMap<SortableChannel, string>()
+
+function channelNameSortKey(channel: SortableChannel): string {
+  let key = nameSortKeyCache.get(channel)
+  if (key === undefined) {
+    key = textSortKey(channel.name || "")
+    nameSortKeyCache.set(channel, key)
+  }
+  return key
 }
 
 function compareNames(first: SortableChannel, second: SortableChannel): number {
-  return compareText(first.name || "", second.name || "")
+  return CHANNEL_NAME_COLLATOR.compare(channelNameSortKey(first), channelNameSortKey(second))
 }
 
 /**

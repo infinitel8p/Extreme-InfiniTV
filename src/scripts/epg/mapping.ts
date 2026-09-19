@@ -77,7 +77,8 @@ async function getActiveChannels(): Promise<Channel[]> {
   activeIsM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   // Overrides live in prefs, so a cache-only read has to wait for them.
   await ensureOverridesReady()
-  return readCachedLiveChannels(activePlaylistId) as Channel[]
+  const channels = readCachedLiveChannels(activePlaylistId) as (Channel & { isHeader?: boolean })[]
+  return channels.filter((channel) => !channel.isHeader)
 }
 
 function escapeHtml(input: string) {

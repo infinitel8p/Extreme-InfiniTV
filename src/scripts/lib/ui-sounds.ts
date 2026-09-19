@@ -1,7 +1,7 @@
 // UI sound effects: launch chime + keyboard/D-pad nav ticks. Mouse and touch
 // stay silent. Assets in public/sounds/ (provenance in its README.md).
 
-import { getUiSoundsEnabled } from "@/scripts/lib/app-settings.js"
+import { getUiSoundsEnabled, UI_SOUNDS_EVENT } from "@/scripts/lib/app-settings.js"
 import { log } from "@/scripts/lib/log.js"
 import { getSharedAudioContext } from "@/scripts/lib/audio-context.ts"
 
@@ -51,9 +51,23 @@ function loadBuffer(kind: UiSoundKind): Promise<AudioBuffer | null> {
   return pending
 }
 
+// Cached so a focusin/keydown burst doesn't re-read localStorage or re-scan the DOM per event.
+let cachedUiSoundsEnabled: boolean | null = null
+
+function uiSoundsEnabledCached(): boolean {
+  if (cachedUiSoundsEnabled === null) cachedUiSoundsEnabled = getUiSoundsEnabled()
+  return cachedUiSoundsEnabled
+}
+
+let cachedVideoElement: HTMLVideoElement | null = null
+
+function invalidateVideoElementCache(): void {
+  cachedVideoElement = null
+}
+
 /** Resolves true only when playback actually started. */
 export async function playUiSound(kind: UiSoundKind): Promise<boolean> {
-  if (typeof window === "undefined" || !getUiSoundsEnabled()) return false
+  if (typeof window === "undefined" || !uiSoundsEnabledCached()) return false
   // Ticks would layer over playback audio during D-pad channel surfing.
   if ((kind === "nav" || kind === "select") && isVideoPlaying()) return false
   // A more specific sound firing synchronously supersedes a still-pending select tick.
@@ -96,11 +110,10 @@ export function suppressLaunchChime(): void {
 }
 
 function isVideoPlaying(): boolean {
-  const videoElements = document.querySelectorAll("video")
-  for (const videoElement of videoElements) {
-    if (!videoElement.paused && !videoElement.ended && videoElement.readyState >= 2) return true
-  }
-  return false
+  if (cachedVideoElement && !cachedVideoElement.isConnected) cachedVideoElement = null
+  if (!cachedVideoElement) cachedVideoElement = document.querySelector("video")
+  if (!cachedVideoElement) return false
+  return !cachedVideoElement.paused && !cachedVideoElement.ended && cachedVideoElement.readyState >= 2
 }
 
 function isNavKey(key: string): boolean {
@@ -118,6 +131,12 @@ function isNavKey(key: string): boolean {
 
 export function initUiSounds(): void {
   if (typeof window === "undefined") return
+
+  document.addEventListener(UI_SOUNDS_EVENT, (ev) => {
+    cachedUiSoundsEnabled = !!(ev as CustomEvent).detail?.value
+  })
+  // The <video> element is per-route (embedded player mounts/unmounts on navigation).
+  document.addEventListener("astro:page-load", invalidateVideoElementCache)
 
   document.addEventListener(
     "keydown",
@@ -189,7 +208,7 @@ export function initUiSounds(): void {
     }
   })
 
-  if (getUiSoundsEnabled()) {
+  if (uiSoundsEnabledCached()) {
     // Warm the tick so the first focus move isn't late.
     const warm = () => void loadBuffer("nav")
     if ("requestIdleCallback" in window) requestIdleCallback(warm)

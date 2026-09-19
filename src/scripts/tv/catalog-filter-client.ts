@@ -109,8 +109,9 @@ function noteWorkerActivity(): void {
   idleReleaseTimer = setTimeout(releaseCatalogWorker, IDLE_RELEASE_MS)
 }
 
+// Survives ClientRouter swaps; only idle and memory pressure release it.
 if (typeof document !== "undefined") {
-  document.addEventListener("astro:before-swap", releaseCatalogWorker)
+  document.addEventListener("xt:memory-pressure", releaseCatalogWorker)
 }
 
 function getWorker(): Worker | null {

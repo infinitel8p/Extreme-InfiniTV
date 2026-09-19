@@ -28,3 +28,10 @@
 
 # Same reflective load for RTSP (FRITZ!Box and other tuner sources).
 -keep class androidx.media3.exoplayer.rtsp.RtspMediaSource$Factory { *; }
+
+# dnsjava's Windows/JNDI resolver-config and logging backends are JVM-only.
+-dontwarn com.sun.jna.**
+-dontwarn javax.naming.**
+-dontwarn lombok.Generated
+-dontwarn org.slf4j.impl.StaticLoggerBinder
+-dontwarn sun.net.spi.nameservice.**

@@ -6,8 +6,11 @@ import {
   getActiveEntry,
   fmtBase,
   isTauri,
+  getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isProviderRejection } from "@/scripts/lib/stream-reject.ts"
+import { createMirrorHopper } from "@/scripts/lib/vod-mirror-hop.ts"
 import { isCastRoutingActive, routePlayToCast } from "@/scripts/lib/tv-cast.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
@@ -23,6 +26,7 @@ import {
   setProgress,
   markCompleted,
   clearProgress,
+  getTrackPrefs,
   getVideoScaleOverride,
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
@@ -48,6 +52,7 @@ import {
   paintHero as paintHeroOn,
   sanitizeProviderBackdropUrl,
 } from "@/scripts/lib/morph-detail.js"
+import { peekPosterTint } from "@/scripts/lib/img-cache.ts"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
@@ -63,6 +68,7 @@ import {
   setVideoScale,
   isTmdbActive,
   getContentLanguage,
+  getUserAgent,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { resolveTitleEnrichment, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
@@ -100,6 +106,7 @@ import {
   getExternalLauncher,
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
+import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
 import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
@@ -109,6 +116,7 @@ import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dial
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { createVodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
 import { mountVodPlayback } from "@/scripts/lib/vod-mount.ts"
+import { parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -176,6 +184,12 @@ let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
+function applyHeroTint(url) {
+  peekPosterTint(url).then((css) => {
+    if (css && posterEl && !heroSettled) posterEl.style.setProperty("--xt-poster-tint", css)
+  })
+}
+
 // Paints the hero exactly once per boot, at whichever point the caller has decided
 // enough is known: immediately when TMDb is inactive or already cache-warm, or after
 // the TMDb enrichment attempt settles (resolved, resolved-null, or failed) otherwise.
@@ -183,7 +197,6 @@ function settleHero() {
   if (heroSettled) return
   heroSettled = true
   paintedHeroPosterUrl = heroPosterUrl
-  posterEl?.classList.remove("skel")
   paintHeroOn(posterEl, {
     name: movie?.name || "",
     posterUrl: heroPosterUrl,
@@ -488,9 +501,11 @@ function loadVodCatalog() {
   const cached = getCached(activePlaylistId, "vod")?.data
   if (cached?.length) return Promise.resolve(cached)
   if (!vodCatalogPromise) {
+    const catalogLoadStartedAtMs = performance.now()
     vodCatalogPromise = ensureVod(creds, activePlaylistId)
       .then((catalog) => {
         adoptCatalogRow(catalog)
+        log.debug("[xt:movie-detail] vod catalog loaded", `items=${catalog.length} ms=${Math.round(performance.now() - catalogLoadStartedAtMs)}`)
         return catalog
       })
       .catch((err) => {
@@ -758,7 +773,7 @@ function setupPipButton(player) {
   pipBtn.addEventListener("click", () => togglePip(player))
 }
 
-const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
 
 function resolveVideoScaleMode() {
   if (activePlaylistId && movie) {
@@ -847,13 +862,15 @@ async function ensureEmbeddedPlayer(backend) {
     autoplay: false,
     aspectRatio: "16:9",
     pictureInPictureToggle: !hasNativePipBridge,
+    userAgent: getUserAgent() || null,
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
-  if (mounted.backend === "videojs") {
+  if (mounted.backend === "videojs" || (mounted.backend === "mpv-embedded" && typeof vjs.userActive === "function")) {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
+  vjs.el()?.addEventListener?.("xt:mpv-retry", () => { if (movie) startPlayback() })
   return vjs
 }
 
@@ -874,6 +891,7 @@ function retirePreviousPlayback() {
 
 async function startPlayback(options = {}) {
   if (!movie) return
+  const mirrorHopsUsed = options.mirrorHopsUsed || 0
   if (isTauri && isCastRoutingActive() && !options.forceLocal) {
     const title = movie.name || ""
     await routePlayToCast({
@@ -898,19 +916,32 @@ async function startPlayback(options = {}) {
         const resumeSeconds =
           saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
         const durationSeconds = knownVodDurationSeconds()
-        return buildVodCastDescriptor({
+        const descriptor = buildVodCastDescriptor({
           src,
           title,
           logo: movie.logo || undefined,
           resumeSeconds,
           durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
         })
+        descriptor.dns = (await getActiveDnsOverrideAsync())?.raw ?? null
+        return descriptor
       },
     })
     return
   }
   inlineTrailer.close()
   const requestId = ++playRequestId
+
+  const tryMirrorHop = createMirrorHopper({
+    buildUrl: detailSrcBuilder,
+    isCurrent: () => requestId === playRequestId,
+    logTag: "[xt:movie-detail]",
+    hopsUsed: mirrorHopsUsed,
+    onHop: (url, hopsUsed) => {
+      retirePreviousPlayback()
+      startPlayback({ isAutomaticRetry: true, mirrorHopsUsed: hopsUsed, overrideSrc: url })
+    },
+  })
 
   // detailSrc may not be ready yet if the network fetch is in flight.
   let waited = 0
@@ -923,8 +954,11 @@ async function startPlayback(options = {}) {
     return
   }
 
-  // Probe the URL against the configured backup domains
-  if (detailSrcBuilder) {
+  if (options.overrideSrc) {
+    // Already probed by the mirror hop - re-resolving could re-pin back to the primary.
+    detailSrc = options.overrideSrc
+  } else if (detailSrcBuilder) {
+    // Probe the URL against the configured backup domains
     const resolved = await resolveStreamUrl(detailSrcBuilder)
     if (resolved) detailSrc = resolved
   }
@@ -964,6 +998,8 @@ async function startPlayback(options = {}) {
     getAndroidNativePlayerEnabled() &&
     activePlaylistId
   ) {
+    const nativeDns = (await getActiveDnsOverrideAsync())?.raw ?? null
+    if (requestId !== playRequestId) return
     const launched = launchAndroidNativeVodWithProgress({
       playlistId: activePlaylistId,
       contentKey: `vod:${movie.id}`,
@@ -973,17 +1009,19 @@ async function startPlayback(options = {}) {
       title: movie.name,
       posterUrl: movie.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      dns: nativeDns,
       progressExtras: { title: movie.name, logo: movie.logo || null },
     })
     if (launched) return
   }
 
   let backend = getPlayerBackend()
+  log.debug("[xt:movie-detail] playback source", `id=${movie.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)
 
   if (backend === "mpv" || backend === "vlc") {
     try {
       const externalSrc = (await getLocalDownloadPath(detailSrc)) || playSrc
-      await launchExternalPlayback(backend, externalSrc, resumePos)
+      await launchExternalPlayback(backend, externalSrc, resumePos, movie.id)
       pushMoviePresence()
       externalPresenceActive = true
       return
@@ -1005,6 +1043,7 @@ async function startPlayback(options = {}) {
     savedProgress: saved,
     resumePos,
     nameHintSource: movie.name,
+    title: movie.name,
     posterEl,
     playerWrap,
     videoElementId: "movie-player",
@@ -1017,6 +1056,20 @@ async function startPlayback(options = {}) {
       setupStatsButton()
       setupHealthButton()
       subtitleDelayController.setup()
+      // mpv-only signals the generic remux-failure classifier below doesn't recognize.
+      player.one?.("error", async () => {
+        const errorDetail = player.codecInfo?.()?.errorDetail
+        if (typeof errorDetail !== "string") return
+        const httpStatus = parseHttpStatusPrefix(errorDetail)
+        if (isProviderRejection({ errorDetail, httpStatus })) {
+          const hopped = await tryMirrorHop({ errorDetail, httpStatus })
+          if (requestId !== playRequestId) return
+          if (hopped) return
+        }
+        if (errorDetail.startsWith("OFFLINE_PLACEHOLDER")) vodPlaybackToasts.showOfflinePlaceholderToast()
+        else if (httpStatus != null) vodPlaybackToasts.showHttpErrorToast(httpStatus)
+        else if (errorDetail.startsWith("NETWORK:")) vodPlaybackToasts.showNetworkErrorToast()
+      })
     },
     applyVideoScale,
     toasts: vodPlaybackToasts,
@@ -1029,6 +1082,7 @@ async function startPlayback(options = {}) {
       retirePreviousPlayback()
       startPlayback({ isAutomaticRetry: true })
     },
+    tryMirrorHop,
     beginInsightsSession: (isAutomaticRetry) => {
       if (isAutomaticRetry) getMovieInsights().record("fallback", "auto:mkv-remux-fallback")
       else getMovieInsights().startSession({ label: movie.name })
@@ -1081,14 +1135,32 @@ function pushMoviePresence() {
   })
 }
 
-async function launchExternalPlayback(backend, src, resumeSeconds) {
+async function launchExternalPlayback(backend, src, resumeSeconds, movieId) {
   const launcher = getExternalLauncher(backend)
   toast({
     title: t("settings.playback.launching", { player: backend.toUpperCase() })
       || `Launching ${backend.toUpperCase()}…`,
     duration: 2000,
   })
-  await launcher.launch(src, { resumeSeconds })
+  const trackPrefs = activePlaylistId ? getTrackPrefs(activePlaylistId, "vod", movieId) : null
+  const result = await launcher.launch(src, {
+    resumeSeconds,
+    tracks: trackPrefs
+      ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+      : null,
+  })
+  if (result.sessionId && activePlaylistId && backend === "mpv") {
+    beginExternalSession({
+      sessionId: result.sessionId,
+      kind: "mpv",
+      srcKey: externalSrcKey(result.src),
+      playlistId: activePlaylistId,
+      contentKind: "vod",
+      contentId: String(movieId),
+      extras: { name: movie?.name || "", logo: movie?.logo || null },
+      startedAt: Date.now(),
+    })
+  }
 }
 
 // ----------------------------
@@ -1125,6 +1197,20 @@ const externalBtnHandle = setupExternalPlayerButton(
     },
     getTitle() {
       return movie?.name || null
+    },
+    getTrackPrefs() {
+      if (!activePlaylistId || !movie) return null
+      const prefs = getTrackPrefs(activePlaylistId, "vod", movie.id)
+      return prefs ? { audioLang: prefs.audioLang, subLang: prefs.subLang, subOff: prefs.subOff } : null
+    },
+    getProgressTarget() {
+      if (!activePlaylistId || !movie) return null
+      return {
+        playlistId: activePlaylistId,
+        kind: "vod",
+        id: String(movie.id),
+        extras: { name: movie.name, logo: movie.logo || null },
+      }
     },
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
@@ -1489,6 +1575,7 @@ async function boot() {
   if (titleEl && movie.name !== stubName) titleEl.textContent = displayTitle(movie.name)
   // Hero stays in its skeleton state - settleHero() below decides when to paint it once.
   heroPosterUrl = movie.logo || null
+  applyHeroTint(heroPosterUrl)
   setAmbient(movie.logo || null)
   syncFavButton()
   syncWatchButton()
@@ -1559,11 +1646,14 @@ async function boot() {
   // Refresh from network when reachable. The provider info cache has no TTL gate here -
   // this always runs, matching the existing offline/SWR behavior for this endpoint.
   if (creds.host && creds.user && creds.pass) {
+    const vodInfoFetchStartedAtMs = performance.now()
+    log.debug("[xt:movie-detail] vod info fetch start", `id=${movieId}`)
     try {
       const r = await xtreamApiFetch("get_vod_info", { vod_id: String(movieId) })
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
       setCached(active._id, `vod_info_${movieId}`, data, VOD_INFO_TTL_MS)
+      log.debug("[xt:movie-detail] vod info fetch end", `id=${movieId} ok=true ms=${Math.round(performance.now() - vodInfoFetchStartedAtMs)}`)
       if (enrichRequestIdForThisBoot === enrichRequestId) {
         applyVodInfo(data)
         // applyVodInfo resets the provider-derived fields the merge already backfilled; reassert it.
@@ -1575,6 +1665,7 @@ async function boot() {
         hideDetailSkeleton()
       }
     } catch (e) {
+      log.debug("[xt:movie-detail] vod info fetch end", `id=${movieId} ok=false ms=${Math.round(performance.now() - vodInfoFetchStartedAtMs)}`)
       log.error("[xt:movie-detail] info fetch failed:", e)
       if (!providerInfoReady && enrichRequestIdForThisBoot === enrichRequestId) {
         if (plotEl) {

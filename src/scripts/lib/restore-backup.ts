@@ -1,12 +1,10 @@
-// Shared "restore from backup" wiring. The file picker has to branch across
-// three platforms (Android SAF -> Tauri dialog -> web <input type=file>) and
-// then parse + import the JSON; both the Settings page and the welcome card
-// need the exact same picker, so it lives here once. Callers supply the
-// divergent bits (confirm gate, post-restore follow-up, busy UI) via options.
+// Shared "restore from backup" wiring: platform file picker (Android SAF ->
+// Tauri dialog -> web <input type=file>), a section picker dialog, then import.
 
 import { log } from "@/scripts/lib/log.js"
 import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
 import { t } from "@/scripts/lib/i18n.js"
+import { pickBackupSections } from "@/scripts/lib/backup-sections-dialog.js"
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -17,35 +15,50 @@ const isAndroid =
 export interface BackupSummary {
   playlists: number
   prefsPlaylists: number
+  sections: string[]
 }
 
-export interface RestoreBackupOptions {
-  fileInput: HTMLInputElement | null
+export interface RestoreTextOptions {
   logTag: string
-  confirm?: () => boolean | Promise<boolean>
   onRestored?: (summary: BackupSummary) => void | Promise<void>
-  onBusyChange?: (busy: boolean) => void
   successDuration?: number
 }
 
-async function applyBackupText(text: string, options: RestoreBackupOptions) {
-  if (options.confirm && !(await options.confirm())) return
+export interface RestoreBackupOptions extends RestoreTextOptions {
+  fileInput: HTMLInputElement | null
+  onBusyChange?: (busy: boolean) => void
+}
+
+/** Parse -> validate -> pick sections -> import -> toast. Returns true only when an import ran. */
+export async function restoreBackupText(text: string, options: RestoreTextOptions): Promise<boolean> {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch (parseError) {
     log.warn(`[${options.logTag}] backup JSON parse failed:`, parseError)
     toastError(t("settings.toast.backupParseFail"), { description: "Not valid JSON." })
-    return
+    return false
   }
   try {
-    const { importAll } = await import("@/scripts/lib/backup.js")
-    const summary = (await importAll(parsed)) as BackupSummary
+    const { BACKUP_SECTIONS, BACKUP_FORMAT_MARKER_ERROR, importAll, isBackupBlob } = await import(
+      "@/scripts/lib/backup.js"
+    )
+    if (!isBackupBlob(parsed)) {
+      toastError(t("settings.toast.backupRestoreFail"), { description: BACKUP_FORMAT_MARKER_ERROR })
+      return false
+    }
+    const present = BACKUP_SECTIONS.filter(
+      (name: string) => parsed && typeof parsed === "object" && name in (parsed as Record<string, unknown>)
+    )
+    const sections = await pickBackupSections(present)
+    if (!sections) return false
+    const summary = (await importAll(parsed, { sections })) as BackupSummary
     toastSuccess(t("settings.toast.backupRestored"), {
       description: `${summary.playlists} playlist(s), ${summary.prefsPlaylists} preference set(s).`,
       duration: options.successDuration ?? 4000,
     })
     await options.onRestored?.(summary)
+    return true
   } catch (error: unknown) {
     log.error(`[${options.logTag}] backup import failed:`, error)
     const message =
@@ -53,7 +66,12 @@ async function applyBackupText(text: string, options: RestoreBackupOptions) {
         ? String((error as { message: unknown }).message)
         : "See console."
     toastError(t("settings.toast.backupRestoreFail"), { description: message })
+    return false
   }
+}
+
+async function applyBackupText(text: string, options: RestoreBackupOptions) {
+  await restoreBackupText(text, options)
 }
 
 /** Wire a "restore from backup" trigger to the platform-appropriate file picker

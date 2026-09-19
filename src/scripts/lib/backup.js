@@ -17,6 +17,7 @@ import {
   ensureLoaded as ensurePrefsLoaded,
   snapshotPrefs,
   restorePrefs,
+  mergePrefsSnapshots,
 } from "@/scripts/lib/preferences.js"
 import {
   getUserAgent,
@@ -113,9 +114,19 @@ import { setLocale, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { listTvDevices, saveTvDevice } from "@/scripts/lib/tv-cast.js"
 import { log } from "@/scripts/lib/log.js"
 
-const FORMAT_VERSION = 1
+const FORMAT_VERSION = 2
 const FORMAT_NAME = "extreme-infinitv-backup"
 const LEGACY_FORMAT_NAMES = ["xtream-infinitv-backup"]
+const FORMAT_MARKER_ERROR_MESSAGE = "Invalid backup file: format marker missing or wrong."
+
+export const BACKUP_SECTIONS = Object.freeze([
+  "creds",
+  "localContent",
+  "epgOffsets",
+  "prefs",
+  "tvDevices",
+  "appSettings",
+])
 
 // Theme, font scale, channel column width and sidebar-collapsed are written
 // directly by Layout.astro / Settings / Sidebar.astro - no app-settings.js
@@ -179,6 +190,18 @@ function isPlausibleTvDevice(value) {
   )
 }
 
+/**
+ * Whether `blob` carries a format/version marker this app's importer accepts
+ * at all (not a version-ceiling check - `importAll` still enforces that).
+ * @param {unknown} blob
+ */
+export function isBackupBlob(blob) {
+  if (!blob || typeof blob !== "object") return false
+  const b = /** @type {any} */ (blob)
+  if (b.format !== FORMAT_NAME && !LEGACY_FORMAT_NAMES.includes(b.format)) return false
+  return typeof b.version === "number"
+}
+
 function isAcceptablePath(value) {
   if (typeof value !== "string" || !value) return false
   if (value.length > 4096) return false
@@ -207,7 +230,17 @@ export async function exportAll() {
       if (text === null) {
         throw new Error(`Failed to read local content for playlist "${entry._id}".`)
       }
-      if (text) localContent[entry._id] = text
+      if (text) {
+        if (entry.type === "custom") {
+          try {
+            localContent[entry._id] = JSON.parse(text)
+          } catch {
+            localContent[entry._id] = text
+          }
+        } else {
+          localContent[entry._id] = text
+        }
+      }
     }
     const offset = getOffsetSetting(entry._id)
     if (typeof offset === "number") epgOffsets[entry._id] = offset
@@ -299,14 +332,15 @@ export async function exportAll() {
  * Validate and apply a snapshot. Returns a summary of what was restored.
  * Throws on schema mismatch.
  * @param {unknown} blob
+ * @param {{sections?: Iterable<string>}} [options]
  */
-export async function importAll(blob) {
+export async function importAll(blob, options = {}) {
   if (!blob || typeof blob !== "object") {
     throw new Error("Invalid backup file: not an object.")
   }
   const b = /** @type {any} */ (blob)
   if (b.format !== FORMAT_NAME && !LEGACY_FORMAT_NAMES.includes(b.format)) {
-    throw new Error("Invalid backup file: format marker missing or wrong.")
+    throw new Error(FORMAT_MARKER_ERROR_MESSAGE)
   }
   if (typeof b.version !== "number" || b.version > FORMAT_VERSION) {
     throw new Error(
@@ -314,14 +348,17 @@ export async function importAll(blob) {
     )
   }
 
+  const sections = new Set(options.sections ?? BACKUP_SECTIONS)
+
   const summary = { playlists: 0, prefsPlaylists: 0, appSettings: 0, localContent: 0 }
+  const importedEntryIdSource = sections.has("creds")
+    ? (Array.isArray(b.creds?.entries) ? b.creds.entries : [])
+    : (await getCredsState()).entries ?? []
   const importedEntryIds = new Set(
-    Array.isArray(b.creds?.entries)
-      ? b.creds.entries.map((entry) => entry?._id).filter((entryId) => typeof entryId === "string" && entryId)
-      : []
+    importedEntryIdSource.map((entry) => entry?._id).filter((entryId) => typeof entryId === "string" && entryId)
   )
 
-  if (b.creds && typeof b.creds === "object") {
+  if (sections.has("creds") && b.creds && typeof b.creds === "object") {
     await restoreCredsState({
       entries: Array.isArray(b.creds.entries) ? b.creds.entries : [],
       selectedId:
@@ -333,15 +370,19 @@ export async function importAll(blob) {
   }
 
   // setLocalContent enforces the byte cap; rejected payloads are skipped.
-  if (b.localContent && typeof b.localContent === "object") {
-    for (const [entryId, text] of Object.entries(b.localContent)) {
-      if (typeof entryId === "string" && entryId && typeof text === "string") {
-        if (await setLocalContent(entryId, text)) summary.localContent++
-      }
+  if (sections.has("localContent") && b.localContent && typeof b.localContent === "object") {
+    for (const [entryId, value] of Object.entries(b.localContent)) {
+      if (typeof entryId !== "string" || !entryId) continue
+      if (!importedEntryIds.has(entryId)) continue
+      let text = null
+      if (typeof value === "string") text = value
+      else if (value && typeof value === "object") text = JSON.stringify(value)
+      if (text === null) continue
+      if (await setLocalContent(entryId, text)) summary.localContent++
     }
   }
 
-  if (b.epgOffsets && typeof b.epgOffsets === "object") {
+  if (sections.has("epgOffsets") && b.epgOffsets && typeof b.epgOffsets === "object") {
     for (const [entryId, offset] of Object.entries(b.epgOffsets)) {
       if (importedEntryIds.has(entryId) && typeof offset === "number") {
         setOffsetSetting(entryId, offset)
@@ -350,7 +391,7 @@ export async function importAll(blob) {
     }
   }
 
-  if (Array.isArray(b.tvDevices)) {
+  if (sections.has("tvDevices") && Array.isArray(b.tvDevices)) {
     for (const device of b.tvDevices) {
       if (isPlausibleTvDevice(device)) {
         saveTvDevice(device)
@@ -359,12 +400,23 @@ export async function importAll(blob) {
     }
   }
 
-  if (b.prefs && typeof b.prefs === "object") {
-    await restorePrefs(b.prefs)
-    summary.prefsPlaylists = Object.keys(b.prefs).length
+  if (sections.has("prefs") && b.prefs && typeof b.prefs === "object") {
+    if (sections.has("creds")) {
+      // Ids are consistent with the file - a full replace is safe.
+      await restorePrefs(b.prefs)
+      summary.prefsPlaylists = Object.keys(b.prefs).length
+    } else {
+      // File ids are per-device UUIDs; only overlay buckets that still exist here.
+      await ensurePrefsLoaded()
+      const merged = mergePrefsSnapshots(snapshotPrefs(), b.prefs, importedEntryIds)
+      await restorePrefs(merged)
+      summary.prefsPlaylists = Object.keys(b.prefs).filter((entryId) =>
+        importedEntryIds.has(entryId)
+      ).length
+    }
   }
 
-  if (b.appSettings && typeof b.appSettings === "object") {
+  if (sections.has("appSettings") && b.appSettings && typeof b.appSettings === "object") {
     if (typeof b.appSettings.userAgent === "string") {
       setUserAgent(b.appSettings.userAgent)
       summary.appSettings++
@@ -610,7 +662,10 @@ export async function importAll(blob) {
     }
   }
 
-  return summary
+  return {
+    ...summary,
+    sections: BACKUP_SECTIONS.filter((name) => sections.has(name)),
+  }
 }
 
 /**
@@ -624,3 +679,4 @@ export function suggestedFilename() {
 
 export const BACKUP_FORMAT_NAME = FORMAT_NAME
 export const BACKUP_FORMAT_VERSION = FORMAT_VERSION
+export const BACKUP_FORMAT_MARKER_ERROR = FORMAT_MARKER_ERROR_MESSAGE

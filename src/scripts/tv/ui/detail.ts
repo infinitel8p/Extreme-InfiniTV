@@ -4,6 +4,7 @@ import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { t } from "@/scripts/lib/i18n"
 import { registerFocusSection } from "@/scripts/tv/focus"
 import { applyAmbient, clearAmbient } from "@/scripts/tv/ambient-color"
+import { effectTier, heavyBlurClass } from "@/scripts/tv/motion"
 
 const ACTIONS_FOCUS_SECTION_ID = "tv-detail-actions"
 const DESCRIPTION_FOCUS_SECTION_ID = "tv-detail-description"
@@ -239,8 +240,11 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
       img.src = backdropUrl
       return
     }
-    img.className = "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-3xl saturate-150"
-    mountCachedImage(img, imageUrl, "poster")
+    img.className = heavyBlurClass(
+      "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-3xl saturate-150",
+      "absolute inset-0 bg-surface-2"
+    )
+    if (effectTier() === "full") mountCachedImage(img, imageUrl, "poster")
   }
 
   function setPoster(posterUrl: string | null): void {

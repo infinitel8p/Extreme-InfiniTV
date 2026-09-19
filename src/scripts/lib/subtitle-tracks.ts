@@ -25,10 +25,13 @@ export interface SubtitleManagerOptions {
   getCurrentTime: () => number
   /** -1 unless a selection carried over from a remount or captions-auto picked one. */
   onTracksReady?: (tracks: { index: number; label: string; language: string }[], activeIndex: number) => void
+  /** Fired whenever the shown track changes; null when subtitles are off. */
+  onSelectionChanged?: (track: { index: number; label: string; language: string } | null) => void
 }
 
 export interface SubtitleManager {
   setSource(sourceUrl: string | null, mimeType?: string | null, mkvSession?: MkvSubtitleSession | null): void
+  /** -1 turns subtitles off. */
   select(index: number): void
   /** Shifts cue times by delta; delta 0 probes the offset without shifting. */
   nudgeDelay(deltaSeconds: number): number | null
@@ -75,7 +78,7 @@ export function pickAutoCaptionTrack(
 }
 
 export function createSubtitleManager(options: SubtitleManagerOptions): SubtitleManager {
-  const { registrar, getCurrentTime, onTracksReady } = options
+  const { registrar, getCurrentTime, onTracksReady, onSelectionChanged } = options
 
   let managedTracks: ManagedTrack[] = []
   let session: Mp4SubtitleSession | null = null
@@ -92,14 +95,23 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
   // Distinguishes "never touched" from "explicitly turned off" (both collapse rememberedTrackKey to null)
   let hasMadeSubtitleSelection = false
   let offsetSeconds = 0
+  // Gates onSelectionChanged so the manager's own initial auto-selection is never persisted as a viewer pick.
+  let tracksReadyFired = false
 
   function trackKeyOf(managed: ManagedTrack): string {
     return managed.kind === "push" ? `push:${managed.pushState?.trackNumber}` : `mp4:${managed.trackId}`
   }
 
   function rememberShowingTrack(): void {
-    const showing = managedTracks.find((managed) => managed.textTrack.mode !== "disabled")
+    const showingIndex = managedTracks.findIndex((managed) => managed.textTrack.mode !== "disabled")
+    const showing = showingIndex >= 0 ? managedTracks[showingIndex] : undefined
     rememberedTrackKey = showing ? trackKeyOf(showing) : null
+    if (!onSelectionChanged || !tracksReadyFired) return
+    onSelectionChanged(
+      showing
+        ? { index: showingIndex, label: showing.textTrack.label, language: showing.textTrack.language }
+        : null,
+    )
   }
 
   function restoreRememberedSelection(): number {
@@ -295,6 +307,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
         })
         const selectedIndex = resolveInitialSelection(readyTracks)
         if (readyTracks.length) onTracksReady?.(readyTracks, selectedIndex)
+        tracksReadyFired = true
 
         mkvSession.onCues((trackNumber, cues) => {
           if (currentSourceUrl !== sourceUrl || signal.aborted) return
@@ -323,6 +336,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     currentSourceUrl = sourceUrl
     toastShownForSource = false
     offsetSeconds = 0
+    tracksReadyFired = false
     teardownTracks()
     // Same mkvSession can return on remux remount; don't stop a tee still in use.
     const incomingMkvSession = mkvSession ?? null
@@ -367,6 +381,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
         }
         const selectedIndex = resolveInitialSelection(readyTracks)
         if (readyTracks.length) onTracksReady?.(readyTracks, selectedIndex)
+        tracksReadyFired = true
       })
       .catch((err) => {
         if (err?.name === "AbortError") return
@@ -404,6 +419,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     rememberedTrackKey = null
     hasMadeSubtitleSelection = false
     offsetSeconds = 0
+    tracksReadyFired = false
     if (activeMkvSession) {
       try { activeMkvSession.stop() } catch (err) { log.warn("[xt:subtitles] mkv session stop() failed:", err) }
       activeMkvSession = null

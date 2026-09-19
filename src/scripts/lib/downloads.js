@@ -10,12 +10,24 @@ import {
   getMaxConnectionsSync,
   getActivePlaylistIdSync,
 } from "@/scripts/lib/account-info.js"
-import { safeHttpUrl } from "@/scripts/lib/creds.js"
+import { safeHttpUrl, getActiveDnsOverrideAsync } from "@/scripts/lib/creds.js"
 import * as AFs from "@/scripts/lib/android-fs.js"
 import { notify } from "@/scripts/lib/notify"
 import { t } from "@/scripts/lib/i18n.js"
 import { sanitizeFilename } from "@/scripts/lib/format.ts"
 import { buildNfo } from "@/scripts/lib/nfo.ts"
+import {
+  nativeDownloadBridge,
+  isNativeDownloadActive as bridgeIsNativeDownloadActive,
+  buildNativeHeaders,
+  nativeStart,
+  nativePause,
+  nativeResume,
+  nativeRemove,
+  nativeSetMaxConcurrent,
+  nativeSnapshot,
+  nativeClearAll,
+} from "@/scripts/lib/android-download-bridge.js"
 
 export { sanitizeFilename }
 
@@ -68,9 +80,15 @@ function writeState(list) {
 }
 
 function uuid() {
-  return typeof crypto !== "undefined" && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID()
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    const bytes = crypto.getRandomValues(new Uint8Array(16))
+    bytes[6] = (bytes[6] & 0x0f) | 0x40
+    bytes[8] = (bytes[8] & 0x3f) | 0x80
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  }
+  return `${Date.now()}-no-crypto`
 }
 
 export function listDownloads() {
@@ -79,6 +97,16 @@ export function listDownloads() {
 
 export function isDownloadable() {
   return isTauri
+}
+
+/** True on Android when the native foreground-service download bridge is present. */
+export function isNativeDownloadActive() {
+  return bridgeIsNativeDownloadActive()
+}
+
+/** Wipes every native download record. No-op when the bridge is absent. */
+export function clearNativeDownloads() {
+  nativeClearAll()
 }
 
 async function findCompletedDownloadPath(remoteUrl) {
@@ -374,6 +402,85 @@ function getItem(id) {
   return readState().find((item) => item.id === id) || null
 }
 
+// item.path is either a raw "content://..." string or a JSON-stringified
+// { uri } object (see android-fs.js serializeUri/deserializeUri); native
+// only understands the plain content:// string.
+function nativeUriString(path) {
+  const deserialized = AFs.deserializeUri(path)
+  if (!deserialized) return typeof path === "string" ? path : ""
+  return typeof deserialized === "string" ? deserialized : deserialized.uri || ""
+}
+
+async function buildNativeStartPayload(item) {
+  const { url, headers } = buildNativeHeaders(item.url)
+  const dnsOverride = await getActiveDnsOverrideAsync()
+  return {
+    id: item.id,
+    url,
+    uri: nativeUriString(item.path),
+    title: item.title || "",
+    headers,
+    dns: dnsOverride?.raw || "",
+    mediaStore: !!item.mediaStore,
+    maxConcurrent: maxConcurrent(),
+  }
+}
+
+async function startNativeDownload(item) {
+  try {
+    const payload = await buildNativeStartPayload(item)
+    if (!nativeStart(payload)) {
+      updateItem(item.id, {
+        status: "error",
+        error: "Couldn't start the download service.",
+      })
+    }
+  } catch (e) {
+    log.error("[xt:download] native start failed:", e)
+    updateItem(item.id, {
+      status: "error",
+      error: "Couldn't start the download service.",
+    })
+  }
+}
+
+// Registered at module load (downloads.js is imported by Sidebar on every
+// page, so it stays live across navigations). Native dispatches this on
+// every status change and throttles "downloading" progress to 500ms/id.
+if (typeof document !== "undefined") {
+  document.addEventListener("xt:android-download", async (event) => {
+    const record = event?.detail
+    if (!record?.id) return
+    const item = getItem(record.id)
+    if (!item) return
+
+    const patch = {}
+    if (record.status !== undefined && record.status !== item.status) {
+      patch.status = record.status
+    }
+    if (record.bytesDone !== undefined && record.bytesDone !== item.bytesDone) {
+      patch.bytesDone = record.bytesDone
+    }
+    if (record.bytesTotal !== undefined && record.bytesTotal !== item.bytesTotal) {
+      patch.bytesTotal = record.bytesTotal
+    }
+    const nextError = record.error || ""
+    if (nextError !== (item.error || "")) patch.error = nextError
+    if (
+      record.userPaused !== undefined &&
+      !!record.userPaused !== !!item.userPaused
+    ) {
+      patch.userPaused = !!record.userPaused
+    }
+
+    if (Object.keys(patch).length > 0) updateItem(record.id, patch)
+
+    if (record.status === "done" && item.status !== "done") {
+      await AFs.publishFile(item.path)
+    }
+  })
+}
+
 // A paused/errored Android download deletes its partial (no range-resume),
 // leaving item.path a dead SAF URI that throws on open. Recreate the
 // destination when the file is gone; returns the existing path otherwise.
@@ -387,7 +494,7 @@ async function ensureAndroidDestFile(id, item) {
   const fresh = parentDir
     ? await AFs.createFileInPickedDir(parentDir, filename, resolvedExt)
     : await AFs.createPublicDownloadFile(filename, resolvedExt)
-  updateItem(id, { path: fresh })
+  updateItem(id, { path: fresh, mediaStore: !parentDir })
   return fresh
 }
 
@@ -692,6 +799,7 @@ export async function startDownload({ url, title, ext, source, nfo }) {
   const filename = sanitizeFilename(title || "download") + "." + resolvedExt
 
   let fullPath
+  let androidMediaStore = false
   if (AFs.isAndroidFsActive()) {
     const parentDir = AFs.deserializeUri(getDownloadDir())
     try {
@@ -699,6 +807,7 @@ export async function startDownload({ url, title, ext, source, nfo }) {
         fullPath = await AFs.createFileInPickedDir(parentDir, filename, resolvedExt)
       } else {
         fullPath = await AFs.createPublicDownloadFile(filename, resolvedExt)
+        androidMediaStore = true
       }
     } catch (e) {
       log.error("[xt:download] android create file failed:", e)
@@ -723,16 +832,20 @@ export async function startDownload({ url, title, ext, source, nfo }) {
   }
 
   const id = uuid()
-  const willRun = activeAborts.size < maxConcurrent()
+  // Native owns the queue on Android: never track these ids in
+  // activeAborts/queuedIds, and push queued regardless of concurrency.
+  const useNativeService = !!nativeDownloadBridge()
+  const willRun = !useNativeService && activeAborts.size < maxConcurrent()
   const item = {
     id,
     url,
     title: title || filename,
     path: fullPath,
     ext: resolvedExt,
+    mediaStore: androidMediaStore,
     bytesDone: 0,
     bytesTotal: 0,
-    status: willRun ? "downloading" : "queued",
+    status: useNativeService ? "queued" : willRun ? "downloading" : "queued",
     startedAt: Date.now(),
     error: "",
     source: source || null,
@@ -742,18 +855,40 @@ export async function startDownload({ url, title, ext, source, nfo }) {
   list.unshift(item)
   writeState(list)
 
-  if (willRun) runDownload(id)
+  if (useNativeService) await startNativeDownload(item)
+  else if (willRun) runDownload(id)
   else queuedIds.push(id)
   return id
 }
 
-export function resumeDownload(id) {
+export async function resumeDownload(id) {
   if (!isTauri) return
   if (activeAborts.has(id)) return
   if (queuedIds.includes(id)) return
   const item = getItem(id)
   if (!item) return
   if (item.status === "done") return
+
+  if (nativeDownloadBridge()) {
+    try {
+      const originalPath = item.path
+      const targetPath = await ensureAndroidDestFile(id, item)
+      if (targetPath !== originalPath) {
+        await startNativeDownload(getItem(id) || { ...item, path: targetPath })
+      } else {
+        nativeResume(id)
+      }
+      updateItem(id, { status: "queued", userPaused: false, error: "" })
+    } catch (e) {
+      log.error("[xt:download] native resume failed:", e)
+      updateItem(id, {
+        status: "error",
+        error: "Couldn't recreate the download file. Check the download folder in Settings.",
+      })
+    }
+    return
+  }
+
   updateItem(id, { userPaused: false })
   if (activeAborts.size < maxConcurrent()) {
     runDownload(id)
@@ -775,6 +910,12 @@ export function pauseDownload(id) {
   if (qIdx >= 0) {
     queuedIds.splice(qIdx, 1)
     updateItem(id, { status: "paused", error: "", userPaused: true })
+    return
+  }
+
+  if (nativeDownloadBridge()) {
+    nativePause(id)
+    updateItem(id, { status: "paused", userPaused: true })
   }
 }
 
@@ -787,6 +928,7 @@ export async function removeDownload(id) {
   if (ac) ac.abort("paused")
   const qIdx = queuedIds.indexOf(id)
   if (qIdx >= 0) queuedIds.splice(qIdx, 1)
+  if (nativeDownloadBridge()) nativeRemove(id)
 
   const item = getItem(id)
 
@@ -1214,6 +1356,44 @@ export function getRowThroughputEwma(id) {
   return speedTrackers.get(id)?.ewma || 0
 }
 
+// Native is the source of truth for transfer state on Android: adopt every
+// record's status/bytes from snapshot(), and resume (which recreates a dead
+// SAF file + resends the full payload) anything native has never heard of -
+// this is how items started before native download support get migrated.
+async function reconcileNativeDownloads() {
+  nativeSetMaxConcurrent(maxConcurrent())
+  const records = nativeSnapshot()
+  const byId = new Map(records.map((record) => [record.id, record]))
+  const toMigrate = []
+
+  for (const item of readState()) {
+    const record = byId.get(item.id)
+    if (record) {
+      const becameDone = record.status === "done" && item.status !== "done"
+      updateItem(item.id, {
+        status: record.status,
+        bytesDone: record.bytesDone,
+        bytesTotal: record.bytesTotal,
+        error: record.error || "",
+        userPaused: !!record.userPaused,
+      })
+      if (becameDone) {
+        await AFs.publishFile(item.path)
+      }
+    } else if (
+      item.status === "downloading" ||
+      item.status === "queued" ||
+      (item.status === "paused" && !item.userPaused)
+    ) {
+      toMigrate.push(item.id)
+    }
+  }
+
+  for (const id of toMigrate) {
+    await resumeDownload(id)
+  }
+}
+
 ;(() => {
   const list = readState()
 
@@ -1227,6 +1407,13 @@ export function getRowThroughputEwma(id) {
       }
     }
     if (dirty) writeState(list)
+  }
+
+  if (nativeDownloadBridge()) {
+    reconcileNativeDownloads().catch((e) =>
+      log.error("[xt:download] native reconcile failed:", e)
+    )
+    return
   }
 
   const toResume = []

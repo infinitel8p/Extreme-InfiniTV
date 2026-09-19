@@ -3,7 +3,11 @@
 // catalog.js drags in the whole fetch stack (xtream-api, provider-fetch, m3u-parser,
 // tmdb-backfill) which would then be statically bound into every page that reads one.
 import { getCached } from "@/scripts/lib/cache.js"
-import { getChannelOverrides, ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js"
+import {
+  getChannelOverrides,
+  getChannelOverridesRevision,
+  ensureLoaded as ensurePrefsLoaded,
+} from "@/scripts/lib/preferences.js"
 import { applyChannelOverrides } from "@/scripts/lib/channel-overrides.ts"
 import { log } from "@/scripts/lib/log.js"
 
@@ -11,6 +15,17 @@ export interface LiveReadOptions {
   /** Keep hidden channels in the result (the management UI needs them). */
   includeHidden?: boolean
 }
+
+interface OverlayMemoEntry {
+  revision: number
+  playlistId: string
+  isM3U: boolean
+  includeHidden: boolean
+  result: any[]
+}
+
+// Same source array + revision returns the same result array, so identity memos downstream hold.
+const overlayMemo = new WeakMap<any[], OverlayMemoEntry>()
 
 /**
  * Overlays the user's per-channel edits onto a provider catalog. The cache keeps
@@ -25,11 +40,26 @@ export function applyLiveOverrides(
   options: LiveReadOptions = {}
 ): any[] {
   if (!playlistId) return channels
+  if (!Array.isArray(channels)) return channels
+  const includeHidden = !!options.includeHidden
+  const revision = getChannelOverridesRevision()
+  const memoized = overlayMemo.get(channels)
+  if (
+    memoized &&
+    memoized.revision === revision &&
+    memoized.playlistId === playlistId &&
+    memoized.isM3U === isM3U &&
+    memoized.includeHidden === includeHidden
+  ) {
+    return memoized.result
+  }
   try {
-    return applyChannelOverrides(channels, getChannelOverrides(playlistId), {
+    const result = applyChannelOverrides(channels, getChannelOverrides(playlistId), {
       isM3U,
-      includeHidden: !!options.includeHidden,
+      includeHidden,
     })
+    overlayMemo.set(channels, { revision, playlistId, isM3U, includeHidden, result })
+    return result
   } catch (overrideError) {
     log.warn("[xt:catalog] channel overrides skipped:", overrideError)
     return channels

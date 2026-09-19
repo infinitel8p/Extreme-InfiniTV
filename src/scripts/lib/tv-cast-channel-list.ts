@@ -23,6 +23,10 @@ export interface CastChannel {
   chno?: number | null
   /** Pre-normalized name from the catalog; recomputed when absent. */
   norm?: string
+  /** Non-playable title/separator row from a custom playlist. */
+  isHeader?: boolean
+  /** Custom-playlist reference whose source channel could no longer be found. */
+  unresolved?: true
 }
 
 export interface CastChannelGroup {
@@ -115,6 +119,7 @@ export function searchCastChannels(channels: CastChannel[], query: string): Cast
   const scored: Array<{ channel: CastChannel; score: number }> = []
 
   for (const channel of channels) {
+    if (channel.isHeader) continue
     let score = scoreNormMatch(channel.norm || normalize(channel.name), tokens)
     if (numericQuery) {
       const idText = String(channel.id)

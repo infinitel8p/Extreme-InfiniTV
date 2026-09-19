@@ -12,7 +12,7 @@
 //   "OTHER:..."       - anything else
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,7 +41,11 @@ const IPC_WRITE_TIMEOUT_MS: u64 = 1500;
 #[cfg(windows)]
 const IPC_REPLY_TIMEOUT_MS: u64 = 500;
 const EXTERNAL_PLAYER_EXITED_EVENT: &str = "xt:external-player-exited";
+const EXTERNAL_PLAYER_STATE_EVENT: &str = "xt:external-player-state";
 const EXIT_WATCH_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const MPV_OBSERVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const MPV_OBSERVER_CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+const MPV_STATE_EMIT_INTERVAL: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // Reuse-slot state
@@ -52,6 +56,8 @@ struct Slot {
     /// For MPV: socket path (Unix) or pipe name (Windows, e.g. `\\.\pipe\xt-mpv-N`).
     /// For VLC: `host:port` literal string.
     endpoint: String,
+    /// mpv only; `None` for VLC.
+    session_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -65,6 +71,8 @@ pub struct ExternalPlayerState {
     /// Bumping a kind's generation supersedes its older exit-watchers.
     watch_generations: Mutex<HashMap<String, u64>>,
     watched_pids: Mutex<HashMap<String, u32>>,
+    /// Session ids with a live state-observer thread (guards a reused mpv process).
+    observing_sessions: Mutex<HashSet<String>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -73,6 +81,12 @@ pub struct ReuseConfig {
     pub enabled: bool,
     #[serde(default)]
     pub url: String,
+    #[serde(default)]
+    pub alang: Option<String>,
+    #[serde(default)]
+    pub slang: Option<String>,
+    #[serde(default, rename = "subOff")]
+    pub sub_off: bool,
 }
 
 impl ExternalPlayerState {
@@ -153,6 +167,23 @@ impl ExternalPlayerState {
             guard.remove(kind);
         }
     }
+
+    /// False when a state-observer thread is already running for `session_id`.
+    fn start_observing(&self, session_id: &str) -> bool {
+        let mut guard = self
+            .observing_sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.insert(session_id.to_string())
+    }
+
+    fn stop_observing(&self, session_id: &str) {
+        let mut guard = self
+            .observing_sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.remove(session_id);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +250,7 @@ pub fn sandbox_bootstrap_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlug
 // ---------------------------------------------------------------------------
 // Spawn helpers (unchanged surface)
 // ---------------------------------------------------------------------------
-fn classify_io_error(err: &std::io::Error) -> String {
+pub(crate) fn classify_io_error(err: &std::io::Error) -> String {
     match err.kind() {
         std::io::ErrorKind::NotFound => format!("NOT_FOUND:{err}"),
         std::io::ErrorKind::PermissionDenied => format!("PERMISSION:{err}"),
@@ -420,6 +451,11 @@ fn spawn_detect(path: String, mut args: Vec<String>) -> Result<String, String> {
 // Endpoint generation
 // ---------------------------------------------------------------------------
 static ENDPOINT_COUNTER: AtomicU64 = AtomicU64::new(0);
+static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_mpv_session_id() -> String {
+    format!("mpv-{}", SESSION_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 
 fn unique_suffix() -> String {
     let nanos = std::time::SystemTime::now()
@@ -489,7 +525,7 @@ pub fn sweep_orphan_mpv_sockets() {}
 // ---------------------------------------------------------------------------
 // Argv augmentation when reuse is freshly spawned
 // ---------------------------------------------------------------------------
-fn augment_mpv_args(mut args: Vec<String>, endpoint: &str) -> Vec<String> {
+fn augment_mpv_args(mut args: Vec<String>, endpoint: &str, idle: bool) -> Vec<String> {
     args.retain(|arg| {
         !(arg.starts_with("--input-ipc-server=")
             || arg.starts_with("--input-ipc-server-path=")
@@ -498,7 +534,9 @@ fn augment_mpv_args(mut args: Vec<String>, endpoint: &str) -> Vec<String> {
     });
     let src = args.pop();
     args.push(format!("--input-ipc-server={endpoint}"));
-    args.push("--idle=yes".to_string());
+    if idle {
+        args.push("--idle=yes".to_string());
+    }
     args.push("--force-window=immediate".to_string());
     if let Some(src) = src {
         args.push(src);
@@ -675,13 +713,31 @@ fn first_mpv_error(buf: &[u8]) -> Option<String> {
 }
 
 // mpv 0.38 moved loadfile options behind a new index arg
-fn build_mpv_loadfile(url: &str, ua: Option<&str>, referer: Option<&str>, use_index_form: bool) -> Vec<u8> {
+#[allow(clippy::too_many_arguments)]
+fn build_mpv_loadfile(
+    url: &str,
+    ua: Option<&str>,
+    referer: Option<&str>,
+    alang: Option<&str>,
+    slang: Option<&str>,
+    sub_off: bool,
+    use_index_form: bool,
+) -> Vec<u8> {
     let mut opts: Vec<String> = Vec::new();
     if let Some(ua) = ua.filter(|s| !s.is_empty()) {
         opts.push(format!("user-agent=%{}%{}", ua.len(), ua));
     }
     if let Some(referer) = referer.filter(|s| !s.is_empty()) {
         opts.push(format!("referrer=%{}%{}", referer.len(), referer));
+    }
+    if let Some(alang) = alang.filter(|s| !s.is_empty()) {
+        opts.push(format!("alang=%{}%{}", alang.len(), alang));
+    }
+    if let Some(slang) = slang.filter(|s| !s.is_empty()) {
+        opts.push(format!("slang=%{}%{}", slang.len(), slang));
+    }
+    if sub_off {
+        opts.push("sid=no".to_string());
     }
     let cmd = if opts.is_empty() {
         json!({ "command": ["loadfile", url, "replace"] })
@@ -763,14 +819,22 @@ fn send_mpv_stop(endpoint: &str) -> Result<(), String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_mpv_loadfile(
     endpoint: &str,
     url: &str,
     ua: Option<&str>,
     referer: Option<&str>,
+    alang: Option<&str>,
+    slang: Option<&str>,
+    sub_off: bool,
 ) -> Result<(), String> {
-    let has_options = ua.filter(|s| !s.is_empty()).is_some() || referer.filter(|s| !s.is_empty()).is_some();
-    let new_form_payload = build_mpv_loadfile(url, ua, referer, true);
+    let has_options = ua.filter(|s| !s.is_empty()).is_some()
+        || referer.filter(|s| !s.is_empty()).is_some()
+        || alang.filter(|s| !s.is_empty()).is_some()
+        || slang.filter(|s| !s.is_empty()).is_some()
+        || sub_off;
+    let new_form_payload = build_mpv_loadfile(url, ua, referer, alang, slang, sub_off, true);
     let unpause = build_mpv_unpause();
 
     #[cfg(unix)]
@@ -779,7 +843,7 @@ fn send_mpv_loadfile(
         let reply = write_and_read_reply(&mut stream, &new_form_payload)?;
         if let Some(err) = first_mpv_error(&reply) {
             if has_options && err == "invalid parameter" {
-                let old_form_payload = build_mpv_loadfile(url, ua, referer, false);
+                let old_form_payload = build_mpv_loadfile(url, ua, referer, alang, slang, sub_off, false);
                 let retry_reply = write_and_read_reply(&mut stream, &old_form_payload)?;
                 if let Some(retry_err) = first_mpv_error(&retry_reply) {
                     return Err(format!("IPC:mpv replied {retry_err}"));
@@ -798,7 +862,7 @@ fn send_mpv_loadfile(
         let reply = write_and_read_reply(&mut pipe, &new_form_payload)?;
         if let Some(err) = first_mpv_error(&reply) {
             if has_options && err == "invalid parameter" {
-                let old_form_payload = build_mpv_loadfile(url, ua, referer, false);
+                let old_form_payload = build_mpv_loadfile(url, ua, referer, alang, slang, sub_off, false);
                 let retry_reply = write_and_read_reply(&mut pipe, &old_form_payload)?;
                 if let Some(retry_err) = first_mpv_error(&retry_reply) {
                     return Err(format!("IPC:mpv replied {retry_err}"));
@@ -810,6 +874,284 @@ fn send_mpv_loadfile(
         pipe.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
         Ok(())
     }
+}
+
+fn build_mpv_set_property(name: &str, value: &Value) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(&json!({ "command": ["set_property", name, value] }))
+        .unwrap_or_else(|_| Vec::new());
+    bytes.push(b'\n');
+    bytes
+}
+
+fn send_mpv_set_property(endpoint: &str, name: &str, value: &Value) -> Result<(), String> {
+    let payload = build_mpv_set_property(name, value);
+
+    #[cfg(unix)]
+    {
+        let mut stream = open_mpv_socket(endpoint).map_err(|e| format!("IPC:{e}"))?;
+        let reply = write_and_read_reply(&mut stream, &payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            return Err(format!("IPC:mpv replied {err}"));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        let mut pipe = open_mpv_pipe(endpoint).map_err(|e| format!("IPC:{e}"))?;
+        let reply = write_and_read_reply(&mut pipe, &payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            return Err(format!("IPC:mpv replied {err}"));
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Persistent mpv state observer: one long-lived IPC connection per process
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TrackInfo {
+    id: i64,
+    lang: Option<String>,
+    title: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ObservedState {
+    path: Option<String>,
+    position: Option<f64>,
+    duration: Option<f64>,
+    aid: Value,
+    sid: Value,
+    track_list: Value,
+    eof: bool,
+}
+
+fn mpv_observe_payloads() -> Vec<Vec<u8>> {
+    let properties: [(&str, i64); 7] = [
+        ("time-pos", 1),
+        ("duration", 2),
+        ("aid", 3),
+        ("sid", 4),
+        ("track-list", 5),
+        ("path", 6),
+        ("eof-reached", 7),
+    ];
+    properties
+        .iter()
+        .map(|(name, id)| {
+            let mut bytes = serde_json::to_vec(&json!({ "command": ["observe_property", id, name] }))
+                .unwrap_or_default();
+            bytes.push(b'\n');
+            bytes
+        })
+        .collect()
+}
+
+fn apply_property_change(state: &mut ObservedState, name: &str, data: &Value) {
+    match name {
+        "time-pos" => state.position = data.as_f64(),
+        "duration" => state.duration = data.as_f64(),
+        "aid" => state.aid = data.clone(),
+        "sid" => state.sid = data.clone(),
+        "track-list" => state.track_list = data.clone(),
+        "path" => state.path = data.as_str().map(str::to_string),
+        "eof-reached" => state.eof = data.as_bool().unwrap_or(false),
+        _ => {}
+    }
+}
+
+/// `false`/"no"/null all mean "no subtitle track selected".
+fn is_subtitle_off(sid: &Value) -> bool {
+    match sid {
+        Value::Bool(false) | Value::Null => true,
+        Value::String(value) => value == "no",
+        _ => false,
+    }
+}
+
+fn track_id_from_property(value: &Value) -> Option<i64> {
+    value.as_i64().or_else(|| value.as_f64().map(|number| number as i64))
+}
+
+/// Prefers a track flagged `selected`; falls back to matching `fallback_id` (the raw `aid`/`sid`).
+fn selected_track(track_list: &Value, kind: &str, fallback_id: Option<i64>) -> Option<TrackInfo> {
+    let entries = track_list.as_array()?;
+    let matches_kind = |entry: &&Value| entry.get("type").and_then(Value::as_str) == Some(kind);
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            matches_kind(entry) && entry.get("selected").and_then(Value::as_bool) == Some(true)
+        })
+        .or_else(|| {
+            let id = fallback_id?;
+            entries
+                .iter()
+                .find(|entry| matches_kind(entry) && entry.get("id").and_then(Value::as_i64) == Some(id))
+        })?;
+    Some(TrackInfo {
+        id: entry.get("id").and_then(Value::as_i64)?,
+        lang: entry.get("lang").and_then(Value::as_str).map(str::to_string),
+        title: entry.get("title").and_then(Value::as_str).map(str::to_string),
+    })
+}
+
+fn track_list_summary(track_list: &Value) -> Option<Vec<Value>> {
+    let entries = track_list.as_array()?;
+    Some(
+        entries
+            .iter()
+            .filter_map(|entry| {
+                let track_type = entry.get("type").and_then(Value::as_str)?;
+                if track_type != "audio" && track_type != "sub" {
+                    return None;
+                }
+                let id = entry.get("id").and_then(Value::as_i64)?;
+                Some(json!({
+                    "type": track_type,
+                    "id": id,
+                    "lang": entry.get("lang").and_then(Value::as_str),
+                    "title": entry.get("title").and_then(Value::as_str),
+                    "selected": entry.get("selected").and_then(Value::as_bool).unwrap_or(false),
+                }))
+            })
+            .collect(),
+    )
+}
+
+/// Immediate on any change but `time-pos`/`duration`, which throttle to the emit interval.
+fn should_emit(prev: &ObservedState, next: &ObservedState, last_emit_at: Option<Instant>, now: Instant) -> bool {
+    let significant_changed = prev.path != next.path
+        || prev.aid != next.aid
+        || prev.sid != next.sid
+        || prev.track_list != next.track_list
+        || prev.eof != next.eof;
+    if significant_changed {
+        return true;
+    }
+    match last_emit_at {
+        None => true,
+        Some(last) => now.duration_since(last) >= MPV_STATE_EMIT_INTERVAL,
+    }
+}
+
+// `tracks` rides every frame once a track-list has arrived, not only the one it changed on.
+fn build_state_payload(session_id: &str, state: &ObservedState, final_frame: bool) -> Value {
+    let audio = selected_track(&state.track_list, "audio", track_id_from_property(&state.aid));
+    let sub = selected_track(&state.track_list, "sub", track_id_from_property(&state.sid));
+    json!({
+        "sessionId": session_id,
+        "kind": "mpv",
+        "path": state.path,
+        "position": state.position,
+        "duration": state.duration,
+        "audio": audio.map(|track| json!({ "id": track.id, "lang": track.lang, "title": track.title })),
+        "sub": sub.map(|track| json!({ "id": track.id, "lang": track.lang, "title": track.title })),
+        "subOff": is_subtitle_off(&state.sid),
+        "tracks": track_list_summary(&state.track_list),
+        "eof": state.eof,
+        "final": final_frame,
+    })
+}
+
+fn run_mpv_observer_loop<S: Read + Write>(app: &AppHandle, stream: S, session_id: &str) {
+    let mut stream = stream;
+    for payload in mpv_observe_payloads() {
+        if stream.write_all(&payload).is_err() {
+            return;
+        }
+    }
+    let mut reader = std::io::BufReader::new(stream);
+    let mut line = String::new();
+    let mut state = ObservedState::default();
+    let mut last_emitted: Option<ObservedState> = None;
+    let mut last_emit_at: Option<Instant> = None;
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if parsed.get("event").and_then(Value::as_str) != Some("property-change") {
+            continue;
+        }
+        let Some(name) = parsed.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let data = parsed.get("data").cloned().unwrap_or(Value::Null);
+        apply_property_change(&mut state, name, &data);
+
+        let now = Instant::now();
+        let prev = last_emitted.clone().unwrap_or_default();
+        if should_emit(&prev, &state, last_emit_at, now) {
+            let payload = build_state_payload(session_id, &state, false);
+            let _ = app.emit(EXTERNAL_PLAYER_STATE_EVENT, payload);
+            last_emitted = Some(state.clone());
+            last_emit_at = Some(now);
+        }
+    }
+    let payload = build_state_payload(session_id, &state, true);
+    let _ = app.emit(EXTERNAL_PLAYER_STATE_EVENT, payload);
+}
+
+#[cfg(unix)]
+fn connect_mpv_observer_with_retry(endpoint: &str) -> std::io::Result<std::os::unix::net::UnixStream> {
+    use std::os::unix::net::UnixStream;
+    let deadline = Instant::now() + MPV_OBSERVER_CONNECT_TIMEOUT;
+    loop {
+        match UnixStream::connect(endpoint) {
+            Ok(stream) => return Ok(stream),
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    return Err(err);
+                }
+                std::thread::sleep(MPV_OBSERVER_CONNECT_RETRY_INTERVAL);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn connect_mpv_observer_with_retry(endpoint: &str) -> std::io::Result<std::fs::File> {
+    let deadline = Instant::now() + MPV_OBSERVER_CONNECT_TIMEOUT;
+    loop {
+        match open_mpv_pipe(endpoint) {
+            Ok(pipe) => return Ok(pipe),
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    return Err(err);
+                }
+                std::thread::sleep(MPV_OBSERVER_CONNECT_RETRY_INTERVAL);
+            }
+        }
+    }
+}
+
+/// Spawns at most one observer thread per session id (guarded by `ExternalPlayerState`).
+fn spawn_mpv_state_observer(app: AppHandle, endpoint: String, session_id: String) {
+    {
+        let state = app.state::<ExternalPlayerState>();
+        if !state.start_observing(&session_id) {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        if let Ok(stream) = connect_mpv_observer_with_retry(&endpoint) {
+            run_mpv_observer_loop(&app, stream, &session_id);
+        }
+        let state = app.state::<ExternalPlayerState>();
+        state.stop_observing(&session_id);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -974,7 +1316,7 @@ fn discover_vlc_candidates() -> Vec<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn discover_mpv_candidates() -> Vec<String> {
+pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     let mut candidates = windows_mpv_static_candidates();
     candidates.extend(build_path_candidates(&path_env_dirs(), &["mpv.exe", "mpv.com"]));
     let candidates = prefer_exe_over_com(dedupe_preserve_order(candidates));
@@ -998,7 +1340,7 @@ fn discover_vlc_candidates() -> Vec<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn discover_mpv_candidates() -> Vec<String> {
+pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     let mut candidates = vec![
         "/opt/homebrew/bin/mpv".to_string(),
         "/usr/local/bin/mpv".to_string(),
@@ -1032,7 +1374,7 @@ fn discover_vlc_candidates() -> Vec<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn discover_mpv_candidates() -> Vec<String> {
+pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     let mut candidates = linux_static_candidates("mpv");
     candidates.extend(build_path_candidates(&path_env_dirs(), &["mpv"]));
     filter_existing(dedupe_preserve_order(candidates))
@@ -1044,7 +1386,7 @@ fn discover_vlc_candidates() -> Vec<String> {
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn discover_mpv_candidates() -> Vec<String> {
+pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     Vec::new()
 }
 
@@ -1092,6 +1434,35 @@ pub async fn stop_external_player(
 #[tauri::command]
 pub fn sandbox_runtime() -> Option<String> {
     sandbox_runtime_kind()
+}
+
+const ALLOWED_MPV_SET_PROPERTIES: &[&str] = &["aid", "sid", "pause"];
+
+/// Live audio/subtitle-track (or pause) switching on the mpv session the frontend has open.
+#[tauri::command]
+pub async fn external_player_set_property(
+    state: State<'_, ExternalPlayerState>,
+    kind: String,
+    session_id: String,
+    name: String,
+    value: Value,
+) -> Result<(), String> {
+    if kind != "mpv" {
+        return Err("OTHER:set_property only supported for mpv".to_string());
+    }
+    if !ALLOWED_MPV_SET_PROPERTIES.contains(&name.as_str()) {
+        return Err(format!("OTHER:unsupported property '{name}'"));
+    }
+    let slot = state
+        .get(&kind)
+        .ok_or_else(|| "OTHER:no active mpv session".to_string())?;
+    if slot.session_id.as_deref() != Some(session_id.as_str()) {
+        return Err("OTHER:session id mismatch".to_string());
+    }
+    let endpoint = slot.endpoint.clone();
+    tauri::async_runtime::spawn_blocking(move || send_mpv_set_property(&endpoint, &name, &value))
+        .await
+        .map_err(|e| format!("OTHER:join: {e}"))?
 }
 
 #[tauri::command]
@@ -1163,10 +1534,14 @@ async fn launch_mode(
                     &reuse.url,
                     ua.as_deref(),
                     referer.as_deref(),
+                    reuse.alang.as_deref(),
+                    reuse.slang.as_deref(),
+                    reuse.sub_off,
                 ) {
                     Ok(()) => {
                         watch_for_exit(app.clone(), &state, &kind, slot.pid);
-                        return Ok(json!({ "pid": slot.pid, "reused": true }));
+                        // Already-running mpv keeps its observer thread from the first spawn.
+                        return Ok(json!({ "pid": slot.pid, "reused": true, "sessionId": slot.session_id }));
                     }
                     Err(err) => {
                         log::warn!("[external-player] mpv reuse send failed: {err}");
@@ -1182,18 +1557,27 @@ async fn launch_mode(
         }
 
         let endpoint = pick_mpv_endpoint();
-        let augmented = augment_mpv_args(args.clone(), &endpoint);
+        let augmented = augment_mpv_args(args.clone(), &endpoint, true);
         let path_for_spawn = path.clone();
         let (pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
             spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
-        state.set(&kind, Slot { pid, endpoint });
+        let session_id = next_mpv_session_id();
+        state.set(
+            &kind,
+            Slot {
+                pid,
+                endpoint: endpoint.clone(),
+                session_id: Some(session_id.clone()),
+            },
+        );
         if is_real_process {
             watch_for_exit(app.clone(), &state, &kind, pid);
+            spawn_mpv_state_observer(app.clone(), endpoint, session_id.clone());
         }
-        return Ok(json!({ "pid": pid, "reused": false }));
+        return Ok(json!({ "pid": pid, "reused": false, "sessionId": session_id }));
     }
 
     if reuse.enabled && kind == "vlc" && !reuse.url.is_empty() {
@@ -1223,7 +1607,7 @@ async fn launch_mode(
         // --one-instance: the fresh spawn just forwards to the existing instance and exits.
         if let Some(existing_pid) = prior_slot_pid {
             watch_for_exit(app.clone(), &state, &kind, existing_pid);
-            return Ok(json!({ "pid": existing_pid, "reused": true }));
+            return Ok(json!({ "pid": existing_pid, "reused": true, "sessionId": Value::Null }));
         }
 
         state.set(
@@ -1231,12 +1615,39 @@ async fn launch_mode(
             Slot {
                 pid: spawned_pid,
                 endpoint: String::new(),
+                session_id: None,
             },
         );
         if is_real_process {
             watch_for_exit(app.clone(), &state, &kind, spawned_pid);
         }
-        return Ok(json!({ "pid": spawned_pid, "reused": false }));
+        return Ok(json!({ "pid": spawned_pid, "reused": false, "sessionId": Value::Null }));
+    }
+
+    // Reuse off: mpv still gets an IPC endpoint for the observer, but no --idle=yes.
+    if kind == "mpv" {
+        let endpoint = pick_mpv_endpoint();
+        let augmented = augment_mpv_args(args.clone(), &endpoint, false);
+        let path_for_spawn = path.clone();
+        let (pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
+            spawn_launch_inner(&path_for_spawn, &augmented, true)
+        })
+        .await
+        .map_err(|e| format!("OTHER:join: {e}"))??;
+        let session_id = next_mpv_session_id();
+        state.set(
+            &kind,
+            Slot {
+                pid,
+                endpoint: endpoint.clone(),
+                session_id: Some(session_id.clone()),
+            },
+        );
+        if is_real_process {
+            watch_for_exit(app.clone(), &state, &kind, pid);
+            spawn_mpv_state_observer(app.clone(), endpoint, session_id.clone());
+        }
+        return Ok(json!({ "pid": pid, "reused": false, "sessionId": session_id }));
     }
 
     let (pid, is_real_process) =
@@ -1246,7 +1657,7 @@ async fn launch_mode(
     if is_real_process {
         watch_for_exit(app.clone(), &state, &kind, pid);
     }
-    Ok(json!({ "pid": pid, "reused": false }))
+    Ok(json!({ "pid": pid, "reused": false, "sessionId": Value::Null }))
 }
 
 fn check_path_exists(path: &str) -> Result<Value, String> {
@@ -1291,7 +1702,7 @@ mod tests {
             "--idle=no".to_string(),
             "https://example.com/stream.m3u8".to_string(),
         ];
-        let out = augment_mpv_args(args, "/new/path");
+        let out = augment_mpv_args(args, "/new/path", true);
         assert!(!out.iter().any(|arg| arg == "--idle=no"));
         assert!(!out
             .iter()
@@ -1299,6 +1710,14 @@ mod tests {
         assert!(out.contains(&"--input-ipc-server=/new/path".to_string()));
         assert!(out.contains(&"--idle=yes".to_string()));
         assert_eq!(out.last().unwrap(), "https://example.com/stream.m3u8");
+    }
+
+    #[test]
+    fn augment_mpv_omits_idle_when_not_requested() {
+        let args = vec!["https://example.com/stream.m3u8".to_string()];
+        let out = augment_mpv_args(args, "/new/path", false);
+        assert!(!out.iter().any(|arg| arg.starts_with("--idle")));
+        assert!(out.contains(&"--input-ipc-server=/new/path".to_string()));
     }
 
     #[test]
@@ -1337,6 +1756,9 @@ mod tests {
             "https://e.test/x.m3u8",
             Some("AgentX"),
             Some("https://r.test/"),
+            None,
+            None,
+            false,
             true,
         );
         let s = String::from_utf8(bytes).unwrap();
@@ -1351,7 +1773,7 @@ mod tests {
     fn build_mpv_loadfile_preserves_comma_in_user_agent() {
         let ua = "Mozilla/5.0 (X11; Linux x86_64), Gecko/2010";
         let referer = "https://r.test/, with comma";
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some(ua), Some(referer), false);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some(ua), Some(referer), None, None, false, false);
         let line = String::from_utf8(bytes).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
@@ -1372,7 +1794,7 @@ mod tests {
 
     #[test]
     fn build_mpv_loadfile_uses_index_form_when_requested() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, true);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, None, None, false, true);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();
@@ -1383,12 +1805,40 @@ mod tests {
 
     #[test]
     fn build_mpv_loadfile_uses_legacy_form_when_not_requested() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, false);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, None, None, false, false);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();
         assert_eq!(cmd.len(), 4);
         assert!(cmd[3].as_str().unwrap().contains("user-agent="));
+    }
+
+    #[test]
+    fn build_mpv_loadfile_includes_alang_slang_and_sub_off() {
+        let bytes = build_mpv_loadfile(
+            "https://e.test/x.m3u8",
+            None,
+            None,
+            Some("eng"),
+            Some("ger"),
+            true,
+            false,
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
+        let opts = parsed["command"][3].as_str().unwrap();
+        assert!(opts.contains(&format!("alang=%{}%eng", "eng".len())));
+        assert!(opts.contains(&format!("slang=%{}%ger", "ger".len())));
+        assert!(opts.contains("sid=no"));
+    }
+
+    #[test]
+    fn build_mpv_loadfile_omits_alang_slang_sub_off_when_unset() {
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, None, None, false, false);
+        let parsed: serde_json::Value =
+            serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
+        let cmd = parsed["command"].as_array().unwrap();
+        assert_eq!(cmd.len(), 3, "no options set means the plain 3-arg loadfile form");
     }
 
     #[test]
@@ -1450,7 +1900,7 @@ mod tests {
 
     #[test]
     fn build_mpv_loadfile_uses_three_arg_form_when_no_options() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, true);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, None, None, false, true);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();
@@ -1522,6 +1972,7 @@ mod tests {
             Slot {
                 pid: 1234,
                 endpoint: "/tmp/x.sock".to_string(),
+                session_id: Some("mpv-0".to_string()),
             },
         );
         let dropped = state.drop_slot("mpv").expect("slot must exist");
@@ -1699,5 +2150,144 @@ mod tests {
         for path in discovered.mpv.iter().chain(discovered.vlc.iter()) {
             assert!(Path::new(path).exists(), "returned path must exist: {path}");
         }
+    }
+
+    #[test]
+    fn apply_property_change_updates_known_fields() {
+        let mut state = ObservedState::default();
+        apply_property_change(&mut state, "time-pos", &json!(12.5));
+        apply_property_change(&mut state, "duration", &json!(3600.0));
+        apply_property_change(&mut state, "path", &json!("https://e.test/x.m3u8"));
+        apply_property_change(&mut state, "eof-reached", &json!(true));
+        apply_property_change(&mut state, "unknown-prop", &json!("ignored"));
+        assert_eq!(state.position, Some(12.5));
+        assert_eq!(state.duration, Some(3600.0));
+        assert_eq!(state.path.as_deref(), Some("https://e.test/x.m3u8"));
+        assert!(state.eof);
+    }
+
+    #[test]
+    fn is_subtitle_off_true_for_false_no_and_null() {
+        assert!(is_subtitle_off(&json!(false)));
+        assert!(is_subtitle_off(&json!("no")));
+        assert!(is_subtitle_off(&Value::Null));
+        assert!(!is_subtitle_off(&json!(2)));
+    }
+
+    #[test]
+    fn selected_track_prefers_selected_flag_over_fallback_id() {
+        let tracks = json!([
+            { "id": 1, "type": "audio", "selected": false, "lang": "eng" },
+            { "id": 2, "type": "audio", "selected": true, "lang": "ger", "title": "Deutsch" },
+        ]);
+        let track = selected_track(&tracks, "audio", Some(1)).expect("must find selected track");
+        assert_eq!(track.id, 2);
+        assert_eq!(track.lang.as_deref(), Some("ger"));
+        assert_eq!(track.title.as_deref(), Some("Deutsch"));
+    }
+
+    #[test]
+    fn selected_track_falls_back_to_id_when_none_flagged_selected() {
+        let tracks = json!([
+            { "id": 3, "type": "sub", "selected": false, "lang": "eng" },
+            { "id": 4, "type": "sub", "selected": false, "lang": "fre" },
+        ]);
+        let track = selected_track(&tracks, "sub", Some(4)).expect("must fall back to id match");
+        assert_eq!(track.id, 4);
+        assert_eq!(track.lang.as_deref(), Some("fre"));
+    }
+
+    #[test]
+    fn selected_track_returns_none_without_a_match() {
+        let tracks = json!([{ "id": 1, "type": "audio", "selected": false }]);
+        assert!(selected_track(&tracks, "sub", None).is_none());
+        assert!(selected_track(&Value::Null, "audio", Some(1)).is_none());
+    }
+
+    #[test]
+    fn track_list_summary_keeps_only_audio_and_sub_entries() {
+        let tracks = json!([
+            { "id": 1, "type": "audio", "selected": true, "lang": "eng" },
+            { "id": 2, "type": "video", "selected": true },
+            { "id": 3, "type": "sub", "selected": false, "lang": "ger" },
+        ]);
+        let summary = track_list_summary(&tracks).expect("array input must summarize");
+        assert_eq!(summary.len(), 2);
+        assert_eq!(summary[0]["type"], "audio");
+        assert_eq!(summary[1]["type"], "sub");
+    }
+
+    #[test]
+    fn should_emit_is_immediate_on_path_change() {
+        let prev = ObservedState::default();
+        let mut next = ObservedState::default();
+        next.path = Some("https://e.test/a.m3u8".to_string());
+        let now = Instant::now();
+        assert!(should_emit(&prev, &next, Some(now), now));
+    }
+
+    #[test]
+    fn should_emit_is_immediate_on_track_list_change() {
+        let prev = ObservedState::default();
+        let mut next = ObservedState::default();
+        next.track_list = json!([{ "id": 1, "type": "audio" }]);
+        let now = Instant::now();
+        assert!(should_emit(&prev, &next, Some(now), now));
+    }
+
+    #[test]
+    fn should_emit_throttles_pure_time_pos_movement() {
+        let mut prev = ObservedState::default();
+        prev.position = Some(1.0);
+        let mut next = prev.clone();
+        next.position = Some(2.0);
+        let last_emit_at = Instant::now();
+        assert!(!should_emit(&prev, &next, Some(last_emit_at), last_emit_at));
+        let later = last_emit_at + Duration::from_secs(6);
+        assert!(should_emit(&prev, &next, Some(last_emit_at), later));
+    }
+
+    #[test]
+    fn should_emit_always_emits_the_first_frame() {
+        let state = ObservedState::default();
+        let now = Instant::now();
+        assert!(should_emit(&state, &state, None, now));
+    }
+
+    #[test]
+    fn build_state_payload_final_frame_carries_last_known_state() {
+        let mut state = ObservedState::default();
+        state.position = Some(42.0);
+        state.eof = true;
+        let payload = build_state_payload("mpv-7", &state, true);
+        assert_eq!(payload["sessionId"], "mpv-7");
+        assert_eq!(payload["final"], true);
+        assert_eq!(payload["eof"], true);
+        assert_eq!(payload["position"], 42.0);
+    }
+
+    #[test]
+    fn build_state_payload_tracks_null_until_first_track_list_then_always_present() {
+        let state_without_tracks = ObservedState::default();
+        let payload = build_state_payload("mpv-1", &state_without_tracks, false);
+        assert!(payload["tracks"].is_null());
+
+        let mut state_with_tracks = ObservedState::default();
+        state_with_tracks.track_list = json!([{ "id": 1, "type": "audio", "selected": true }]);
+        // Every frame after track-list arrives carries `tracks`, not only the one it changed on -
+        // the frontend may attach its session after the changed frame and miss it otherwise.
+        let unchanged_frame = build_state_payload("mpv-1", &state_with_tracks, false);
+        assert!(unchanged_frame["tracks"].is_array());
+        let final_frame = build_state_payload("mpv-1", &state_with_tracks, true);
+        assert!(final_frame["tracks"].is_array());
+    }
+
+    #[test]
+    fn start_observing_is_false_for_an_already_observed_session() {
+        let state = ExternalPlayerState::default();
+        assert!(state.start_observing("mpv-1"));
+        assert!(!state.start_observing("mpv-1"));
+        state.stop_observing("mpv-1");
+        assert!(state.start_observing("mpv-1"));
     }
 }
