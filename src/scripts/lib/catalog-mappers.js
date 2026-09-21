@@ -51,7 +51,7 @@ export function mapXtreamLiveRows(rawRows, categoryMap) {
         logo: ch.stream_icon || null,
         tvgId: String(ch.epg_channel_id || "") || undefined,
         chno: Number(ch.num) || undefined,
-        norm: normalize(name + " " + category),
+        norm: normalize(name),
         tvArchive: Number(ch.tv_archive) || 0,
         tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
       }

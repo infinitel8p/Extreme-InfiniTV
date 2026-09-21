@@ -861,7 +861,7 @@ function applySourceFilter(): void {
     } else if (category && channel.category !== category) {
       return false
     }
-    const norm = channel.norm || normalize(`${channel.name || ""} ${channel.category || ""}`)
+    const norm = channel.norm || normalize(channel.name || "")
     return matchesNormQuery(norm, tokens)
   })
   const sortMode = sourceSortSelect?.value || "default"

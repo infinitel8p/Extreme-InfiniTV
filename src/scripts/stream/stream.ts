@@ -239,7 +239,7 @@ function parseM3U(text) {
       tvgId: entry.tvgId || undefined,
       chno: entry.chno ?? undefined,
       tvgShift: entry.tvgShift ?? null,
-      norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
+      norm: normalize(entry.name),
       url,
       userAgent: entry.userAgent,
       referer: entry.referer,

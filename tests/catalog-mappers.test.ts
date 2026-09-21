@@ -5,7 +5,7 @@ import {
   mapXtreamVodRows,
   mapXtreamSeriesRows,
 } from "../src/scripts/lib/catalog-mappers.js"
-import { normalize } from "../src/scripts/lib/text"
+import { normalize, parseSearchQuery, scoreNormMatch } from "../src/scripts/lib/text"
 
 describe("parseCategoriesToMap", () => {
   it("accepts a plain array", () => {
@@ -101,12 +101,28 @@ describe("mapXtreamLiveRows", () => {
     expect(rows[0].tvArchiveDuration).toBe(0)
   })
 
-  it("sets norm to normalize(name + ' ' + category)", () => {
+  it("sets norm to normalize(name), ignoring category", () => {
     const rows = mapXtreamLiveRows(
       [{ stream_id: 1, name: "CNN", category_name: "News" }],
       new Map()
     )
-    expect(rows[0].norm).toBe(normalize("CNN News"))
+    expect(rows[0].norm).toBe(normalize("CNN"))
+  })
+
+  it("does not let category or tvg-id leak a whole-word match into norm", () => {
+    const rows = mapXtreamLiveRows(
+      [
+        {
+          stream_id: 1,
+          name: "AUS| ORF 1 HD",
+          category_name: "AT",
+          epg_channel_id: "ORF1.at",
+        },
+      ],
+      new Map()
+    )
+    expect(scoreNormMatch(rows[0].norm, parseSearchQuery("AT|"))).toBe(0)
+    expect(scoreNormMatch(rows[0].norm, parseSearchQuery("ORF"))).toBeGreaterThan(0)
   })
 })
 

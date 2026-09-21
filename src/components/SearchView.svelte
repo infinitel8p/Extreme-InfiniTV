@@ -207,7 +207,7 @@
           logo: channel.logo || null,
           subtitle: `${fmtChannelIdentity(channel.chno, channel.id)} · ${channel.category || "Live"}`,
           href: buildHref("live", channel.id),
-          norm: channel.norm || normalize(`${channel.name || ""} ${channel.category || ""}`),
+          norm: channel.norm || normalize(channel.name || ""),
         })
       }
       for (const movie of vodData) {
