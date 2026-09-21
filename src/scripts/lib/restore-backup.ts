@@ -74,6 +74,48 @@ async function applyBackupText(text: string, options: RestoreBackupOptions) {
   await restoreBackupText(text, options)
 }
 
+/** Android SAF -> Tauri dialog -> web <input> pick, then import + toast. */
+export async function pickAndRestoreBackup(
+  options: RestoreBackupOptions,
+  setBusy: (busy: boolean) => void = () => {}
+): Promise<void> {
+  const { fileInput, logTag } = options
+  if (isTauri && isAndroid) {
+    try {
+      setBusy(true)
+      const { pickJsonFile } = await import("@/scripts/lib/android-fs.js")
+      const picked = await pickJsonFile()
+      if (picked) await applyBackupText(picked.text, options)
+      setBusy(false)
+      return
+    } catch (error) {
+      log.warn(`[${logTag}] android-fs picker failed, falling back:`, error)
+      setBusy(false)
+    }
+  } else if (isTauri) {
+    try {
+      setBusy(true)
+      const { open } = await import("@tauri-apps/plugin-dialog")
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      })
+      if (picked && typeof picked === "string") {
+        const { readTextFile } = await import("@tauri-apps/plugin-fs")
+        await applyBackupText(await readTextFile(picked), options)
+      }
+      setBusy(false)
+      return
+    } catch (error) {
+      log.warn(`[${logTag}] tauri open failed, falling back:`, error)
+      setBusy(false)
+    }
+  }
+  setBusy(true)
+  fileInput?.click()
+}
+
 /** Wire a "restore from backup" trigger to the platform-appropriate file picker
  * (Android SAF -> Tauri dialog -> web <input>), then parse + import the chosen
  * JSON and run the caller's follow-up. Native pickers fall back to the web
@@ -81,7 +123,7 @@ async function applyBackupText(text: string, options: RestoreBackupOptions) {
  * cleared if a web pick is abandoned (window regains focus with no file). */
 export function bindBackupRestore(trigger: HTMLElement | null, options: RestoreBackupOptions) {
   if (!trigger) return
-  const { fileInput, logTag, onBusyChange } = options
+  const { fileInput, onBusyChange } = options
   let busy = false
   const setBusy = (next: boolean) => {
     busy = next
@@ -90,40 +132,7 @@ export function bindBackupRestore(trigger: HTMLElement | null, options: RestoreB
 
   trigger.addEventListener("click", async () => {
     if (busy) return
-    if (isTauri && isAndroid) {
-      try {
-        setBusy(true)
-        const { pickJsonFile } = await import("@/scripts/lib/android-fs.js")
-        const picked = await pickJsonFile()
-        if (picked) await applyBackupText(picked.text, options)
-        setBusy(false)
-        return
-      } catch (error) {
-        log.warn(`[${logTag}] android-fs picker failed, falling back:`, error)
-        setBusy(false)
-      }
-    } else if (isTauri) {
-      try {
-        setBusy(true)
-        const { open } = await import("@tauri-apps/plugin-dialog")
-        const picked = await open({
-          multiple: false,
-          directory: false,
-          filters: [{ name: "JSON", extensions: ["json"] }],
-        })
-        if (picked && typeof picked === "string") {
-          const { readTextFile } = await import("@tauri-apps/plugin-fs")
-          await applyBackupText(await readTextFile(picked), options)
-        }
-        setBusy(false)
-        return
-      } catch (error) {
-        log.warn(`[${logTag}] tauri open failed, falling back:`, error)
-        setBusy(false)
-      }
-    }
-    setBusy(true)
-    fileInput?.click()
+    await pickAndRestoreBackup(options, setBusy)
   })
 
   fileInput?.addEventListener("change", async () => {

@@ -64,7 +64,8 @@ import { collectDiagnosticBundle } from "@/scripts/lib/diagnostic-bundle"
 import { clearAll as clearAllCache } from "@/scripts/lib/cache.js"
 import { clearNativeDownloads } from "@/scripts/lib/downloads.js"
 import { clearImageCache } from "@/scripts/lib/img-cache"
-import { saveBackupSnapshot } from "@/scripts/lib/backup-snapshot"
+import { saveBackupSnapshot, loadBackupSnapshot, hasBackupSnapshot } from "@/scripts/lib/backup-snapshot"
+import { pickAndRestoreBackup, restoreBackupText } from "@/scripts/lib/restore-backup"
 import { toastSuccess, toastError } from "@/scripts/lib/toast"
 import { log } from "@/scripts/lib/log"
 import {
@@ -82,6 +83,7 @@ import {
   ICON_TRASH,
   ICON_ALERT_TRIANGLE,
   ICON_PLAYLIST_ADD,
+  ICON_FOLDER_PLUS,
   ICON_PALETTE,
   ICON_TEXT_SIZE,
   ICON_LANGUAGE,
@@ -220,6 +222,8 @@ function shareLogsAvailable(): boolean {
 function languageGroupingAllowed(): boolean {
   return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
 }
+
+let snapshotAvailable = false
 
 const view: TvView = {
   mount(root: HTMLElement, _ctx: TvViewContext) {
@@ -447,6 +451,19 @@ const view: TvView = {
       })
 
       rows.push({
+        id: "import-backup",
+        icon: ICON_FOLDER_PLUS,
+        label: t("settings.backup.import"),
+        kind: "action",
+        onActivate: () =>
+          void pickAndRestoreBackup({
+            fileInput: null,
+            logTag: "tv:settings:restore",
+            onRestored,
+          }),
+      })
+
+      rows.push({
         id: "clear-cache",
         icon: ICON_TRASH,
         label: t("settings.storage.clear"),
@@ -462,7 +479,44 @@ const view: TvView = {
         onActivate: () => void resetEverything(),
       })
 
+      if (snapshotAvailable) {
+        rows.push({
+          id: "restore-last",
+          label: t("settings.danger.restoreLast"),
+          kind: "action",
+          onActivate: () => void restoreLastBackup(),
+        })
+      }
+
       list.setRows(rows)
+    }
+
+    async function onRestored(): Promise<void> {
+      if (state.destroyed) return
+      void renderRows()
+    }
+
+    async function restoreLastBackup(): Promise<void> {
+      const text = await loadBackupSnapshot()
+      if (state.destroyed) return
+      if (!text) {
+        toastError(t("settings.toast.backupRestoreFail"), {
+          description: t("settings.danger.restoreLastMissing"),
+        })
+        return
+      }
+      await restoreBackupText(text, {
+        logTag: "tv:settings:restore-last",
+        successDuration: 6000,
+        onRestored,
+      })
+    }
+
+    async function refreshSnapshotAvailability(): Promise<void> {
+      const available = await hasBackupSnapshot()
+      if (state.destroyed || available === snapshotAvailable) return
+      snapshotAvailable = available
+      void renderRows()
     }
 
     function languageValueLabel(): string {
@@ -953,6 +1007,7 @@ const view: TvView = {
       if (!confirmed) return
       try {
         await saveBackupSnapshot()
+        void refreshSnapshotAvailability()
       } catch (error) {
         log.warn("[tv:settings] reset backup snapshot failed:", error)
       }
@@ -1166,6 +1221,7 @@ const view: TvView = {
       if (state.destroyed || !list) return
       list.el.querySelector<HTMLElement>("[data-focus-key]")?.focus()
       void loadVersion()
+      void refreshSnapshotAvailability()
     }
 
     void boot()
