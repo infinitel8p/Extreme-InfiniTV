@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "Format saluran ini tidak didukung oleh pemutar bawaan. Membuka di pemutar native…",
   "stream.failure.parseFailed": "Pemutar bawaan tidak dapat membaca stream saluran ini. Biasanya tetap dapat diputar di pemutar eksternal (MPV/VLC).",
   "stream.failure.connectionLimit": "Penyedia Anda tidak mengizinkan streaming lain saat ini. Mungkin masih ada yang diputar di akun ini.",
+  "stream.failure.providerPage": "Penyedia mengirim halaman error, bukan stream. Ini biasanya berarti batas koneksi tercapai saat berpindah saluran. Tunggu sebentar lalu coba lagi.",
   "stream.failure.offlinePlaceholder": "Saluran ini sedang offline di penyedia.",
   "stream.native.lostTitle": "Streaming terputus",
   "stream.native.lostBody": "Pemutar native tidak dapat menyambung kembali ke {channel}.",

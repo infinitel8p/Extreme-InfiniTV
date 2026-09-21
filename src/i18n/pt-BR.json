@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "O formato deste canal não é compatível com o player integrado. Abrindo no player nativo…",
   "stream.failure.parseFailed": "O player integrado não conseguiu ler o stream deste canal. Normalmente ele ainda funciona em um player externo (MPV/VLC).",
   "stream.failure.connectionLimit": "Seu provedor não permite outro stream agora. Talvez algo ainda esteja sendo reproduzido nesta conta.",
+  "stream.failure.providerPage": "Seu provedor enviou uma página de erro em vez do stream. Isso geralmente significa que o limite de conexões foi atingido ao trocar de canal. Aguarde um momento e tente novamente.",
   "stream.failure.offlinePlaceholder": "Este canal está atualmente offline no provedor.",
   "stream.native.lostTitle": "Transmissão perdida",
   "stream.native.lostBody": "O player nativo não conseguiu se reconectar a {channel}.",

@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "This channel's format isn't supported by the built-in player. Opening in the native player…",
   "stream.failure.parseFailed": "The built-in player couldn't read this channel's stream. It usually still plays in an external player (MPV/VLC).",
   "stream.failure.connectionLimit": "Your provider won't allow another stream right now. Something else may still be playing on this account.",
+  "stream.failure.providerPage": "The provider sent an error page instead of the stream. This usually means the connection limit was hit while switching. Wait a moment and try again.",
   "stream.failure.offlinePlaceholder": "This channel is currently offline at the provider.",
   "stream.native.lostTitle": "Stream lost",
   "stream.native.lostBody": "The native player couldn't reconnect to {channel}.",

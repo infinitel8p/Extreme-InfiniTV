@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "Le format de cette chaîne n'est pas pris en charge par le lecteur intégré. Ouverture dans le lecteur natif…",
   "stream.failure.parseFailed": "Le lecteur intégré n'a pas pu lire le flux de cette chaîne. Il fonctionne généralement quand même dans un lecteur externe (MPV/VLC).",
   "stream.failure.connectionLimit": "Votre fournisseur n'autorise pas un autre flux pour le moment. Quelque chose d'autre est peut-être encore en lecture sur ce compte.",
+  "stream.failure.providerPage": "Votre fournisseur a envoyé une page d'erreur au lieu du flux. Cela signifie généralement que la limite de connexions a été atteinte lors du changement de chaîne. Attendez un instant et réessayez.",
   "stream.failure.offlinePlaceholder": "Cette chaîne est actuellement hors ligne chez le fournisseur.",
   "stream.native.lostTitle": "Flux perdu",
   "stream.native.lostBody": "Le lecteur natif n'a pas pu se reconnecter à {channel}.",

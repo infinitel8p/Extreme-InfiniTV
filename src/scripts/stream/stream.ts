@@ -14,7 +14,12 @@ import {
   xtreamCandidatesFor,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl, advanceMirror } from "@/scripts/lib/xtream-api.js"
-import { isProviderRejection, shouldRepinMirror, isTransientRejection } from "@/scripts/lib/stream-reject.ts"
+import {
+  isProviderRejection,
+  isProviderPageDetail,
+  shouldRepinMirror,
+  isTransientRejection,
+} from "@/scripts/lib/stream-reject.ts"
 import { normalize, parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
@@ -2763,17 +2768,18 @@ async function mountEmbeddedPlayer(backend, opts) {
       catchupRetryResetTimer = null
     }
     const err = vjs.error?.()
+    const errorDetail = vjs?.codecInfo?.()?.errorDetail ?? null
     log.error("[xt:livetv] player error", {
       code: err?.code,
       message: err?.message,
       streamId: ctx.streamId,
+      errorDetail,
     })
     getPlayerInsights().record("error", `${err?.code ?? "?"} ${err?.message ?? ""}`.trim())
     // Stops a timer armed by an earlier "playing" from firing against the mount we're replacing.
     clearDeadVideoWatchdog()
     clearDeadAudioWatchdog()
 
-    const errorDetail = vjs?.codecInfo?.()?.errorDetail ?? null
     const httpStatus = parseHttpStatusPrefix(errorDetail)
     const canTryMirrorHop =
       ctx.isLive &&
@@ -4065,15 +4071,17 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   const httpStatus = parseHttpStatusPrefix(mpvErrorDetail)
   const failure = isOfflinePlaceholder
     ? { kind: "offline-placeholder", codec: null }
-    : classifyStartFailure({
-        videoCodec: info.videoCodec,
-        audioCodec: info.audioCodec,
-        errorDetail:
-          info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
-        nameHint: hasHevcNameHint(ctx.name),
-        deviceHevc: deviceSupportsHevc(),
-        audioClockWedge: !!ctx.audioClockWedge,
-      })
+    : ctx.isLive && isProviderPageDetail(mpvErrorDetail)
+      ? { kind: "provider-page", codec: null }
+      : classifyStartFailure({
+          videoCodec: info.videoCodec,
+          audioCodec: info.audioCodec,
+          errorDetail:
+            info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
+          nameHint: hasHevcNameHint(ctx.name),
+          deviceHevc: deviceSupportsHevc(),
+          audioClockWedge: !!ctx.audioClockWedge,
+        })
   log.log("[xt:livetv] start failure classified:", failure.kind, {
     videoCodec: info.videoCodec,
     errorDetail: info.errorDetail,
@@ -4081,6 +4089,8 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   let reason
   if (failure.kind === "offline-placeholder") {
     reason = t("stream.failure.offlinePlaceholder")
+  } else if (failure.kind === "provider-page") {
+    reason = t("stream.failure.providerPage")
   } else if (httpStatus === 401) {
     reason = t("player.error.http401")
   } else if (httpStatus === 403) {

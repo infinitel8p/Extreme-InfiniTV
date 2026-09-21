@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "Bu kanalın biçimi yerleşik oynatıcı tarafından desteklenmiyor. Yerel oynatıcıda açılıyor…",
   "stream.failure.parseFailed": "Yerleşik oynatıcı bu kanalın akışını okuyamadı. Genellikle harici bir oynatıcıda (MPV/VLC) yine de oynar.",
   "stream.failure.connectionLimit": "Sağlayıcınız şu anda başka bir akışa izin vermiyor. Bu hesapta başka bir şey oynatılıyor olabilir.",
+  "stream.failure.providerPage": "Sağlayıcınız, akış yerine bir hata sayfası gönderdi. Bu genellikle kanal değiştirirken bağlantı sınırına ulaşıldığı anlamına gelir. Biraz bekleyip tekrar deneyin.",
   "stream.failure.offlinePlaceholder": "Bu kanal şu anda sağlayıcıda çevrimdışı.",
   "stream.native.lostTitle": "Yayın kayboldu",
   "stream.native.lostBody": "Yerel oynatıcı {channel} ile yeniden bağlantı kuramadı.",

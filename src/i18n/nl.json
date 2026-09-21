@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "Het formaat van dit kanaal wordt niet ondersteund door de ingebouwde speler. Wordt geopend in de native speler…",
   "stream.failure.parseFailed": "De ingebouwde speler kon de stream van dit kanaal niet lezen. Meestal werkt het wel in een externe speler (MPV/VLC).",
   "stream.failure.connectionLimit": "Je provider staat op dit moment geen extra stream toe. Mogelijk speelt er nog iets anders op dit account.",
+  "stream.failure.providerPage": "Je provider stuurde een foutpagina in plaats van de stream. Dit betekent meestal dat de verbindingslimiet is bereikt tijdens het wisselen. Wacht even en probeer het opnieuw.",
   "stream.failure.offlinePlaceholder": "Deze zender is momenteel offline bij de provider.",
   "stream.native.lostTitle": "Stream verloren",
   "stream.native.lostBody": "De native speler kon geen verbinding maken met {channel}.",

@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "Das Format dieses Senders wird vom integrierten Player nicht unterstützt. Wird im nativen Player geöffnet…",
   "stream.failure.parseFailed": "Der integrierte Player konnte den Stream dieses Senders nicht lesen. Meist läuft er trotzdem in einem externen Player (MPV/VLC).",
   "stream.failure.connectionLimit": "Dein Anbieter erlaubt derzeit keinen weiteren Stream. Möglicherweise läuft mit diesem Konto noch etwas anderes.",
+  "stream.failure.providerPage": "Dein Anbieter hat eine Fehlerseite statt des Streams gesendet. Das bedeutet meist, dass beim Wechseln das Verbindungslimit erreicht wurde. Warte einen Moment und versuche es erneut.",
   "stream.failure.offlinePlaceholder": "Dieser Sender ist beim Anbieter derzeit offline.",
   "stream.native.lostTitle": "Stream verloren",
   "stream.native.lostBody": "Der native Player konnte keine Verbindung zu {channel} wiederherstellen.",

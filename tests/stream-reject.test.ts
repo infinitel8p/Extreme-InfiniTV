@@ -3,6 +3,7 @@ import {
   REJECTION_STATUSES,
   parseHttpStatusFromDetail,
   isProviderRejection,
+  isProviderPageDetail,
   shouldRepinMirror,
   isTransientRejection,
 } from "../src/scripts/lib/stream-reject"
@@ -75,6 +76,18 @@ describe("isProviderRejection", () => {
   })
 })
 
+describe("isProviderPageDetail", () => {
+  it("matches mpv's unrecognized file format detail", () => {
+    expect(isProviderPageDetail("unrecognized file format")).toBe(true)
+    expect(isProviderPageDetail("NETWORK:Failed to recognize file format.")).toBe(true)
+  })
+
+  it("is false for unrelated details and no detail", () => {
+    expect(isProviderPageDetail("connection timed out")).toBe(false)
+    expect(isProviderPageDetail(null)).toBe(false)
+  })
+})
+
 describe("shouldRepinMirror", () => {
   it("is true for the connection-limit statuses", () => {
     expect(shouldRepinMirror({ httpStatus: 429 })).toBe(true)
@@ -109,5 +122,15 @@ describe("isTransientRejection", () => {
     expect(isTransientRejection({ httpStatus: 404 })).toBe(false)
     expect(isTransientRejection({ httpStatus: 500 })).toBe(false)
     expect(isTransientRejection({})).toBe(false)
+  })
+
+  it("is true for the provider-page detail", () => {
+    expect(isTransientRejection({ errorDetail: "unrecognized file format" })).toBe(true)
+  })
+})
+
+describe("isProviderRejection with the provider-page detail", () => {
+  it("stays false, since a body-only signal never warrants a mirror hop", () => {
+    expect(isProviderRejection({ errorDetail: "unrecognized file format" })).toBe(false)
   })
 })

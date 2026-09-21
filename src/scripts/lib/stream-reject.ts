@@ -9,6 +9,12 @@ export const REJECTION_STATUSES = new Set<number>([401, 403, 407, ...CONNECTION_
 // Statuses that get a backed-off same-source retry.
 export const TRANSIENT_REJECTION_STATUSES = new Set<number>([407, ...CONNECTION_LIMIT_STATUSES])
 
+/** True when the detail is mpv's "unrecognized file format" - a provider error page served as 200. */
+export function isProviderPageDetail(detail: string | null | undefined): boolean {
+  if (!detail) return false
+  return /unrecognized file format|failed to recognize file format/i.test(detail)
+}
+
 /** Pulls an HTTP status out of an mpv `HTTP_STATUS:` prefix or an hls.js/shaka "(HTTP <status>)" detail. */
 export function parseHttpStatusFromDetail(errorDetail: string | null | undefined): number | null {
   if (!errorDetail) return null
@@ -36,6 +42,7 @@ export function shouldRepinMirror(input: { errorDetail?: string | null; httpStat
 }
 
 export function isTransientRejection(input: { errorDetail?: string | null; httpStatus?: number | null }): boolean {
+  if (isProviderPageDetail(input.errorDetail)) return true
   const status = input.httpStatus ?? parseHttpStatusFromDetail(input.errorDetail)
   return typeof status === "number" && TRANSIENT_REJECTION_STATUSES.has(status)
 }

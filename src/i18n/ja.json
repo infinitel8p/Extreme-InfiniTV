@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "このチャンネルの形式は内蔵プレイヤーでサポートされていません。ネイティブプレイヤーで開いています…",
   "stream.failure.parseFailed": "内蔵プレーヤーはこのチャンネルのストリームを読み込めませんでした。外部プレーヤー（MPV/VLC）では再生できることがほとんどです。",
   "stream.failure.connectionLimit": "プロバイダーが現在これ以上のストリームを許可していません。このアカウントで他の再生が続いている可能性があります。",
+  "stream.failure.providerPage": "プロバイダーがストリームの代わりにエラーページを送信しました。通常、切り替え中に接続数の上限に達したことを意味します。少し待ってからもう一度お試しください。",
   "stream.failure.offlinePlaceholder": "このチャンネルは現在プロバイダー側でオフラインです。",
   "stream.native.lostTitle": "ストリームが失われました",
   "stream.native.lostBody": "ネイティブプレイヤーは{channel}に再接続できませんでした。",

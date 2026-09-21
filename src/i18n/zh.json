@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "此频道的格式不受内置播放器支持，正在使用原生播放器打开…",
   "stream.failure.parseFailed": "内置播放器无法读取此频道的流。通常在外部播放器（MPV/VLC）中仍可播放。",
   "stream.failure.connectionLimit": "你的提供商目前不允许再开一路串流。此账号上可能还有其他内容正在播放。",
+  "stream.failure.providerPage": "提供商发送了一个错误页面而不是串流。这通常意味着切换时达到了连接数限制。请稍等片刻后重试。",
   "stream.failure.offlinePlaceholder": "该频道目前在提供商处离线。",
   "stream.native.lostTitle": "流已中断",
   "stream.native.lostBody": "原生播放器无法重新连接到 {channel}。",

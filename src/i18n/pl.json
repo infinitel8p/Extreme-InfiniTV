@@ -973,6 +973,7 @@
   "stream.failure.nativeFallback": "Format tego kanału nie jest obsługiwany przez wbudowany odtwarzacz. Otwieranie w natywnym odtwarzaczu…",
   "stream.failure.parseFailed": "Wbudowany odtwarzacz nie mógł odczytać strumienia tego kanału. Zwykle nadal działa w zewnętrznym odtwarzaczu (MPV/VLC).",
   "stream.failure.connectionLimit": "Twój dostawca nie pozwala teraz na kolejny strumień. Na tym koncie może wciąż działać inne odtwarzanie.",
+  "stream.failure.providerPage": "Dostawca wysłał stronę błędu zamiast strumienia. Zwykle oznacza to, że limit połączeń został osiągnięty podczas przełączania. Poczekaj chwilę i spróbuj ponownie.",
   "stream.failure.offlinePlaceholder": "Ten kanał jest obecnie offline u dostawcy.",
   "stream.native.lostTitle": "Utracono strumień",
   "stream.native.lostBody": "Natywny odtwarzacz nie mógł ponownie połączyć się z {channel}.",
