@@ -1054,6 +1054,7 @@ async function addSelectedChannels(): Promise<void> {
   if (!selectedIds.size || !selectedSourceEntryId) return
   const requestedSourceEntryId = selectedSourceEntryId
   const channelsSnapshot = allSourceChannels
+  const selectedIdsSnapshot = [...selectedIds]
   let entries: any[]
   try {
     entries = await getEntries()
@@ -1071,8 +1072,10 @@ async function addSelectedChannels(): Promise<void> {
   let nextDoc = doc
   let addedCount = 0
   let skippedCount = 0
-  for (const channel of channelsSnapshot) {
-    if (!selectedIds.has(channel.id)) continue
+  const channelsById = new Map(channelsSnapshot.map((channel) => [channel.id, channel]))
+  for (const selectedId of selectedIdsSnapshot) {
+    const channel = channelsById.get(selectedId)
+    if (!channel) continue
     const source = buildSourceForChannel(sourceEntry, channel)
     if (!source) continue
     const key = customSourceKey(source)
