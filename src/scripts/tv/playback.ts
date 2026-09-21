@@ -845,6 +845,7 @@ async function tryStartExternalPlayback(
       tracks: trackPrefs
         ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
         : null,
+      isLive: descriptor.isLive,
     })
   } catch (err) {
     surfaceLaunchErrorFallback(err, backend, "[xt:tv-playback]")

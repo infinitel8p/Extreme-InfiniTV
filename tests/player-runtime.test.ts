@@ -261,6 +261,20 @@ describe("buildVlcArgs", () => {
     expect(args).toContain("--no-spu")
     expect(args.some((a) => a.startsWith("--sub-language="))).toBe(false)
   })
+
+  it("passes --http-reconnect and skips --play-and-exit for live", () => {
+    const args = buildVlcArgs({ src: SRC, isLive: true })
+    expect(args).toContain("--http-reconnect")
+    expect(args).not.toContain("--play-and-exit")
+    expect(args.at(-1)).toBe(SRC)
+  })
+
+  it("passes --play-and-exit and skips --http-reconnect by default", () => {
+    const args = buildVlcArgs({ src: SRC })
+    expect(args).toContain("--play-and-exit")
+    expect(args).not.toContain("--http-reconnect")
+    expect(args.at(-1)).toBe(SRC)
+  })
 })
 
 describe("buildArgsFor", () => {

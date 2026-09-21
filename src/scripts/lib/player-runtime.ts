@@ -147,6 +147,7 @@ export interface ExternalLaunchOptions {
   referer?: string | null
   resumeSeconds?: number
   tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
+  isLive?: boolean
 }
 
 export interface ExternalLauncher {
@@ -314,6 +315,7 @@ export interface ArgvInput {
   /** Resume threshold; below this we don't pass a seek arg (avoids restart-from-credits glitch). */
   resumeMinSeconds?: number
   tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
+  isLive?: boolean
 }
 
 export function buildMpvArgs(input: ArgvInput): string[] {
@@ -342,8 +344,10 @@ export function buildVlcArgs(input: ArgvInput): string[] {
   const minResume = input.resumeMinSeconds ?? RESUME_MIN_SECONDS_DEFAULT
 
   const out: string[] = isMacOS
-    ? ["--no-fullscreen", "--play-and-exit"]
-    : ["--no-qt-minimal-view", "--no-fullscreen", "--no-qt-error-dialogs", "--play-and-exit"]
+    ? ["--no-fullscreen"]
+    : ["--no-qt-minimal-view", "--no-fullscreen", "--no-qt-error-dialogs"]
+  if (input.isLive) out.push("--http-reconnect")
+  else out.push("--play-and-exit")
   if (input.userAgent) out.push(`--http-user-agent=${input.userAgent}`)
   if (input.referer) out.push(`--http-referrer=${input.referer}`)
   const resume = Number(input.resumeSeconds || 0)
@@ -436,6 +440,7 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
         resumeSeconds: options.resumeSeconds,
         extraArgs: getPlayerExtraArgs(kind),
         tracks: options.tracks ?? null,
+        isLive: options.isLive ?? false,
       })
       const reuse = {
         kind,
