@@ -406,6 +406,13 @@ export function setCatchup(
   return { ...doc, channels }
 }
 
+/** Deep copy of a channel's primary source, or null for a header/sourceless channel. */
+export function copySourceOf(channel: CustomChannel): CustomSource | null {
+  const source = channel.sources[0]
+  if (isHeaderChannel(channel) || !source) return null
+  return { ...source }
+}
+
 /** Identity key for a source reference, used to detect a channel already pulled into the doc. */
 export function customSourceKey(source: CustomSource): string {
   if (source.kind === "xtream") return `x:${source.entryId}:${source.streamId}`

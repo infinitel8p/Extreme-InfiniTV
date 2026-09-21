@@ -39,6 +39,7 @@ import {
   customSourceKey,
   presentSourceKeys,
   presentSourceKeysByGroup,
+  copySourceOf,
   type CustomSource,
   type SourcePool,
 } from "@/scripts/lib/custom-playlist.ts"
@@ -1595,6 +1596,25 @@ describe("customSourceKey / presentSourceKeys", () => {
     expect(keys).toEqual(new Set(["x:p1:10", "m:p2:http://host/a.m3u8"]))
     expect(keys.has(customSourceKey(xtreamSource("p1", 10)))).toBe(true)
     expect(keys.has(customSourceKey(xtreamSource("p1", 99)))).toBe(false)
+  })
+})
+
+describe("copySourceOf", () => {
+  it("returns a deep copy of the channel's primary source", () => {
+    const { channel } = addChannel(emptyCustomDoc(), xtreamSource("p1", 10), { name: "A" })
+    const copy = copySourceOf(channel)
+    expect(copy).toEqual(xtreamSource("p1", 10))
+    expect(copy).not.toBe(channel.sources[0])
+  })
+
+  it("returns null for a header channel", () => {
+    const doc = addHeader(emptyCustomDoc(), "News", "Morning")
+    expect(copySourceOf(doc.channels[0])).toBeNull()
+  })
+
+  it("returns null when the channel has no sources", () => {
+    const { channel } = addChannel(emptyCustomDoc(), xtreamSource("p1", 10), { name: "A" })
+    expect(copySourceOf({ ...channel, sources: [] })).toBeNull()
   })
 })
 

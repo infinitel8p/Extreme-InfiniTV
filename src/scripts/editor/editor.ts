@@ -24,6 +24,7 @@ import {
   customSourceKey,
   presentSourceKeys,
   presentSourceKeysByGroup,
+  copySourceOf,
   UNCATEGORIZED,
   type CustomPlaylistDoc,
   type CustomChannel,
@@ -60,6 +61,7 @@ let allSourceChannels: any[] = []
 let filteredSourceChannels: any[] = []
 let selectedSourceEntryId = ""
 let selectedSourceEntryType = ""
+let sourceDocChannelsById = new Map<number, CustomChannel>()
 const selectedIds = new Set<number>()
 let lastClickedIndex = -1
 
@@ -708,7 +710,7 @@ function saveSourceSortMode(mode: string): void {
 
 function populateSourceSelect(entries: any[]): void {
   if (!sourceSelect) return
-  const candidates = entries.filter((entry) => entry._id !== entryId && entry.type !== "custom")
+  const candidates = entries.filter((entry) => entry._id !== entryId)
   sourceSelect.replaceChildren()
   if (!candidates.length) {
     const opt = document.createElement("option")
@@ -760,8 +762,7 @@ function populateCategoryFilter(): void {
   allOpt.value = ""
   allOpt.textContent = t("list.allCategories")
   sourceCategorySelect.appendChild(allOpt)
-  const favoriteCount =
-    selectedSourceEntryType !== "custom" ? getFavorites(selectedSourceEntryId, "live").size : 0
+  const favoriteCount = getFavorites(selectedSourceEntryId, "live").size
   if (favoriteCount > 0) {
     const favOpt = document.createElement("option")
     favOpt.value = CAT_FAVORITES
@@ -795,6 +796,7 @@ async function onSourceChange(): Promise<void> {
   updateSelectedCount()
   allSourceChannels = []
   filteredSourceChannels = []
+  sourceDocChannelsById = new Map()
   if (!requestedSourceEntryId) {
     mountSourceEmpty(t("editor.selectSourcePrompt"))
     if (sourceCategorySelect) sourceCategorySelect.replaceChildren()
@@ -818,6 +820,17 @@ async function onSourceChange(): Promise<void> {
     return
   }
   selectedSourceEntryType = sourceEntry.type
+  if (sourceEntry.type === "custom") {
+    try {
+      const sourceDoc = await loadCustomDoc(sourceEntry._id)
+      if (selectedSourceEntryId !== requestedSourceEntryId) return
+      sourceDocChannelsById = new Map(sourceDoc.channels.map((channel) => [channel.id, channel]))
+    } catch (err) {
+      log.warn("[xt:editor] source doc load failed:", err)
+      if (selectedSourceEntryId !== requestedSourceEntryId) return
+      sourceDocChannelsById = new Map()
+    }
+  }
   try {
     const channels = await ensureLive(entryToCreds(sourceEntry), sourceEntry._id, { includeHidden: true })
     if (selectedSourceEntryId !== requestedSourceEntryId) return
@@ -826,6 +839,9 @@ async function onSourceChange(): Promise<void> {
     log.warn("[xt:editor] source load failed:", err)
     if (selectedSourceEntryId !== requestedSourceEntryId) return
     allSourceChannels = []
+  }
+  if (sourceEntry.type === "custom") {
+    allSourceChannels = allSourceChannels.filter((channel) => !channel.isHeader)
   }
   await ensurePrefsLoaded()
   if (selectedSourceEntryId !== requestedSourceEntryId) return
@@ -837,7 +853,7 @@ function applySourceFilter(): void {
   lastClickedIndex = -1
   const tokens = parseSearchQuery(sourceSearchInput?.value || "")
   const category = sourceCategorySelect?.value || ""
-  const isFavoritesCategory = category === CAT_FAVORITES && selectedSourceEntryType !== "custom"
+  const isFavoritesCategory = category === CAT_FAVORITES
   const favoriteIds = isFavoritesCategory ? getFavorites(selectedSourceEntryId, "live") : null
   filteredSourceChannels = allSourceChannels.filter((channel) => {
     if (favoriteIds) {
@@ -906,6 +922,11 @@ function sourceRowKey(channel: any): string | null {
   if (selectedSourceEntryType === "m3u" || selectedSourceEntryType === "local-m3u") {
     if (!channel.url) return null
     return `m:${selectedSourceEntryId}:${channel.url}`
+  }
+  if (selectedSourceEntryType === "custom") {
+    const docChannel = sourceDocChannelsById.get(channel.id)
+    const source = docChannel && copySourceOf(docChannel)
+    return source ? customSourceKey(source) : null
   }
   return null
 }
@@ -1013,6 +1034,10 @@ function buildSourceForChannel(sourceEntry: any, channel: any): CustomSource | n
     if (!channel.url) return null
     return { kind: "m3u", entryId: sourceEntry._id, url: channel.url, name: channel.name || "" }
   }
+  if (sourceEntry.type === "custom") {
+    const docChannel = sourceDocChannelsById.get(channel.id)
+    return docChannel ? copySourceOf(docChannel) : null
+  }
   return null
 }
 
@@ -1065,6 +1090,7 @@ async function addSelectedChannels(): Promise<void> {
       group: overrideGroup || channel.category || null,
       tvgId: channel.tvgId || null,
       chno: channel.chno ?? null,
+      catchup: sourceDocChannelsById.get(channel.id)?.catchup ?? null,
     })
     nextDoc = result.doc
     addedCount++
