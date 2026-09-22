@@ -29,6 +29,7 @@ import {
 } from "@/scripts/lib/catalog.js"
 import { parseCategoriesToMap } from "@/scripts/lib/catalog-mappers.js"
 import { ingestXtreamBytes } from "@/scripts/lib/catalog-ingest-client.ts"
+import { t } from "@/scripts/lib/i18n.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 import { getUserAgent, getNetworkTimeoutSeconds } from "@/scripts/lib/app-settings.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
@@ -363,7 +364,12 @@ async function ingestKind(
     return []
   }
   const streamsBuf = await readStagedBytes(jobId, jobKind, streamsFile.step)
-  const rows = await ingestXtreamBytes(jobKind, streamsBuf, Array.from(categoryMap))
+  const rows = await ingestXtreamBytes(
+    jobKind,
+    streamsBuf,
+    Array.from(categoryMap),
+    t("stream.uncategorized") || "Uncategorized"
+  )
   const ttl = jobKind === "live" ? CHANNELS_TTL_MS : jobKind === "vod" ? VOD_TTL_MS : SERIES_TTL_MS
   setCached(context.pid, cacheKind, rows, ttl)
   return rows

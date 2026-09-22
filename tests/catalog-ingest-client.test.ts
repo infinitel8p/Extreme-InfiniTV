@@ -38,6 +38,19 @@ describe("ingestXtreamBytes: live", () => {
     const rows = await ingestXtreamBytes("live", toBuffer(wrapped), Array.from(categoryMap))
     expect(rows).toEqual(mapXtreamLiveRows(unwrapRows(wrapped, "streams"), categoryMap))
   })
+
+  it("threads fallbackCategory through to mapXtreamLiveRows", async () => {
+    const rawUnresolved = [{ stream_id: 3, name: "Orphan", category_id: 99 }]
+    const categoryMap = parseCategoriesToMap(rawCategories)
+    const rows = await ingestXtreamBytes(
+      "live",
+      toBuffer(rawUnresolved),
+      Array.from(categoryMap),
+      "Uncategorized"
+    )
+    expect(rows).toEqual(mapXtreamLiveRows(rawUnresolved, categoryMap, "Uncategorized"))
+    expect((rows[0] as { category: string }).category).toBe("Uncategorized")
+  })
 })
 
 describe("ingestXtreamBytes: vod", () => {

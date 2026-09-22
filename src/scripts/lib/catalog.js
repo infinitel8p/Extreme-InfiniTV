@@ -274,7 +274,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
     const r = await xtreamApiFetch("get_live_streams", {}, { entryId: playlistId, dns })
     const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `live_streams ${r.status}`)
-    return ingestXtreamBytes("live", bytes, Array.from(catMap))
+    return ingestXtreamBytes("live", bytes, Array.from(catMap), t("stream.uncategorized") || "Uncategorized")
   }), { force: !!opts.force })
   const result = applyLiveOverrides(data || [], playlistId, isM3U, opts)
   log.debug("[xt:catalog] ensureLive done", `id=${playlistId} source=${fromCache ? (stale ? "idb-cache-stale" : "idb-cache") : "network"} items=${result.length} categories=${liveCategoryCount ?? "n/a"} ms=${Math.round(performance.now() - ensureStartedAt)}`)
@@ -315,7 +315,7 @@ export async function ensureVod(creds, playlistId, opts = {}) {
     const r = await xtreamApiFetch("get_vod_streams", {}, { dns })
     const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `vod_streams ${r.status}`)
-    return ingestXtreamBytes("vod", bytes, Array.from(catMap))
+    return ingestXtreamBytes("vod", bytes, Array.from(catMap), t("stream.uncategorized") || "Uncategorized")
   })
   const { data, fromCache, stale } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, fetcher, { force: !!opts.force })
   if (!opts.force && rowsNeedTmdbBackfill(data)) {
@@ -360,7 +360,7 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
     const r = await xtreamApiFetch("get_series", {}, { dns })
     const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `series ${r.status}`)
-    return ingestXtreamBytes("series", bytes, Array.from(catMap))
+    return ingestXtreamBytes("series", bytes, Array.from(catMap), t("stream.uncategorized") || "Uncategorized")
   })
   const { data, fromCache, stale } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, fetcher, { force: !!opts.force })
   if (!opts.force && (rowsNeedTmdbBackfill(data) || rowsNeedGenreBackfill(data))) {

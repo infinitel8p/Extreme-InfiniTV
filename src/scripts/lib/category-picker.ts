@@ -217,7 +217,7 @@ export function mountCategoryPicker(
           : [((item.category || "") + "").trim()]
       // An item present in several groups counts toward every one of them.
       for (const group of groups) {
-        const key = group.trim() || t("list.uncategorized")
+        const key = group.trim() || t("stream.uncategorized")
         counts.set(key, (counts.get(key) || 0) + 1)
       }
     }

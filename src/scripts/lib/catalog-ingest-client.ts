@@ -28,21 +28,27 @@ const ARRAY_KEY_BY_KIND: Record<CatalogIngestKind, "streams" | "movies" | "serie
   series: "series",
 }
 
-function mapRowsSync(kind: CatalogIngestKind, rawRows: unknown[], categoryMap: Map<string, string>): unknown[] {
-  if (kind === "live") return mapXtreamLiveRows(rawRows, categoryMap)
-  if (kind === "vod") return mapXtreamVodRows(rawRows, categoryMap)
-  return mapXtreamSeriesRows(rawRows, categoryMap)
+function mapRowsSync(
+  kind: CatalogIngestKind,
+  rawRows: unknown[],
+  categoryMap: Map<string, string>,
+  fallbackCategory?: string
+): unknown[] {
+  if (kind === "live") return mapXtreamLiveRows(rawRows, categoryMap, fallbackCategory)
+  if (kind === "vod") return mapXtreamVodRows(rawRows, categoryMap, fallbackCategory)
+  return mapXtreamSeriesRows(rawRows, categoryMap, fallbackCategory)
 }
 
 function ingestSync(
   kind: CatalogIngestKind,
   streamsBuf: ArrayBuffer,
-  categoryEntries: Array<[string, string]>
+  categoryEntries: Array<[string, string]>,
+  fallbackCategory?: string
 ): unknown[] {
   const text = new TextDecoder("utf-8").decode(streamsBuf)
   const parsed = JSON.parse(text)
   const rawRows = unwrapRows(parsed, ARRAY_KEY_BY_KIND[kind])
-  return mapRowsSync(kind, rawRows, new Map(categoryEntries))
+  return mapRowsSync(kind, rawRows, new Map(categoryEntries), fallbackCategory)
 }
 
 // A dedicated worker is single-threaded, so the three catalog kinds naturally
@@ -131,11 +137,12 @@ function yieldToMainThread(): Promise<void> {
 function runFallback(
   kind: CatalogIngestKind,
   streamsBuf: ArrayBuffer,
-  categoryEntries: Array<[string, string]>
+  categoryEntries: Array<[string, string]>,
+  fallbackCategory?: string
 ): Promise<unknown[]> {
   const run = fallbackChain.then(async () => {
     await yieldToMainThread()
-    return ingestSync(kind, streamsBuf, categoryEntries)
+    return ingestSync(kind, streamsBuf, categoryEntries, fallbackCategory)
   })
   fallbackChain = run.then(
     () => undefined,
@@ -152,14 +159,22 @@ function runFallback(
 export async function ingestXtreamBytes(
   kind: CatalogIngestKind,
   streamsBuf: ArrayBuffer,
-  categoryEntries: Array<[string, string]>
+  categoryEntries: Array<[string, string]>,
+  fallbackCategory?: string
 ): Promise<unknown[]> {
   const activeWorker = getWorker()
-  if (!activeWorker) return runFallback(kind, streamsBuf, categoryEntries)
+  if (!activeWorker) return runFallback(kind, streamsBuf, categoryEntries, fallbackCategory)
 
   noteWorkerActivity()
   const requestId = ++requestSeq
-  const request: CatalogIngestRequest = { type: "ingest", requestId, kind, streams: streamsBuf, categories: categoryEntries }
+  const request: CatalogIngestRequest = {
+    type: "ingest",
+    requestId,
+    kind,
+    streams: streamsBuf,
+    categories: categoryEntries,
+    fallbackCategory,
+  }
 
   return new Promise<unknown[]>((resolve, reject) => {
     const timeoutMs = catalogIngestTimeoutMs(streamsBuf.byteLength)

@@ -8,6 +8,7 @@ import {
   safeHttpUrl,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
+import { mapXtreamLiveRows, parseCategoriesToMap } from "@/scripts/lib/catalog-mappers.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
@@ -876,19 +877,7 @@ async function fetchXtreamChannels() {
   const catRes = await xtreamApiFetch("get_live_categories")
   if (!catRes.ok) throw new Error(`HTTP ${catRes.status}`)
   const catData = await catRes.json().catch(() => [])
-  const catArr = Array.isArray(catData)
-    ? catData
-    : Array.isArray(catData?.categories)
-    ? catData.categories
-    : []
-  const catMap = new Map(
-    catArr
-      .filter((c) => c && c.category_id != null)
-      .map((c) => [
-        String(c.category_id),
-        String(c.category_name || "").trim(),
-      ])
-  )
+  const catMap = parseCategoriesToMap(catData)
 
   const r = await xtreamApiFetch("get_live_streams")
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -898,35 +887,7 @@ async function fetchXtreamChannels() {
     : Array.isArray(data?.streams)
     ? data.streams
     : []
-  return arr
-    .map((ch) => {
-      const ids =
-        (Array.isArray(ch.category_ids) &&
-          ch.category_ids.length &&
-          ch.category_ids) ||
-        (ch.category_id != null ? [ch.category_id] : [])
-      let category = String(ch.category_name || "").trim()
-      if (!category && ids.length && catMap.size) {
-        for (const id of ids) {
-          const n = catMap.get(String(id))
-          if (n) {
-            category = n
-            break
-          }
-        }
-      }
-      return {
-        id: Number(ch.stream_id),
-        name: String(ch.name || ""),
-        category,
-        logo: ch.stream_icon || null,
-        tvgId: String(ch.epg_channel_id || "") || undefined,
-        chno: Number(ch.num) || undefined,
-        tvArchive: Number(ch.tv_archive) || 0,
-        tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
-      }
-    })
-    .filter((x) => x.id && x.name)
+  return mapXtreamLiveRows(arr, catMap, t("stream.uncategorized") || "Uncategorized")
 }
 
 // ----------------------------

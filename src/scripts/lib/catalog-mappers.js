@@ -25,7 +25,7 @@ export function parseCategoriesToMap(data) {
   )
 }
 
-export function mapXtreamLiveRows(rawRows, categoryMap) {
+export function mapXtreamLiveRows(rawRows, categoryMap, fallbackCategory) {
   return (rawRows || [])
     .map((ch) => {
       const name = String(ch.name || "")
@@ -44,6 +44,7 @@ export function mapXtreamLiveRows(rawRows, categoryMap) {
           }
         }
       }
+      if (!category && fallbackCategory) category = fallbackCategory
       return {
         id: Number(ch.stream_id),
         name,
@@ -59,7 +60,7 @@ export function mapXtreamLiveRows(rawRows, categoryMap) {
     .filter((x) => x.id && x.name)
 }
 
-export function mapXtreamVodRows(rawRows, categoryMap) {
+export function mapXtreamVodRows(rawRows, categoryMap, fallbackCategory) {
   return (rawRows || [])
     .map((m) => {
       const name = String(m.name || m.title || "")
@@ -77,6 +78,9 @@ export function mapXtreamVodRows(rawRows, categoryMap) {
       if (!category && categoryId != null && categoryMap?.size) {
         category = categoryMap.get(String(categoryId)) || ""
       }
+      // norm is built from the raw category so "Uncategorized" never becomes search noise.
+      const norm = normalize(`${name} ${category} ${year}`)
+      if (!category && fallbackCategory) category = fallbackCategory
       const added = Number(m.added) || 0
       const tmdb = Number(m.tmdb) || Number(m.tmdb_id) || null
       return {
@@ -89,7 +93,7 @@ export function mapXtreamVodRows(rawRows, categoryMap) {
         category,
         plot: "",
         added,
-        norm: normalize(`${name} ${category} ${year}`),
+        norm,
         tmdb,
       }
     })
@@ -104,7 +108,7 @@ export function rowsNeedTmdbBackfill(rows) {
   return !!firstRow && typeof firstRow === "object" && !("tmdb" in firstRow)
 }
 
-export function mapXtreamSeriesRows(rawRows, categoryMap) {
+export function mapXtreamSeriesRows(rawRows, categoryMap, fallbackCategory) {
   return (rawRows || [])
     .map((s) => {
       const name = String(s.name || s.title || "")
@@ -123,6 +127,9 @@ export function mapXtreamSeriesRows(rawRows, categoryMap) {
       if (!category && categoryId != null && categoryMap?.size) {
         category = categoryMap.get(String(categoryId)) || ""
       }
+      // norm is built from the raw category so "Uncategorized" never becomes search noise.
+      const norm = normalize(`${name} ${category} ${year}`)
+      if (!category && fallbackCategory) category = fallbackCategory
       const added =
         Number(s.last_modified) ||
         Number(s.added) ||
@@ -140,7 +147,7 @@ export function mapXtreamSeriesRows(rawRows, categoryMap) {
         category,
         plot: s.plot || "",
         added,
-        norm: normalize(`${name} ${category} ${year}`),
+        norm,
         tmdb,
         genre: String(s.genre || "").trim(),
       }

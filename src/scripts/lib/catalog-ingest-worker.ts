@@ -17,6 +17,7 @@ export interface CatalogIngestRequest {
   kind: CatalogIngestKind
   streams: ArrayBuffer
   categories: Array<[string, string]>
+  fallbackCategory?: string
 }
 
 export interface CatalogIngestResponse {
@@ -31,10 +32,15 @@ const ARRAY_KEY_BY_KIND: Record<CatalogIngestKind, "streams" | "movies" | "serie
   series: "series",
 }
 
-function mapRows(kind: CatalogIngestKind, rawRows: unknown[], categoryMap: Map<string, string>): unknown[] {
-  if (kind === "live") return mapXtreamLiveRows(rawRows, categoryMap)
-  if (kind === "vod") return mapXtreamVodRows(rawRows, categoryMap)
-  return mapXtreamSeriesRows(rawRows, categoryMap)
+function mapRows(
+  kind: CatalogIngestKind,
+  rawRows: unknown[],
+  categoryMap: Map<string, string>,
+  fallbackCategory?: string
+): unknown[] {
+  if (kind === "live") return mapXtreamLiveRows(rawRows, categoryMap, fallbackCategory)
+  if (kind === "vod") return mapXtreamVodRows(rawRows, categoryMap, fallbackCategory)
+  return mapXtreamSeriesRows(rawRows, categoryMap, fallbackCategory)
 }
 
 /** Pure request handler, exported so tests can drive the worker's message contract directly. */
@@ -44,7 +50,7 @@ export function handleIngestRequest(request: CatalogIngestRequest): CatalogInges
     const parsed = JSON.parse(text)
     const rawRows = unwrapRows(parsed, ARRAY_KEY_BY_KIND[request.kind])
     const categoryMap = new Map(request.categories)
-    const rows = mapRows(request.kind, rawRows, categoryMap)
+    const rows = mapRows(request.kind, rawRows, categoryMap, request.fallbackCategory)
     return { requestId: request.requestId, rows }
   } catch (error) {
     return { requestId: request.requestId, error: error instanceof Error ? error.message : String(error) }
