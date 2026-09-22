@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "Не удалось прочитать файл резервной копии",
   "settings.toast.backupRestored": "Резервная копия восстановлена",
   "settings.toast.backupRestoreFail": "Не удалось восстановить резервную копию",
+  "settings.toast.backupPickerUnavailable": "На этом устройстве нет средства выбора файлов. Установите приложение файлового менеджера и повторите попытку, или поместите резервную копию как last-backup.json в папку данных приложения.",
   "settings.toast.scanFail": "Не удалось просканировать папку",
   "settings.toast.pickFolderFail": "Не удалось открыть выбор папки",
   "settings.toast.noFolderPicker": "На этом устройстве нет выбора папки",

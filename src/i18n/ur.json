@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "بیک اپ فائل پارس نہیں ہو سکی",
   "settings.toast.backupRestored": "بیک اپ بحال ہو گیا",
   "settings.toast.backupRestoreFail": "بیک اپ بحال نہیں ہو سکا",
+  "settings.toast.backupPickerUnavailable": "اس ڈیوائس پر کوئی فائل پکر دستیاب نہیں ہے۔ کوئی فائل مینیجر ایپ انسٹال کر کے دوبارہ کوشش کریں، یا بیک اپ کو last-backup.json کے نام سے ایپ ڈیٹا فولڈر میں رکھیں۔",
   "settings.toast.scanFail": "فولڈر اسکین نہیں ہو سکا",
   "settings.toast.pickFolderFail": "فولڈر سلیکٹر نہیں کھل سکا",
   "settings.toast.noFolderPicker": "اس ڈیوائس میں فولڈر منتخب کرنے کی سہولت نہیں ہے",

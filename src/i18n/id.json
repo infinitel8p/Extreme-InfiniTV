@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "Tidak dapat mengurai file cadangan",
   "settings.toast.backupRestored": "Cadangan dipulihkan",
   "settings.toast.backupRestoreFail": "Tidak dapat memulihkan cadangan",
+  "settings.toast.backupPickerUnavailable": "Tidak ada pemilih file di perangkat ini. Instal aplikasi pengelola file dan coba lagi, atau letakkan cadangan sebagai last-backup.json di folder data aplikasi.",
   "settings.toast.scanFail": "Tidak dapat memindai folder",
   "settings.toast.pickFolderFail": "Tidak dapat membuka pemilih folder",
   "settings.toast.noFolderPicker": "Perangkat ini tidak memiliki pemilih folder",

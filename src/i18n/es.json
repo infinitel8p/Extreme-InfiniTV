@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "No se pudo leer el archivo de copia",
   "settings.toast.backupRestored": "Copia restaurada",
   "settings.toast.backupRestoreFail": "No se pudo restaurar la copia",
+  "settings.toast.backupPickerUnavailable": "No hay selector de archivos en este dispositivo. Instala una app de administrador de archivos y vuelve a intentarlo, o copia la copia de seguridad como last-backup.json en la carpeta de datos de la app.",
   "settings.toast.scanFail": "No se pudo escanear la carpeta",
   "settings.toast.pickFolderFail": "No se pudo abrir el selector de carpetas",
   "settings.toast.noFolderPicker": "Este dispositivo no tiene selector de carpetas",

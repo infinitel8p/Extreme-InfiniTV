@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "Couldn't parse backup file",
   "settings.toast.backupRestored": "Backup restored",
   "settings.toast.backupRestoreFail": "Couldn't restore backup",
+  "settings.toast.backupPickerUnavailable": "No file picker on this device. Install a file manager app and retry, or push the backup as last-backup.json into the app data folder.",
   "settings.toast.scanFail": "Couldn't scan folder",
   "settings.toast.pickFolderFail": "Couldn't open folder picker",
   "settings.toast.noFolderPicker": "This device has no folder picker",

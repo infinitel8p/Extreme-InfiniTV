@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "बैकअप फ़ाइल पार्स नहीं हो सकी",
   "settings.toast.backupRestored": "बैकअप पुनर्स्थापित हो गया",
   "settings.toast.backupRestoreFail": "बैकअप पुनर्स्थापित नहीं हो सका",
+  "settings.toast.backupPickerUnavailable": "इस डिवाइस पर कोई फ़ाइल पिकर उपलब्ध नहीं है। कोई फ़ाइल मैनेजर ऐप इंस्टॉल करें और फिर से कोशिश करें, या बैकअप को last-backup.json के रूप में ऐप डेटा फ़ोल्डर में रखें।",
   "settings.toast.scanFail": "फ़ोल्डर स्कैन नहीं हो सका",
   "settings.toast.pickFolderFail": "फ़ोल्डर पिकर नहीं खुल सका",
   "settings.toast.noFolderPicker": "इस डिवाइस में फ़ोल्डर चुनने का विकल्प नहीं है",

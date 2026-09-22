@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "无法解析备份文件",
   "settings.toast.backupRestored": "备份已恢复",
   "settings.toast.backupRestoreFail": "无法恢复备份",
+  "settings.toast.backupPickerUnavailable": "此设备上没有文件选择器。请安装文件管理器应用后重试,或将备份文件以 last-backup.json 的名称放入应用数据文件夹。",
   "settings.toast.scanFail": "无法扫描文件夹",
   "settings.toast.pickFolderFail": "无法打开文件夹选择器",
   "settings.toast.noFolderPicker": "此设备没有文件夹选择器",

@@ -39,6 +39,12 @@
         <intent>
             <action android:name="android.settings.DREAM_SETTINGS" />
         </intent>
+        <!-- File managers handling GET_CONTENT (Fire TV has no system Documents UI) -->
+        <intent>
+            <action android:name="android.intent.action.GET_CONTENT" />
+            <category android:name="android.intent.category.OPENABLE" />
+            <data android:mimeType="*/*" />
+        </intent>
     </queries>
 
     <!-- Features -->

@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "Sicherungsdatei konnte nicht gelesen werden",
   "settings.toast.backupRestored": "Sicherung wiederhergestellt",
   "settings.toast.backupRestoreFail": "Sicherung konnte nicht wiederhergestellt werden",
+  "settings.toast.backupPickerUnavailable": "Auf diesem Gerät ist kein Dateiauswahl-Dialog verfügbar. Installiere eine Dateimanager-App und versuche es erneut, oder lege die Sicherung als last-backup.json im App-Datenordner ab.",
   "settings.toast.scanFail": "Ordner konnte nicht gescannt werden",
   "settings.toast.pickFolderFail": "Ordnerauswahl konnte nicht geöffnet werden",
   "settings.toast.noFolderPicker": "Dieses Gerät hat keine Ordnerauswahl",

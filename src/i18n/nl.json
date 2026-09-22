@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "Back-upbestand kon niet worden gelezen",
   "settings.toast.backupRestored": "Back-up hersteld",
   "settings.toast.backupRestoreFail": "Back-up kon niet worden hersteld",
+  "settings.toast.backupPickerUnavailable": "Geen bestandskiezer beschikbaar op dit apparaat. Installeer een bestandsbeheer-app en probeer het opnieuw, of plaats de back-up als last-backup.json in de app-datamap.",
   "settings.toast.scanFail": "Map kon niet worden gescand",
   "settings.toast.pickFolderFail": "Mapkiezer kon niet worden geopend",
   "settings.toast.noFolderPicker": "Dit apparaat heeft geen mapkiezer",

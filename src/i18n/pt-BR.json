@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "Não foi possível ler o arquivo de backup",
   "settings.toast.backupRestored": "Backup restaurado",
   "settings.toast.backupRestoreFail": "Não foi possível restaurar o backup",
+  "settings.toast.backupPickerUnavailable": "Nenhum seletor de arquivos disponível neste dispositivo. Instale um aplicativo gerenciador de arquivos e tente novamente, ou coloque o backup como last-backup.json na pasta de dados do app.",
   "settings.toast.scanFail": "Não foi possível escanear a pasta",
   "settings.toast.pickFolderFail": "Não foi possível abrir o seletor de pastas",
   "settings.toast.noFolderPicker": "Este dispositivo não tem seletor de pastas",

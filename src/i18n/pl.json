@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "Nie udało się przeanalizować pliku kopii zapasowej",
   "settings.toast.backupRestored": "Kopia zapasowa przywrócona",
   "settings.toast.backupRestoreFail": "Nie udało się przywrócić kopii zapasowej",
+  "settings.toast.backupPickerUnavailable": "Na tym urządzeniu brak selektora plików. Zainstaluj aplikację menedżera plików i spróbuj ponownie, lub umieść kopię zapasową jako last-backup.json w folderze danych aplikacji.",
   "settings.toast.scanFail": "Nie udało się przeskanować folderu",
   "settings.toast.pickFolderFail": "Nie udało się otworzyć selektora folderów",
   "settings.toast.noFolderPicker": "To urządzenie nie ma selektora folderów",

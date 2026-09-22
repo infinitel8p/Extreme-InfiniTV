@@ -77,6 +77,11 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewCompat
 import java.net.URL
+import android.app.Activity
+import android.provider.OpenableColumns
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.ActivityResultLauncher
+import java.io.InputStream
 
 // Cheap Android TV boxes ship WebView 83; below 111 the app renders unstyled.
 private object WebViewFloor {
@@ -754,6 +759,163 @@ class IntentBridge(private val activity: TauriActivity) {
         Log.w("xtream-rs", "$context launch threw: $e")
       }
     }
+  }
+}
+
+// GET_CONTENT fallback: Fire TV ships no Documents UI for ACTION_OPEN_DOCUMENT.
+class FilePickBridge(
+  private val activity: TauriActivity,
+  private val webViewProvider: () -> WebView?,
+  private val launcherProvider: () -> ActivityResultLauncher<Intent>?,
+) {
+  companion object {
+    private const val TAG = "AndroidFilePick"
+    private const val MAX_TEXT_BYTES = 16 * 1024 * 1024
+  }
+
+  @Volatile
+  private var pendingRequestId: String? = null
+
+  @JavascriptInterface
+  fun canPickContent(mimeType: String): Boolean {
+    val resolvedMime = mimeType.trim().takeIf { it.isNotEmpty() } ?: "*/*"
+    val intent = Intent(Intent.ACTION_GET_CONTENT)
+      .addCategory(Intent.CATEGORY_OPENABLE)
+      .setType(resolvedMime)
+    return try {
+      activity.packageManager.resolveActivity(intent, 0) != null
+    } catch (e: Throwable) {
+      Log.w(TAG, "canPickContent failed: $e")
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun pickText(requestId: String, mimeTypesCsv: String): Boolean {
+    val launcher = launcherProvider() ?: return false
+    synchronized(this) {
+      if (pendingRequestId != null) return false
+      pendingRequestId = requestId
+    }
+    val mimeTypes = mimeTypesCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = if (mimeTypes.size == 1) mimeTypes[0] else "*/*"
+      if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
+      putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
+    }
+    val chooser = Intent.createChooser(intent, "")
+    val latch = java.util.concurrent.CountDownLatch(1)
+    var launchFailed = false
+    val launch = Runnable {
+      try {
+        launcher.launch(chooser)
+      } catch (e: Throwable) {
+        Log.w(TAG, "pickText launch threw: $e")
+        launchFailed = true
+      } finally {
+        latch.countDown()
+      }
+    }
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+      launch.run()
+    } else {
+      activity.runOnUiThread(launch)
+      latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+    }
+    if (launchFailed) {
+      pendingRequestId = null
+      return false
+    }
+    return true
+  }
+
+  fun handleResult(result: ActivityResult) {
+    val requestId = pendingRequestId
+    pendingRequestId = null
+    if (requestId == null) return
+    val uri = if (result.resultCode == Activity.RESULT_OK) result.data?.data else null
+    if (uri == null) {
+      dispatchResult(requestId, ok = false, cancelled = true)
+      return
+    }
+    Thread { readPickedFile(requestId, uri) }.start()
+  }
+
+  private fun readPickedFile(requestId: String, uri: Uri) {
+    try {
+      val name = queryDisplayName(uri)
+      val stream = activity.contentResolver.openInputStream(uri)
+      if (stream == null) {
+        dispatchResult(requestId, ok = false, error = "could not open file")
+        return
+      }
+      stream.use { input ->
+        val bytes = readCapped(input, MAX_TEXT_BYTES)
+        if (bytes == null) {
+          dispatchResult(requestId, ok = false, error = "too large")
+          return
+        }
+        dispatchResult(requestId, ok = true, text = String(bytes, Charsets.UTF_8), name = name)
+      }
+    } catch (e: Throwable) {
+      Log.w(TAG, "readPickedFile failed: $e")
+      dispatchResult(requestId, ok = false, error = e.message ?: "read failed")
+    }
+  }
+
+  private fun readCapped(input: InputStream, maxBytes: Int): ByteArray? {
+    val out = ByteArrayOutputStream()
+    val chunk = ByteArray(64 * 1024)
+    var total = 0
+    while (true) {
+      val read = input.read(chunk)
+      if (read == -1) break
+      total += read
+      if (total > maxBytes) return null
+      out.write(chunk, 0, read)
+    }
+    return out.toByteArray()
+  }
+
+  private fun queryDisplayName(uri: Uri): String {
+    return try {
+      activity.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { cursor ->
+          val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+          if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) ?: "" else ""
+        } ?: ""
+    } catch (e: Throwable) {
+      Log.w(TAG, "queryDisplayName failed: $e")
+      ""
+    }
+  }
+
+  private fun dispatchResult(
+    requestId: String,
+    ok: Boolean,
+    cancelled: Boolean = false,
+    text: String? = null,
+    name: String? = null,
+    error: String? = null,
+  ) {
+    val webView = webViewProvider() ?: return
+    val payload = JSONObject().apply {
+      put("requestId", requestId)
+      put("ok", ok)
+      if (cancelled) put("cancelled", true)
+      if (text != null) put("text", text)
+      if (name != null) put("name", name)
+      if (error != null) put("error", error)
+    }
+    val script = """
+      (function(){
+        try {
+          document.dispatchEvent(new CustomEvent('xt:android-file-picked', { detail: $payload }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    webView.post { webView.evaluateJavascript(script, null) }
   }
 }
 
@@ -2226,6 +2388,10 @@ class MainActivity : TauriActivity() {
   // Cached so onResume() can clear the wake notification once the app is actually up.
   private var receiverWakeBridge: ReceiverWakeBridge? = null
 
+  // Registered in onCreate (before STARTED); handed to FilePickBridge once the WebView exists.
+  private var filePickLauncher: ActivityResultLauncher<Intent>? = null
+  private var filePickBridge: FilePickBridge? = null
+
   // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
   @Volatile
   var autoEnterPipEnabled: Boolean = false
@@ -2283,6 +2449,10 @@ class MainActivity : TauriActivity() {
     // recreate() after a WebView render-process-gone restart, where the
     // singleton's lateinit still points at the dead activity.
     bindPluginManagerLaunchers()
+
+    filePickLauncher = registerForActivityResult(
+      ActivityResultContracts.StartActivityForResult()
+    ) { result -> filePickBridge?.handleResult(result) }
 
     maybeShowWebViewFloorDialog()
 
@@ -2459,6 +2629,9 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(ScreensaverBridge(this), "AndroidScreensaver")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
+    val filePick = FilePickBridge(this, { hostedWebView }, { filePickLauncher })
+    filePickBridge = filePick
+    webView.addJavascriptInterface(filePick, "AndroidFilePick")
     webView.addJavascriptInterface(AndroidVideoBridge(this, { hostedWebView }), "AndroidVideo")
     webView.addJavascriptInterface(HapticsBridge(this, { hostedWebView }), "AndroidHaptics")
     webView.addJavascriptInterface(ImeBridge(this, { hostedWebView }), "AndroidIme")

@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "バックアップファイルを読み込めませんでした",
   "settings.toast.backupRestored": "バックアップを復元しました",
   "settings.toast.backupRestoreFail": "バックアップを復元できませんでした",
+  "settings.toast.backupPickerUnavailable": "この端末にはファイル選択ツールがありません。ファイル管理アプリをインストールして再試行するか、バックアップを last-backup.json としてアプリのデータフォルダに配置してください。",
   "settings.toast.scanFail": "フォルダをスキャンできませんでした",
   "settings.toast.pickFolderFail": "フォルダピッカーを開けませんでした",
   "settings.toast.noFolderPicker": "このデバイスにはフォルダー選択機能がありません",

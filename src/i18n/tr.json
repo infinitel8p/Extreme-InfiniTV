@@ -929,6 +929,7 @@
   "settings.toast.backupParseFail": "Yedek dosyası ayrıştırılamadı",
   "settings.toast.backupRestored": "Yedek geri yüklendi",
   "settings.toast.backupRestoreFail": "Yedek geri yüklenemedi",
+  "settings.toast.backupPickerUnavailable": "Bu cihazda dosya seçici yok. Bir dosya yöneticisi uygulaması yükleyip tekrar deneyin veya yedeği last-backup.json olarak uygulama veri klasörüne yerleştirin.",
   "settings.toast.scanFail": "Klasör taranamadı",
   "settings.toast.pickFolderFail": "Klasör seçici açılamadı",
   "settings.toast.noFolderPicker": "Bu cihazda klasör seçici yok",

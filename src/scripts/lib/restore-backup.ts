@@ -91,6 +91,12 @@ export async function pickAndRestoreBackup(
     } catch (error) {
       log.warn(`[${logTag}] android-fs picker failed, falling back:`, error)
       setBusy(false)
+      if (!fileInput) {
+        toastError(t("settings.toast.backupRestoreFail"), {
+          description: t("settings.toast.backupPickerUnavailable"),
+        })
+        return
+      }
     }
   } else if (isTauri) {
     try {
@@ -110,6 +116,12 @@ export async function pickAndRestoreBackup(
     } catch (error) {
       log.warn(`[${logTag}] tauri open failed, falling back:`, error)
       setBusy(false)
+      if (!fileInput) {
+        toastError(t("settings.toast.backupRestoreFail"), {
+          description: t("settings.toast.backupPickerUnavailable"),
+        })
+        return
+      }
     }
   }
   setBusy(true)
