@@ -833,7 +833,7 @@ function applyFilter() {
     scoreById = new Map()
     const scored = []
     for (const series of out) {
-      const score = scoreNormMatch(series.norm, tokens)
+      const score = scoreNormMatch(series.norm, tokens, series.name)
       if (score > 0) {
         scored.push(series)
         scoreById.set(series.id, score)

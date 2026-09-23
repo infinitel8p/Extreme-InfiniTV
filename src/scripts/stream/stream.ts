@@ -21,6 +21,7 @@ import {
   isTransientRejection,
 } from "@/scripts/lib/stream-reject.ts"
 import { normalize, parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.js"
+import { mapXtreamLiveRows } from "@/scripts/lib/catalog-mappers.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { cachedFetch, getCached, hydrate as hydrateCache, invalidateEntry } from "@/scripts/lib/cache.js"
@@ -1691,7 +1692,7 @@ const applyFilter = () => {
     scoreById = new Map()
     const scored = []
     for (const channel of out) {
-      let score = scoreNormMatch(channel.norm, tokens)
+      let score = scoreNormMatch(channel.norm, tokens, channel.name)
       if (numericQuery) {
         const idText = String(channel.id)
         const chnoText = channel.chno != null ? String(channel.chno) : ""
@@ -1986,37 +1987,7 @@ async function loadChannels() {
         const arr = Array.isArray(parsed)
           ? parsed
           : parsed?.streams || parsed?.results || []
-        return (arr || [])
-          .map((ch) => {
-            const name = String(ch.name || "")
-            const ids =
-              (Array.isArray(ch.category_ids) &&
-                ch.category_ids.length &&
-                ch.category_ids) ||
-              (ch.category_id != null ? [ch.category_id] : [])
-            let category = String(ch.category_name || "").trim()
-            if (!category && ids.length && catMap?.size) {
-              for (const id of ids) {
-                const n = catMap.get(String(id))
-                if (n) {
-                  category = n
-                  break
-                }
-              }
-            }
-            return {
-              id: Number(ch.stream_id),
-              name,
-              category,
-              logo: ch.stream_icon || null,
-              tvgId: String(ch.epg_channel_id || "") || undefined,
-              chno: Number(ch.num) || undefined,
-              norm: normalize(name + " " + category),
-              tvArchive: Number(ch.tv_archive) || 0,
-              tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
-            }
-          })
-          .filter((x) => x.id && x.name)
+        return mapXtreamLiveRows(arr, catMap, t("stream.uncategorized") || "Uncategorized")
       }
     )
     directUrlById = new Map()

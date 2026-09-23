@@ -574,7 +574,8 @@ export function mountCategoryPicker(
       const isRegularRow = !isAllButton && !isPseudo
       if (isRegularRow) totalCount++
       const label = row.dataset.searchLabel || normalize(val || row.textContent || "")
-      let show = matchesNormQuery(label, tokens)
+      const rawName = row.dataset.searchLabel ? null : val || row.textContent || ""
+      let show = matchesNormQuery(label, tokens, rawName)
       if (show && filterToSelected && isRegularRow) {
         show = !!allowed && allowed.has(val)
       }
@@ -618,8 +619,9 @@ export function mountCategoryPicker(
     const scoreOf = (row: HTMLElement): number => {
       if (!tokens.length) return 0
       if (row.style.display === "none") return 0
-      const label = normalize(row.dataset.val || row.textContent || "")
-      return scoreNormMatch(label, tokens)
+      const rawName = row.dataset.val || row.textContent || ""
+      const label = normalize(rawName)
+      return scoreNormMatch(label, tokens, rawName)
     }
     const origOf = (row: HTMLElement): number =>
       Number(row.dataset.origIndex) || 0

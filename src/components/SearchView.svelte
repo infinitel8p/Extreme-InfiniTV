@@ -437,7 +437,7 @@
     const HARD_CAP = 500
     for (let i = 0; i < itemsLen; i++) {
       const item = items[i]
-      const score = scoreNormMatch(item.norm, tokens)
+      const score = scoreNormMatch(item.norm, tokens, item.name)
       if (score > 0) {
         counts.all++
         counts[item.kind]++

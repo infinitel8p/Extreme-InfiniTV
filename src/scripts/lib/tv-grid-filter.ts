@@ -63,7 +63,7 @@ export function filterAndSortIndexes<T extends GridFilterEntry>(
     scoreByIndex = new Map()
     let kept = 0
     for (const index of candidates) {
-      const score = scoreNormMatch(entries[index].norm || "", tokens)
+      const score = scoreNormMatch(entries[index].norm || "", tokens, entries[index].name)
       if (score <= 0) continue
       scoreByIndex.set(index, score)
       candidates[kept++] = index

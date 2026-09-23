@@ -2,42 +2,42 @@ import { describe, it, expect } from "vitest"
 import { normalize, parseSearchQuery, scoreNormMatch, matchesNormQuery } from "@/scripts/lib/text.ts"
 
 describe("parseSearchQuery", () => {
-  it("marks a trailing-delimiter word as whole-word", () => {
-    expect(parseSearchQuery("AT|")).toEqual([{ text: "at", wholeWord: true }])
+  it("marks a trailing-delimiter word as whole-word with a literal", () => {
+    expect(parseSearchQuery("AT|")).toEqual([{ text: "at", wholeWord: true, literal: "at|" }])
   })
 
-  it("marks a leading-delimiter word as whole-word", () => {
-    expect(parseSearchQuery("|AT")).toEqual([{ text: "at", wholeWord: true }])
+  it("marks a leading-delimiter word as whole-word with a literal", () => {
+    expect(parseSearchQuery("|AT")).toEqual([{ text: "at", wholeWord: true, literal: "|at" }])
   })
 
   it("leaves a plain word as a substring token", () => {
     expect(parseSearchQuery("at")).toEqual([{ text: "at", wholeWord: false }])
   })
 
-  it("marks a parenthesized word as whole-word", () => {
-    expect(parseSearchQuery("(AT)")).toEqual([{ text: "at", wholeWord: true }])
+  it("marks a parenthesized word as whole-word with a literal", () => {
+    expect(parseSearchQuery("(AT)")).toEqual([{ text: "at", wholeWord: true, literal: "(at)" }])
   })
 
-  it("splits a mid-word delimiter into two substring tokens", () => {
+  it("joins a mid-word delimiter into one literal whole-word token", () => {
     expect(parseSearchQuery("AT|ARCADIA")).toEqual([
-      { text: "at", wholeWord: false },
-      { text: "arcadia", wholeWord: false },
+      { text: "at arcadia", wholeWord: true, literal: "at|arcadia" },
     ])
   })
 
-  it("splits a hyphenated prefix into substring tokens for live typing", () => {
+  it("joins a hyphenated prefix into one literal whole-word token", () => {
     expect(parseSearchQuery("sky-spo")).toEqual([
-      { text: "sky", wholeWord: false },
-      { text: "spo", wholeWord: false },
+      { text: "sky spo", wholeWord: true, literal: "sky-spo" },
     ])
   })
 
   it("turns a quoted phrase into one whole-word token with internal spaces", () => {
-    expect(parseSearchQuery('"AT| ARCADIA"')).toEqual([{ text: "at arcadia", wholeWord: true }])
+    expect(parseSearchQuery('"AT| ARCADIA"')).toEqual([
+      { text: "at arcadia", wholeWord: true, literal: "at| arcadia" },
+    ])
   })
 
   it("drops a lone unmatched quote without crashing", () => {
-    expect(parseSearchQuery('AT|"')).toEqual([{ text: "at", wholeWord: true }])
+    expect(parseSearchQuery('AT|"')).toEqual([{ text: "at", wholeWord: true, literal: "at|" }])
   })
 
   it("returns an empty list for an empty query", () => {
@@ -46,7 +46,7 @@ describe("parseSearchQuery", () => {
 
   it("combines a quoted phrase with trailing unquoted words", () => {
     expect(parseSearchQuery('"AT| ARCADIA" HD')).toEqual([
-      { text: "at arcadia", wholeWord: true },
+      { text: "at arcadia", wholeWord: true, literal: "at| arcadia" },
       { text: "hd", wholeWord: false },
     ])
   })
@@ -83,21 +83,44 @@ describe("scoreNormMatch", () => {
     expect(scoreNormMatch("arcadia world hd", [{ text: "at", wholeWord: true }, "nope"])).toBe(0)
   })
 
-  it("rejects the AT| channel bug case against unrelated channel names", () => {
+  it("rejects the AT| channel bug case against unrelated channel names via the norm fallback", () => {
     const tokens = parseSearchQuery("AT|")
     expect(scoreNormMatch(normalize("national geographic"), tokens)).toBe(0)
     expect(scoreNormMatch(normalize("arcadia"), tokens)).toBe(0)
     expect(scoreNormMatch(normalize("AT| ARCADIA WORLD HD"), tokens)).toBeGreaterThan(0)
   })
 
-  it("keeps live prefix typing working for a hyphenated query", () => {
-    const tokens = parseSearchQuery("sky-spo")
-    expect(scoreNormMatch("sky sports", tokens)).toBeGreaterThan(0)
+  it("rejects a delimiter literal against a raw name that only contains the word alone", () => {
+    const tokens = parseSearchQuery("AT|")
+    expect(scoreNormMatch(normalize("men at work"), tokens, "24/7 MEN AT WORK")).toBe(0)
   })
 
-  it("keeps a full hyphenated word matching by substring", () => {
+  it("matches a delimiter literal against a raw name carrying the literal punctuation", () => {
+    const tokens = parseSearchQuery("AT|")
+    expect(scoreNormMatch(normalize("at arcadia world hd"), tokens, "AT| ARCADIA WORLD HD")).toBeGreaterThan(0)
+  })
+
+  it("falls back to the normalized whole-word match when no raw name is given", () => {
+    const tokens = parseSearchQuery("AT|")
+    expect(scoreNormMatch("at arcadia world hd", tokens)).toBeGreaterThan(0)
+  })
+
+  it("still matches a plain word by substring", () => {
+    expect(scoreNormMatch(normalize("national geographic"), parseSearchQuery("at"))).toBeGreaterThan(0)
+  })
+
+  it("still matches plain words against a normalized delimiter-bearing name", () => {
+    expect(scoreNormMatch(normalize("SKY|SPORTS"), parseSearchQuery("sky sports"))).toBeGreaterThan(0)
+  })
+
+  it("keeps live prefix typing working for a hyphenated query via the raw-name literal", () => {
+    const tokens = parseSearchQuery("sky-spo")
+    expect(scoreNormMatch(normalize("sky-sports"), tokens, "Sky-Sports")).toBeGreaterThan(0)
+  })
+
+  it("keeps a full hyphenated word matching by substring via the raw-name literal", () => {
     const tokens = parseSearchQuery("sky-sport")
-    expect(scoreNormMatch("sky sports", tokens)).toBeGreaterThan(0)
+    expect(scoreNormMatch(normalize("sky-sports"), tokens, "Sky-Sports")).toBeGreaterThan(0)
   })
 })
 

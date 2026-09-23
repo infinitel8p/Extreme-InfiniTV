@@ -646,7 +646,7 @@ function applyFilter() {
     scoreById = new Map()
     const scored = []
     for (const movie of out) {
-      const score = scoreNormMatch(movie.norm, tokens)
+      const score = scoreNormMatch(movie.norm, tokens, movie.name)
       if (score > 0) {
         scored.push(movie)
         scoreById.set(movie.id, score)

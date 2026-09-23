@@ -98,7 +98,7 @@ self.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     const tokens = parseSearchQuery(message.query)
     const scored: Array<{ index: number; score: number }> = []
     for (let index = 0; index < entries.length; index++) {
-      const score = scoreNormMatch(entries[index].norm || "", tokens)
+      const score = scoreNormMatch(entries[index].norm || "", tokens, entries[index].name)
       if (score > 0) scored.push({ index, score })
     }
     scored.sort((left, right) => right.score - left.score)

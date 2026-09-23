@@ -130,7 +130,7 @@ export function searchCastChannels(channels: CastChannel[], query: string): Cast
 
   for (const channel of channels) {
     if (channel.isHeader) continue
-    let score = scoreNormMatch(channel.norm || normalize(channel.name), tokens)
+    let score = scoreNormMatch(channel.norm || normalize(channel.name), tokens, channel.name)
     if (numericQuery) {
       const idText = String(channel.id)
       const chnoText = channel.chno != null ? String(channel.chno) : ""

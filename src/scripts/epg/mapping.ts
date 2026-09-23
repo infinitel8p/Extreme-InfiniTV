@@ -138,7 +138,7 @@ function rebuildFiltered() {
   for (let i = 0; i < cachedChannels.length; i++) {
     const channel = cachedChannels[i]
     if (!channelMatchesFilter(channel)) continue
-    if (!matchesNormQuery(cachedChannelsNorm[i], tokens)) continue
+    if (!matchesNormQuery(cachedChannelsNorm[i], tokens, channel.name)) continue
     filteredChannels.push(channel)
   }
 }

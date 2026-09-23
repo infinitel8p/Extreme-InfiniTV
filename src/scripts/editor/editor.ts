@@ -862,7 +862,7 @@ function applySourceFilter(): void {
       return false
     }
     const norm = channel.norm || normalize(channel.name || "")
-    return matchesNormQuery(norm, tokens)
+    return matchesNormQuery(norm, tokens, channel.name)
   })
   const sortMode = sourceSortSelect?.value || "default"
   if (sortMode === "az" || sortMode === "za") {
