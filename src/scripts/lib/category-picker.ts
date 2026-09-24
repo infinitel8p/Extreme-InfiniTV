@@ -7,7 +7,7 @@
 // pre-extraction versions.
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { matchesNormQuery, normalize, parseSearchQuery, scoreNormMatch, type SearchToken } from "@/scripts/lib/text.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { ICON_X } from "@/scripts/lib/icons.js"
 import {
@@ -217,7 +217,7 @@ export function mountCategoryPicker(
           : [((item.category || "") + "").trim()]
       // An item present in several groups counts toward every one of them.
       for (const group of groups) {
-        const key = group.trim() || t("list.uncategorized")
+        const key = group.trim() || t("stream.uncategorized")
         counts.set(key, (counts.get(key) || 0) + 1)
       }
     }
@@ -556,8 +556,7 @@ export function mountCategoryPicker(
 
   const filterCategories = (): void => {
     if (!listEl || !statusEl || !searchEl) return
-    const qnorm = normalize(searchEl.value || "")
-    const tokens = qnorm.length ? qnorm.split(" ") : []
+    const tokens = parseSearchQuery(searchEl.value)
     const mode = categoryMode()
     const allowed = mode === "select" ? allowedSet() : null
     const filterToSelected = mode === "select" && showSelectedOnly
@@ -575,9 +574,8 @@ export function mountCategoryPicker(
       const isRegularRow = !isAllButton && !isPseudo
       if (isRegularRow) totalCount++
       const label = row.dataset.searchLabel || normalize(val || row.textContent || "")
-      const searchMatches =
-        !tokens.length || tokens.every((token) => label.includes(token))
-      let show = searchMatches
+      const rawName = row.dataset.searchLabel ? null : val || row.textContent || ""
+      let show = matchesNormQuery(label, tokens, rawName)
       if (show && filterToSelected && isRegularRow) {
         show = !!allowed && allowed.has(val)
       }
@@ -609,7 +607,7 @@ export function mountCategoryPicker(
   }
 
   // Reorder regular category rows by search relevance when a query is active
-  const sortRegularRows = (tokens: string[]): void => {
+  const sortRegularRows = (tokens: SearchToken[]): void => {
     if (!listEl) return
     const rows = Array.from(
       listEl.querySelectorAll<HTMLElement>(
@@ -621,8 +619,9 @@ export function mountCategoryPicker(
     const scoreOf = (row: HTMLElement): number => {
       if (!tokens.length) return 0
       if (row.style.display === "none") return 0
-      const label = normalize(row.dataset.val || row.textContent || "")
-      return scoreNormMatch(label, tokens)
+      const rawName = row.dataset.val || row.textContent || ""
+      const label = normalize(rawName)
+      return scoreNormMatch(label, tokens, rawName)
     }
     const origOf = (row: HTMLElement): number =>
       Number(row.dataset.origIndex) || 0
@@ -784,11 +783,13 @@ export function mountCategoryPicker(
 
   // Sync-with-Live toggle (EPG only). Reflect current state on mount so the
   // checkbox doesn't show a hardcoded "checked".
+  let reflectSyncInput: () => void = () => {}
   if (syncInput && opts.kind === "epg") {
     const reflectSync = (): void => {
       const pid = opts.getActivePlaylistId()
       syncInput.checked = pid ? getSyncEpgWithLive(pid) : true
     }
+    reflectSyncInput = reflectSync
     reflectSync()
     syncInput.addEventListener("change", () => {
       const pid = opts.getActivePlaylistId()
@@ -920,6 +921,7 @@ export function mountCategoryPicker(
 
   return {
     rerender: () => {
+      reflectSyncInput()
       scheduleListRefresh()
       scheduleGenreRefresh()
     },

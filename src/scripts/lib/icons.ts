@@ -39,6 +39,8 @@ export const ICON_SPARKLES = wrap(
     '<path d="M9 18a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6z" />'
 )
 
+export const ICON_BOLT = wrap('<path d="M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11" />')
+
 export const ICON_X = wrap(
   '<path d="M18 6l-12 12" />' + '<path d="M6 6l12 12" />'
 )
@@ -100,6 +102,25 @@ export const ICON_WORLD = wrap(
     '<path d="M12.5 3a17 17 0 0 1 0 18" />'
 )
 
+export const ICON_LINK = wrap(
+  '<path d="M9 15l6 -6" />' +
+    '<path d="M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464" />' +
+    '<path d="M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463" />'
+)
+
+export const ICON_FOLDER_PLUS = wrap(
+  '<path d="M12 19h-7a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2h4l3 3h7a2 2 0 0 1 2 2v3.5" />' +
+    '<path d="M16 19h6" />' +
+    '<path d="M19 16v6" />'
+)
+
+export const ICON_REPLACE = wrap(
+  '<path d="M3 4a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4" />' +
+    '<path d="M15 16a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4" />' +
+    '<path d="M21 11v-3a2 2 0 0 0 -2 -2h-6l3 3m0 -6l-3 3" />' +
+    '<path d="M3 13v3a2 2 0 0 0 2 2h6l-3 -3m0 6l3 -3" />'
+)
+
 export const ICON_PLAYLIST_ADD = wrap(
   '<path d="M19 8h-14" />' +
     '<path d="M5 12h9" />' +
@@ -118,6 +139,12 @@ export const ICON_DOTS = wrap(
   '<path d="M5 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
     '<path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
     '<path d="M19 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />'
+)
+
+export const ICON_DOTS_VERTICAL = wrap(
+  '<path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M11 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M11 5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />'
 )
 
 export const ICON_CLOCK_EDIT = wrap(
@@ -254,4 +281,40 @@ export const ICON_ARROWS_SHUFFLE = wrap(
     '<path d="M18 20l3 -3l-3 -3" />' +
     '<path d="M3 7h3a5 5 0 0 1 5 5a5 5 0 0 0 5 5h5" />' +
     '<path d="M21 7h-5a4.978 4.978 0 0 0 -3 1m-4 8a4.984 4.984 0 0 1 -3 1h-3" />'
+)
+
+export const ICON_MAXIMIZE = wrap(
+  '<path d="M4 8v-2a2 2 0 0 1 2 -2h2" />' +
+    '<path d="M4 16v2a2 2 0 0 0 2 2h2" />' +
+    '<path d="M16 4h2a2 2 0 0 1 2 2v2" />' +
+    '<path d="M16 20h2a2 2 0 0 0 2 -2v-2" />'
+)
+
+export const ICON_MINIMIZE = wrap(
+  '<path d="M15 19v-2a2 2 0 0 1 2 -2h2" />' +
+    '<path d="M15 5v2a2 2 0 0 0 2 2h2" />' +
+    '<path d="M5 15h2a2 2 0 0 1 2 2v2" />' +
+    '<path d="M5 9h2a2 2 0 0 0 2 -2v-2" />'
+)
+
+export const ICON_ARROWS_MAXIMIZE = wrap(
+  '<path d="M16 4l4 0l0 4" />' +
+    '<path d="M14 10l6 -6" />' +
+    '<path d="M8 20l-4 0l0 -4" />' +
+    '<path d="M4 20l6 -6" />' +
+    '<path d="M16 20l4 0l0 -4" />' +
+    '<path d="M14 14l6 6" />' +
+    '<path d="M8 4l-4 0l0 4" />' +
+    '<path d="M4 4l6 6" />'
+)
+
+export const ICON_ARROWS_MINIMIZE = wrap(
+  '<path d="M5 9l4 0l0 -4" />' +
+    '<path d="M3 3l6 6" />' +
+    '<path d="M5 15l4 0l0 4" />' +
+    '<path d="M3 21l6 -6" />' +
+    '<path d="M19 9l-4 0l0 -4" />' +
+    '<path d="M15 9l6 -6" />' +
+    '<path d="M19 15l-4 0l0 4" />' +
+    '<path d="M15 15l6 6" />'
 )

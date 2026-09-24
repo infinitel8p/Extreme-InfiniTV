@@ -209,8 +209,7 @@ export function applyChannelOverrides<Channel extends OverridableChannel>(
     const next: Channel & OverriddenChannel = { ...channel, overrideKey: key as string }
     if (record.name) {
       next.name = record.name
-      // norm backs every search and filter box, so it has to follow the new name.
-      next.norm = normalize(`${record.name} ${channel.category || ""} ${channel.tvgId || ""}`)
+      next.norm = normalize(record.name)
     }
     if (record.logo) next.logo = record.logo
     if (record.chno != null) next.chno = record.chno

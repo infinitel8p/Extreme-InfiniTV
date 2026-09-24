@@ -1,7 +1,7 @@
 // Mounts the per-route view module into #tv-main's [data-tv-view-root] on every astro:page-load, tearing the previous one down on astro:before-swap.
 
 import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
-import { beginNavigationTransition, endNavigationTransition } from "@/scripts/tv/motion"
+import { beginNavigationTransition, endNavigationTransition, memoryConservative } from "@/scripts/tv/motion"
 
 export const TV_VIEW_MOUNTED_EVENT = "xt:tv-view-mounted"
 
@@ -120,17 +120,32 @@ function teardownCurrentView(): void {
 const WARMUP_ORDER = ["movies", "series", "search", "movies-detail", "series-detail"]
 let warmupStarted = false
 
+// -Infinity, not 0: performance.now() starts near 0 and would read as "hot" before any key.
+const INPUT_HOT_WINDOW_MS = 500
+let lastKeydownAt = -Infinity
+
+function noteKeydownForWarmup(): void {
+  lastKeydownAt = performance.now()
+}
+
 function warmViewModules(): void {
   if (warmupStarted) return
   warmupStarted = true
+  // A forced idle timeout would preempt input on the devices the lite tier targets.
+  const lite = memoryConservative()
   const schedule =
     typeof window.requestIdleCallback === "function"
-      ? (fn: () => void) => window.requestIdleCallback(fn, { timeout: 8000 })
+      ? (fn: () => void) => window.requestIdleCallback(fn, lite ? undefined : { timeout: 8000 })
       : (fn: () => void) => setTimeout(fn, 1500)
   const pending = WARMUP_ORDER.filter((view) => VIEW_LOADERS[view])
   const warmNext = (): void => {
-    const view = pending.shift()
+    const view = pending[0]
     if (!view) return
+    if (performance.now() - lastKeydownAt < INPUT_HOT_WINDOW_MS) {
+      schedule(warmNext)
+      return
+    }
+    pending.shift()
     VIEW_LOADERS[view]()
       .then((module) => resolvedViewModules.set(view, module.default))
       .catch(() => {})
@@ -181,28 +196,50 @@ async function mountCurrentView(): Promise<void> {
   warmViewModules()
 }
 
-function preloadViewForHref(href: string): void {
-  let pathname: string
-  try {
-    pathname = new URL(href, location.href).pathname
-  } catch {
-    return
+// A card refocus is then a Set lookup, not a re-import.
+const preloadedHrefs = new Set<string>()
+
+function scheduleModuleImport(loader: ViewLoader, view: string): void {
+  const run = (): void => {
+    loader()
+      .then((module) => resolvedViewModules.set(view, module.default))
+      .catch(() => {})
   }
-  const view = PATH_TO_VIEW[pathname.replace(/\/+$/, "") || "/tv"]
+  if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(run)
+  else setTimeout(run, 200)
+}
+
+function preloadViewForLink(link: HTMLAnchorElement): void {
+  if (preloadedHrefs.has(link.href)) return
+  preloadedHrefs.add(link.href)
+  const view = PATH_TO_VIEW[link.pathname.replace(/\/+$/, "") || "/tv"]
   const loader = view && VIEW_LOADERS[view]
   if (!loader || resolvedViewModules.has(view)) return
-  loader()
-    .then((module) => resolvedViewModules.set(view, module.default))
-    .catch(() => {})
+  scheduleModuleImport(loader, view)
 }
 
 function onLinkFocusIn(event: FocusEvent): void {
   const target = event.target
   const link = target instanceof HTMLElement ? target.closest<HTMLAnchorElement>('a[href^="/tv"]') : null
-  if (link) preloadViewForHref(link.href)
+  if (link) preloadViewForLink(link)
+}
+
+// Races requestAnimationFrame against a setTimeout fallback (mirrors nextPaint()) so a
+// hidden/backgrounded document - which never runs rAF - can't leave navigationTransitionActive
+// stuck true and block every later startViewTransitionSafe() call.
+function endNavigationTransitionSoon(): void {
+  let settled = false
+  const done = (): void => {
+    if (settled) return
+    settled = true
+    endNavigationTransition()
+  }
+  requestAnimationFrame(done)
+  setTimeout(done, 250)
 }
 
 export function mountTvRouter(): void {
+  window.addEventListener("keydown", noteKeydownForWarmup, { passive: true, capture: true })
   document.addEventListener("focusin", onLinkFocusIn)
   // Brackets the whole Astro navigation transition so a view's own prepaint/setEntries
   // never starts a second, nested document.startViewTransition while Astro's is in flight.
@@ -211,7 +248,7 @@ export function mountTvRouter(): void {
   document.addEventListener("astro:after-swap", prepaintCurrentView)
   document.addEventListener("astro:page-load", () => {
     void mountCurrentView()
-    requestAnimationFrame(endNavigationTransition)
+    endNavigationTransitionSoon()
   })
   // A no-op today (no module is resolved yet on a cold boot) but keeps the hard-load
   // path consistent should a future bfcache-like restore ever warm modules first.

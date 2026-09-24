@@ -69,7 +69,18 @@
       title: entry.title || "Untitled playlist",
     }))
 
-    const raw = getAllGlobalFavorites()
+    const playlistRank = new Map()
+    playlistRank.set(activePlaylistId, 0)
+    let nextRank = 1
+    for (const playlist of playlists) {
+      if (playlist.id === activePlaylistId) continue
+      playlistRank.set(playlist.id, nextRank++)
+    }
+    const rankFor = (playlistId) => playlistRank.get(playlistId) ?? Number.MAX_SAFE_INTEGER
+
+    const raw = getAllGlobalFavorites().sort(
+      (rowA, rowB) => rankFor(rowA.playlistId) - rankFor(rowB.playlistId)
+    )
     const needed = new Map()
     for (const row of raw) {
       const kinds = needed.get(row.playlistId) || new Set()
@@ -103,10 +114,11 @@
         })
       }
 
-      entries = raw.map((row) => {
+      entries = raw.flatMap((row) => {
         const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
         const rowLookups = lookups.get(row.playlistId)
         const item = rowLookups?.[row.kind]?.get(Number(row.id))
+        if (item?.isHeader) return []
         // Hidden-channel favorites and unresolved custom-playlist channels both
         // miss the live lookup once the catalog is cached - can't tune either.
         const unavailable = row.kind === "live" && !item && !!rowLookups?.liveCacheAvailable
@@ -127,7 +139,7 @@
             logo: meta?.logo ?? item?.logo ?? null,
           })
         }
-        return {
+        return [{
           playlistId: row.playlistId,
           playlistTitle: titleById.get(row.playlistId) || "Removed playlist",
           kind: row.kind,
@@ -137,7 +149,7 @@
           href: buildHref(row.kind, row.id),
           isCrossPlaylist: row.playlistId !== activePlaylistId,
           unavailable,
-        }
+        }]
       })
     }
 
@@ -224,11 +236,23 @@
     }
   }
 
+  const VALID_KIND_FILTERS = new Set(["live", "vod", "series"])
+
   function setFilter(next) {
     filter = next
+    if (typeof history !== "undefined") {
+      const url = new URL(location.href)
+      if (next === "all") url.searchParams.delete("kind")
+      else url.searchParams.set("kind", next)
+      history.replaceState(null, "", url)
+    }
   }
 
   onMount(() => {
+    if (typeof location !== "undefined") {
+      const kindParam = new URLSearchParams(location.search).get("kind")
+      if (VALID_KIND_FILTERS.has(kindParam)) filter = kindParam
+    }
     reload()
     const onLocale = () => { locale++ }
     let warmedRaf = 0

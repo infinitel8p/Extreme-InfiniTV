@@ -7,7 +7,7 @@ import {
   isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { normalize, parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
 import {
@@ -794,8 +794,7 @@ function applyFilter() {
   if (!listStatus) return
   // An active-but-unresolved person filter must never paint the unfiltered grid.
   if (personFilter.guardUnresolved()) return
-  const qnorm = normalize(searchEl?.value || "")
-  const tokens = qnorm.length ? qnorm.split(" ") : []
+  const tokens = parseSearchQuery(searchEl?.value || "")
 
   const activeCat = picker.getActiveCat()
   let out
@@ -834,7 +833,7 @@ function applyFilter() {
     scoreById = new Map()
     const scored = []
     for (const series of out) {
-      const score = scoreNormMatch(series.norm, tokens)
+      const score = scoreNormMatch(series.norm, tokens, series.name)
       if (score > 0) {
         scored.push(series)
         scoreById.set(series.id, score)

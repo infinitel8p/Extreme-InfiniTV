@@ -1,5 +1,7 @@
 package com.infinitel8p.xtream
 
+import android.app.ActivityManager
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -20,6 +22,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.app.PictureInPictureParams
 import android.util.Log
 import android.util.Rational
@@ -35,6 +39,7 @@ import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.Bitmap
+import android.app.AlertDialog
 import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
@@ -70,7 +75,37 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewCompat
 import java.net.URL
+import android.app.Activity
+import android.provider.OpenableColumns
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.ActivityResultLauncher
+import java.io.InputStream
+
+// Cheap Android TV boxes ship WebView 83; below 111 the app renders unstyled.
+private object WebViewFloor {
+  const val MIN_WEBVIEW_MAJOR = 111
+
+  fun packageName(context: Context): String? = currentPackage(context)?.packageName
+
+  fun versionName(context: Context): String? = currentPackage(context)?.versionName
+
+  fun majorVersion(context: Context): Int? =
+    parseMajor(versionName(context))
+
+  private fun currentPackage(context: Context) = try {
+    WebViewCompat.getCurrentWebViewPackage(context) ?: WebView.getCurrentWebViewPackage()
+  } catch (error: Throwable) {
+    Log.w("WebViewFloor", "getCurrentWebViewPackage failed", error)
+    null
+  }
+
+  private fun parseMajor(versionName: String?): Int? {
+    if (versionName.isNullOrBlank()) return null
+    return Regex("^\\d+").find(versionName)?.value?.toIntOrNull()
+  }
+}
 
 @RequiresApi(Build.VERSION_CODES.O)
 private class RenderGoneGuardingClient(
@@ -263,6 +298,18 @@ class DeviceInfoBridge(private val activity: TauriActivity) {
   @JavascriptInterface
   fun isTv(): Boolean = isLeanback() || isTelevisionUiMode()
 
+  // Feeds motion.ts's classifyEffectTier: below ~256MB signals a low-end TV box even when
+  // navigator.deviceMemory (Chromium WebView) doesn't reliably report one.
+  @JavascriptInterface
+  fun getMemoryClass(): Int {
+    return try {
+      val manager = activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+      manager.memoryClass
+    } catch (e: Throwable) {
+      0
+    }
+  }
+
   @JavascriptInterface
   fun getInstallSource(): String {
     return try {
@@ -289,6 +336,12 @@ class DeviceInfoBridge(private val activity: TauriActivity) {
       Build.MODEL ?: ""
     }
   }
+
+  @JavascriptInterface
+  fun getWebViewPackageName(): String? = WebViewFloor.packageName(activity)
+
+  @JavascriptInterface
+  fun getWebViewVersionName(): String? = WebViewFloor.versionName(activity)
 }
 
 // System screensaver handoff: Settings > Display > Screen saver has no API to preselect
@@ -706,6 +759,163 @@ class IntentBridge(private val activity: TauriActivity) {
         Log.w("xtream-rs", "$context launch threw: $e")
       }
     }
+  }
+}
+
+// GET_CONTENT fallback: Fire TV ships no Documents UI for ACTION_OPEN_DOCUMENT.
+class FilePickBridge(
+  private val activity: TauriActivity,
+  private val webViewProvider: () -> WebView?,
+  private val launcherProvider: () -> ActivityResultLauncher<Intent>?,
+) {
+  companion object {
+    private const val TAG = "AndroidFilePick"
+    private const val MAX_TEXT_BYTES = 16 * 1024 * 1024
+  }
+
+  @Volatile
+  private var pendingRequestId: String? = null
+
+  @JavascriptInterface
+  fun canPickContent(mimeType: String): Boolean {
+    val resolvedMime = mimeType.trim().takeIf { it.isNotEmpty() } ?: "*/*"
+    val intent = Intent(Intent.ACTION_GET_CONTENT)
+      .addCategory(Intent.CATEGORY_OPENABLE)
+      .setType(resolvedMime)
+    return try {
+      activity.packageManager.resolveActivity(intent, 0) != null
+    } catch (e: Throwable) {
+      Log.w(TAG, "canPickContent failed: $e")
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun pickText(requestId: String, mimeTypesCsv: String): Boolean {
+    val launcher = launcherProvider() ?: return false
+    synchronized(this) {
+      if (pendingRequestId != null) return false
+      pendingRequestId = requestId
+    }
+    val mimeTypes = mimeTypesCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = if (mimeTypes.size == 1) mimeTypes[0] else "*/*"
+      if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
+      putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
+    }
+    val chooser = Intent.createChooser(intent, "")
+    val latch = java.util.concurrent.CountDownLatch(1)
+    var launchFailed = false
+    val launch = Runnable {
+      try {
+        launcher.launch(chooser)
+      } catch (e: Throwable) {
+        Log.w(TAG, "pickText launch threw: $e")
+        launchFailed = true
+      } finally {
+        latch.countDown()
+      }
+    }
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+      launch.run()
+    } else {
+      activity.runOnUiThread(launch)
+      latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+    }
+    if (launchFailed) {
+      pendingRequestId = null
+      return false
+    }
+    return true
+  }
+
+  fun handleResult(result: ActivityResult) {
+    val requestId = pendingRequestId
+    pendingRequestId = null
+    if (requestId == null) return
+    val uri = if (result.resultCode == Activity.RESULT_OK) result.data?.data else null
+    if (uri == null) {
+      dispatchResult(requestId, ok = false, cancelled = true)
+      return
+    }
+    Thread { readPickedFile(requestId, uri) }.start()
+  }
+
+  private fun readPickedFile(requestId: String, uri: Uri) {
+    try {
+      val name = queryDisplayName(uri)
+      val stream = activity.contentResolver.openInputStream(uri)
+      if (stream == null) {
+        dispatchResult(requestId, ok = false, error = "could not open file")
+        return
+      }
+      stream.use { input ->
+        val bytes = readCapped(input, MAX_TEXT_BYTES)
+        if (bytes == null) {
+          dispatchResult(requestId, ok = false, error = "too large")
+          return
+        }
+        dispatchResult(requestId, ok = true, text = String(bytes, Charsets.UTF_8), name = name)
+      }
+    } catch (e: Throwable) {
+      Log.w(TAG, "readPickedFile failed: $e")
+      dispatchResult(requestId, ok = false, error = e.message ?: "read failed")
+    }
+  }
+
+  private fun readCapped(input: InputStream, maxBytes: Int): ByteArray? {
+    val out = ByteArrayOutputStream()
+    val chunk = ByteArray(64 * 1024)
+    var total = 0
+    while (true) {
+      val read = input.read(chunk)
+      if (read == -1) break
+      total += read
+      if (total > maxBytes) return null
+      out.write(chunk, 0, read)
+    }
+    return out.toByteArray()
+  }
+
+  private fun queryDisplayName(uri: Uri): String {
+    return try {
+      activity.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { cursor ->
+          val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+          if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) ?: "" else ""
+        } ?: ""
+    } catch (e: Throwable) {
+      Log.w(TAG, "queryDisplayName failed: $e")
+      ""
+    }
+  }
+
+  private fun dispatchResult(
+    requestId: String,
+    ok: Boolean,
+    cancelled: Boolean = false,
+    text: String? = null,
+    name: String? = null,
+    error: String? = null,
+  ) {
+    val webView = webViewProvider() ?: return
+    val payload = JSONObject().apply {
+      put("requestId", requestId)
+      put("ok", ok)
+      if (cancelled) put("cancelled", true)
+      if (text != null) put("text", text)
+      if (name != null) put("name", name)
+      if (error != null) put("error", error)
+    }
+    val script = """
+      (function(){
+        try {
+          document.dispatchEvent(new CustomEvent('xt:android-file-picked', { detail: $payload }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    webView.post { webView.evaluateJavascript(script, null) }
   }
 }
 
@@ -1244,6 +1454,22 @@ class AndroidVideoBridge(
     title: String,
     posterUrl: String,
     startMs: Long,
+    dns: String,
+  ): Boolean = launchVod(contentKey, url, ua, referer, title, posterUrl, startMs, dns, null, null, false)
+
+  @JavascriptInterface
+  fun launchVod(
+    contentKey: String,
+    url: String,
+    ua: String,
+    referer: String,
+    title: String,
+    posterUrl: String,
+    startMs: Long,
+    dns: String,
+    audioLang: String?,
+    subLang: String?,
+    subEnabled: Boolean,
   ): Boolean {
     return tryLaunch(VideoActivity.MODE_VOD) { intent ->
       intent.putExtra(VideoActivity.EXTRA_URL, url)
@@ -1253,6 +1479,10 @@ class AndroidVideoBridge(
       intent.putExtra(VideoActivity.EXTRA_REFERER, referer)
       intent.putExtra(VideoActivity.EXTRA_TITLE, title)
       intent.putExtra(VideoActivity.EXTRA_POSTER, posterUrl)
+      intent.putExtra(VideoActivity.EXTRA_DNS, dns)
+      intent.putExtra(VideoActivity.EXTRA_AUDIO_LANG, audioLang ?: "")
+      intent.putExtra(VideoActivity.EXTRA_SUB_LANG, subLang ?: "")
+      intent.putExtra(VideoActivity.EXTRA_SUB_ENABLED, subEnabled)
     }
   }
 
@@ -1263,14 +1493,19 @@ class AndroidVideoBridge(
     initialChannelId: String,
     ua: String,
     referer: String,
+    dns: String,
   ): Boolean {
     NativePlayerPayload.setChannels(channelsJson)
-    return tryLaunch(VideoActivity.MODE_LIVE) { intent ->
+    val launched = tryLaunch(VideoActivity.MODE_LIVE) { intent ->
       intent.putExtra(VideoActivity.EXTRA_INITIAL_CHANNEL_ID, initialChannelId)
       intent.putExtra(VideoActivity.EXTRA_CONTENT_KEY, contentKey)
       intent.putExtra(VideoActivity.EXTRA_UA, ua)
       intent.putExtra(VideoActivity.EXTRA_REFERER, referer)
+      intent.putExtra(VideoActivity.EXTRA_DNS, dns)
     }
+    // The Activity never started to consume it - don't leave a stale payload for a later launch.
+    if (!launched) NativePlayerPayload.clearChannels()
+    return launched
   }
 
   @JavascriptInterface
@@ -1278,8 +1513,9 @@ class AndroidVideoBridge(
     return EventQueue.drain(activity)
   }
 
+  // channelJson feeds NativeReportMirror so playback keeps reporting once this WebView suspends.
   @JavascriptInterface
-  fun receiverSessionStart(): Boolean {
+  fun receiverSessionStart(channelJson: String): Boolean {
     activity.receiverSessionActive = true
     EventQueue.pushListener = { type, payload ->
       val webView = hostedWebViewRef()
@@ -1291,13 +1527,37 @@ class AndroidVideoBridge(
         true
       }
     }
+    startNativeReportMirrorIfConfigured(channelJson)
     return true
+  }
+
+  private fun startNativeReportMirrorIfConfigured(channelJson: String) {
+    if (channelJson.isBlank()) return
+    try {
+      val channel = JSONObject(channelJson)
+      val port = channel.optInt("port", 0)
+      val token = channel.optString("token")
+      if (port <= 0 || token.isBlank()) return
+      NativeReportMirror.start(
+        NativeReportMirrorConfig(
+          port = port,
+          token = token,
+          generation = channel.optLong("generation"),
+          contentKey = channel.optString("contentKey"),
+          title = channel.optString("title"),
+          isLive = channel.optBoolean("isLive"),
+        )
+      )
+    } catch (error: Throwable) {
+      Log.w("AndroidVideoBridge", "receiverSessionStart channel parse failed: $error")
+    }
   }
 
   @JavascriptInterface
   fun receiverSessionEnd() {
     activity.receiverSessionActive = false
     EventQueue.pushListener = null
+    NativeReportMirror.stop()
     if (NativePlayerControl.isActive()) NativePlayerControl.finishPlayback()
     setKeepScreenOn(false)
   }
@@ -1305,6 +1565,15 @@ class AndroidVideoBridge(
   @JavascriptInterface
   fun setTvOverscan(percent: Int) {
     TvOverscanState.percent = percent.coerceIn(0, 8)
+  }
+
+  @JavascriptInterface
+  fun setTvAccent(hex: String) {
+    TvAccentState.color = try {
+      if (hex.isBlank()) 0 else android.graphics.Color.parseColor(hex)
+    } catch (error: IllegalArgumentException) {
+      0
+    }
   }
 
   @JavascriptInterface
@@ -1358,6 +1627,7 @@ class AndroidVideoBridge(
       val intent = android.content.Intent(activity, VideoActivity::class.java)
       intent.putExtra(VideoActivity.EXTRA_MODE, mode)
       intent.putExtra(VideoActivity.EXTRA_TV_OVERSCAN_PERCENT, TvOverscanState.percent)
+      intent.putExtra(VideoActivity.EXTRA_TV_ACCENT, TvAccentState.color)
       configure(intent)
       activity.runOnUiThread {
         try {
@@ -1371,6 +1641,134 @@ class AndroidVideoBridge(
       Log.w("AndroidVideoBridge", "launch $mode dispatch failed", error)
       false
     }
+  }
+}
+
+// Bridge for the native download foreground service (DownloadForegroundService.kt). JS
+// (downloads.js) owns the queue model + UI in localStorage; native is the source of truth for
+// transfer state on Android, so every mutating call here goes straight through DownloadEngine
+// and this bridge just mirrors its events back into the WebView as `xt:android-download`.
+class DownloadBridge(
+  private val activity: MainActivity,
+  private val hostedWebViewRef: () -> WebView?,
+) {
+  companion object {
+    private const val TAG = "AndroidDownload"
+    private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 4304
+  }
+
+  init {
+    DownloadEvents.pushListener = { record -> dispatchToWebView(record) }
+  }
+
+  @JavascriptInterface
+  fun isSupported(): Boolean = true
+
+  @JavascriptInterface
+  fun start(json: String): Boolean {
+    return try {
+      requestNotificationPermissionIfNeeded()
+      DownloadEngine.start(activity, JSONObject(json))
+    } catch (error: Throwable) {
+      Log.w(TAG, "start failed", error)
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun pause(id: String): Boolean {
+    return try {
+      DownloadEngine.pause(id)
+    } catch (error: Throwable) {
+      Log.w(TAG, "pause failed", error)
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun resume(id: String): Boolean {
+    return try {
+      DownloadEngine.resume(id)
+    } catch (error: Throwable) {
+      Log.w(TAG, "resume failed", error)
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun remove(id: String): Boolean {
+    return try {
+      DownloadEngine.remove(id)
+    } catch (error: Throwable) {
+      Log.w(TAG, "remove failed", error)
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun setMaxConcurrent(n: Int) {
+    try {
+      DownloadEngine.setMaxConcurrent(activity, n)
+    } catch (error: Throwable) {
+      Log.w(TAG, "setMaxConcurrent failed", error)
+    }
+  }
+
+  // Used by the app's "Reset everything" flow.
+  @JavascriptInterface
+  fun clearAll(): Boolean {
+    return try {
+      DownloadEngine.clearAll(activity)
+    } catch (error: Throwable) {
+      Log.w(TAG, "clearAll failed", error)
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun snapshot(): String {
+    return try {
+      DownloadEngine.snapshot(activity)
+    } catch (error: Throwable) {
+      Log.w(TAG, "snapshot failed", error)
+      "[]"
+    }
+  }
+
+  private fun requestNotificationPermissionIfNeeded() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    if (ActivityCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+    try {
+      ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+        NOTIFICATION_PERMISSION_REQUEST_CODE
+      )
+    } catch (error: Throwable) {
+      Log.w(TAG, "requestPermissions failed", error)
+    }
+  }
+
+  private fun dispatchToWebView(record: JSONObject) {
+    val webView = hostedWebViewRef() ?: return
+    val script = """
+      (function(){
+        try {
+          document.dispatchEvent(new CustomEvent('xt:android-download', { detail: $record }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    activity.runOnUiThread { webView.evaluateJavascript(script, null) }
+  }
+
+  // Called from MainActivity.onDestroy so a recreate() doesn't leave a stale WebView reference wired up.
+  // Does NOT stop DownloadForegroundService - downloads must outlive the activity.
+  fun activityDestroyed() {
+    DownloadEvents.pushListener = null
   }
 }
 
@@ -1970,13 +2368,16 @@ class MainActivity : TauriActivity() {
 
   private var fullscreenView: View? = null
   private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
-  private var originalSystemUi: Int = 0
 
   // Cached so the back-press handler can call onHideCustomView without re-walking the view tree.
   private var hostedWebView: WebView? = null
 
   // Cached so onDestroy() can tear down the throwaway sniffer WebView if it's still running.
   private var snifferBridge: SnifferBridge? = null
+
+  // Cached so onDestroy() can clear DownloadEvents.pushListener. DownloadForegroundService itself
+  // is NOT touched here - downloads must keep running after the activity is destroyed.
+  private var downloadBridge: DownloadBridge? = null
 
   // Cached so onDestroy() can unregister/stop NSD listeners.
   private var nsdBridge: NsdBridge? = null
@@ -1986,6 +2387,10 @@ class MainActivity : TauriActivity() {
 
   // Cached so onResume() can clear the wake notification once the app is actually up.
   private var receiverWakeBridge: ReceiverWakeBridge? = null
+
+  // Registered in onCreate (before STARTED); handed to FilePickBridge once the WebView exists.
+  private var filePickLauncher: ActivityResultLauncher<Intent>? = null
+  private var filePickBridge: FilePickBridge? = null
 
   // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
   @Volatile
@@ -2005,12 +2410,16 @@ class MainActivity : TauriActivity() {
 
   private val rendererRecreating = AtomicBoolean(false)
 
+  private var webViewFloorDialog: AlertDialog? = null
+
   companion object {
     private const val RENDER_GONE_REPEAT_WINDOW_MS = 60_000L
     // Frees the back guard if the WebView dies before evaluateJavascript answers.
     private const val BACK_JS_TIMEOUT_MS = 1_500L
     @Volatile
     private var lastRenderGoneAt: Long = 0L
+    @Volatile
+    private var webViewFloorDialogShown: Boolean = false
   }
 
   // Some WebViews emit no DOM event for DPAD_CENTER on inputmode="none" inputs, so the
@@ -2040,6 +2449,12 @@ class MainActivity : TauriActivity() {
     // recreate() after a WebView render-process-gone restart, where the
     // singleton's lateinit still points at the dead activity.
     bindPluginManagerLaunchers()
+
+    filePickLauncher = registerForActivityResult(
+      ActivityResultContracts.StartActivityForResult()
+    ) { result -> filePickBridge?.handleResult(result) }
+
+    maybeShowWebViewFloorDialog()
 
     // Back button order: exit fullscreen, page-level JS handler, WebView history, app exit.
     onBackPressedDispatcher.addCallback(
@@ -2151,6 +2566,58 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  private fun maybeShowWebViewFloorDialog() {
+    if (webViewFloorDialogShown || isFinishing) return
+    try {
+      val majorVersion = WebViewFloor.majorVersion(this) ?: return
+      if (majorVersion >= WebViewFloor.MIN_WEBVIEW_MAJOR) return
+      val versionName = WebViewFloor.versionName(this) ?: majorVersion.toString()
+      val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        .setTitle(R.string.webview_floor_title)
+        .setMessage(getString(R.string.webview_floor_message, WebViewFloor.MIN_WEBVIEW_MAJOR, versionName))
+        .setCancelable(true)
+        .setPositiveButton(R.string.webview_floor_get_beta) { _, _ -> openWebViewBetaListing() }
+        .setNeutralButton(R.string.webview_floor_developer_options) { _, _ -> openDeveloperOptions() }
+        .setNegativeButton(R.string.webview_floor_continue) { dialog, _ -> dialog.dismiss() }
+        .create()
+      dialog.show()
+      webViewFloorDialog = dialog
+      webViewFloorDialogShown = true
+    } catch (error: Throwable) {
+      Log.w("xtream-rs", "WebView floor check failed", error)
+    }
+  }
+
+  private fun openWebViewBetaListing() {
+    try {
+      startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.google.android.webview.beta")))
+    } catch (error: ActivityNotFoundException) {
+      try {
+        startActivity(
+          Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.webview.beta"))
+        )
+      } catch (fallbackError: Throwable) {
+        Log.w("xtream-rs", "WebView Beta listing open failed", fallbackError)
+      }
+    } catch (error: Throwable) {
+      Log.w("xtream-rs", "WebView Beta listing open failed", error)
+    }
+  }
+
+  private fun openDeveloperOptions() {
+    try {
+      startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+    } catch (error: ActivityNotFoundException) {
+      try {
+        startActivity(Intent(Settings.ACTION_SETTINGS))
+      } catch (fallbackError: Throwable) {
+        Log.w("xtream-rs", "Developer options open failed", fallbackError)
+      }
+    } catch (error: Throwable) {
+      Log.w("xtream-rs", "Developer options open failed", error)
+    }
+  }
+
   // See https://github.com/tauri-apps/tauri/issues/13049.
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
@@ -2162,12 +2629,18 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(ScreensaverBridge(this), "AndroidScreensaver")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
+    val filePick = FilePickBridge(this, { hostedWebView }, { filePickLauncher })
+    filePickBridge = filePick
+    webView.addJavascriptInterface(filePick, "AndroidFilePick")
     webView.addJavascriptInterface(AndroidVideoBridge(this, { hostedWebView }), "AndroidVideo")
     webView.addJavascriptInterface(HapticsBridge(this, { hostedWebView }), "AndroidHaptics")
     webView.addJavascriptInterface(ImeBridge(this, { hostedWebView }), "AndroidIme")
     val sniffer = SnifferBridge(this, { hostedWebView })
     snifferBridge = sniffer
     webView.addJavascriptInterface(sniffer, "AndroidSniffer")
+    val download = DownloadBridge(this, { hostedWebView })
+    downloadBridge = download
+    webView.addJavascriptInterface(download, "AndroidDownload")
     val nsd = NsdBridge(this)
     nsdBridge = nsd
     webView.addJavascriptInterface(nsd, "AndroidNsd")
@@ -2243,7 +2716,6 @@ class MainActivity : TauriActivity() {
           fullscreenCallback = callback
 
           val decor = window.decorView as FrameLayout
-          originalSystemUi = decor.systemUiVisibility
           decor.addView(
             view,
             FrameLayout.LayoutParams(
@@ -2251,21 +2723,31 @@ class MainActivity : TauriActivity() {
               ViewGroup.LayoutParams.MATCH_PARENT
             )
           )
-          decor.systemUiVisibility =
-            (View.SYSTEM_UI_FLAG_FULLSCREEN
-              or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-              or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
+          applyImmersiveBars(true)
         }
       },
       onHide = {
         val decor = window.decorView as FrameLayout
         fullscreenView?.let { decor.removeView(it) }
-        decor.systemUiVisibility = originalSystemUi
+        applyImmersiveBars(false)
         fullscreenCallback?.onCustomViewHidden()
         fullscreenView = null
         fullscreenCallback = null
       }
     )
+  }
+
+  // Legacy systemUiVisibility flags are ignored by HyperOS once the insets controller is in use.
+  private fun applyImmersiveBars(hidden: Boolean) {
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    if (hidden) controller.hide(WindowInsetsCompat.Type.systemBars())
+    else controller.show(WindowInsetsCompat.Type.systemBars())
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus && fullscreenView != null) applyImmersiveBars(true)
   }
 
   override fun onUserLeaveHint() {
@@ -2299,6 +2781,7 @@ class MainActivity : TauriActivity() {
       hostedWebView?.evaluateJavascript("window.__xtPipFullscreen?.()", null)
     } else {
       hostedWebView?.evaluateJavascript("window.__xtPipExitFullscreen?.()", null)
+      if (fullscreenView != null) applyImmersiveBars(true)
     }
   }
 
@@ -2314,11 +2797,33 @@ class MainActivity : TauriActivity() {
     if (receiverSessionActive || receiverPageForeground) hostedWebView?.onResume()
   }
 
+  // Android memory pressure: release resident image/ambient/enrichment caches before the OS
+  // starts killing background processes, and let the WebView drop its own HTTP cache.
+  override fun onTrimMemory(level: Int) {
+    super.onTrimMemory(level)
+    if (level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
+    val webView = hostedWebView ?: return
+    webView.clearCache(false)
+    val script = """
+      document.dispatchEvent(new CustomEvent('xt:memory-pressure', { detail: { level: $level } }));
+    """.trimIndent()
+    webView.post { webView.evaluateJavascript(script, null) }
+  }
+
   // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.
   override fun onDestroy() {
+    webViewFloorDialog?.let { dialog ->
+      if (dialog.isShowing) {
+        dialog.dismiss()
+        // User never got to act on it, so let it reappear after recreate().
+        webViewFloorDialogShown = false
+      }
+    }
+    webViewFloorDialog = null
     // Closes over this activity's WebView, so a recreate() would leave it swallowing every receiver event.
     if (receiverSessionActive) EventQueue.pushListener = null
     snifferBridge?.activityDestroyed()
+    downloadBridge?.activityDestroyed()
     nsdBridge?.activityDestroyed()
     castMediaBridge?.activityDestroyed()
     if (isFinishing && receiverModeActive) {

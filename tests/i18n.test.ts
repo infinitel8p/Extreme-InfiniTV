@@ -71,6 +71,22 @@ function seedStaleSpanishCache(): void {
   )
 }
 
+function seedSpanishCacheWithVersion(appVersion: string): void {
+  localStorage.setItem("xt_locale", "es")
+  localStorage.setItem(
+    "xt_locale_messages_v3",
+    JSON.stringify({ code: "es", appVersion, messages: es })
+  )
+}
+
+function setAppVersionMeta(content: string): HTMLMetaElement {
+  const meta = document.createElement("meta")
+  meta.setAttribute("name", "x-app-version")
+  meta.setAttribute("content", content)
+  document.head.appendChild(meta)
+  return meta
+}
+
 beforeEach(() => {
   vi.resetModules()
   vi.stubGlobal("localStorage", localStorageMock)
@@ -127,5 +143,56 @@ describe("initI18n background refresh", () => {
 
     expect(t(DENSITY_KEY)).toBe(en[DENSITY_KEY])
     expect(localStorage.getItem("xt_locale_messages_v3")).toBe(null)
+  })
+
+  it("skips the refresh entirely when the cached snapshot's app version stamp matches", async () => {
+    const meta = setAppVersionMeta("9.9.9")
+    seedSpanishCacheWithVersion("9.9.9")
+
+    const { initI18n, LOCALE_EVENT } = await import("@/scripts/lib/i18n")
+    const handler = vi.fn()
+    document.addEventListener(LOCALE_EVENT, handler)
+    await initI18n()
+    await Promise.resolve()
+    await Promise.resolve()
+    document.removeEventListener(LOCALE_EVENT, handler)
+    meta.remove()
+
+    // Only the initial setLocale dispatch - the version stamp matched, so the
+    // background refresh never re-fetched or re-dispatched.
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it("still refreshes when the cached snapshot's app version stamp differs", async () => {
+    const meta = setAppVersionMeta("9.9.9")
+    seedSpanishCacheWithVersion("1.0.0")
+
+    const { initI18n, LOCALE_EVENT } = await import("@/scripts/lib/i18n")
+    const receivedCodes = waitForLocaleEvents(LOCALE_EVENT, 2)
+    await initI18n()
+    await expect(receivedCodes).resolves.toEqual(["es", "es"])
+    meta.remove()
+  })
+})
+
+describe("shouldRefreshLocaleCache", () => {
+  it("refreshes when there is no seeded stamp", async () => {
+    const { shouldRefreshLocaleCache } = await import("@/scripts/lib/i18n")
+    expect(shouldRefreshLocaleCache(null, "1.0.0")).toBe(true)
+  })
+
+  it("refreshes when there is no current stamp to compare against", async () => {
+    const { shouldRefreshLocaleCache } = await import("@/scripts/lib/i18n")
+    expect(shouldRefreshLocaleCache("1.0.0", null)).toBe(true)
+  })
+
+  it("refreshes when the stamps differ", async () => {
+    const { shouldRefreshLocaleCache } = await import("@/scripts/lib/i18n")
+    expect(shouldRefreshLocaleCache("1.0.0", "1.1.0")).toBe(true)
+  })
+
+  it("skips the refresh when the stamps match", async () => {
+    const { shouldRefreshLocaleCache } = await import("@/scripts/lib/i18n")
+    expect(shouldRefreshLocaleCache("1.0.0", "1.0.0")).toBe(false)
   })
 })

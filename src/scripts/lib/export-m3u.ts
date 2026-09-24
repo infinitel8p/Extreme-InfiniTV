@@ -32,7 +32,8 @@ export async function buildM3UEntriesForEntry(entry: any): Promise<BuildM3UResul
   const entries: M3UEntry[] = []
   let skippedCount = 0
   for (const channel of list) {
-    if (!channel || channel.unresolved) {
+    if (!channel || channel.isHeader) continue
+    if (channel.unresolved) {
       skippedCount++
       continue
     }
