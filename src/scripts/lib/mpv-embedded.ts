@@ -1595,11 +1595,10 @@ export async function createMpvEmbeddedHandle(
     getMediaElement() {
       return null
     },
-    requestFullscreen() {
-      const result = container.requestFullscreen?.()
+    async requestFullscreen() {
       windowFullscreenSet = true
-      void setWindowFullscreen(true)
-      return result
+      await setWindowFullscreen(true)
+      return container.requestFullscreen?.()
     },
     isFullscreen() {
       return document.fullscreenElement === container

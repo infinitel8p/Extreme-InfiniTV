@@ -60,14 +60,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, GetClientRect, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IsWindow, IsZoomed, NCCALCSIZE_PARAMS, RegisterClassExW,
-    SendMessageW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
+    SendMessageW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW,
     GWL_STYLE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
     HWND_BOTTOM, SC_MAXIMIZE, SC_RESTORE, SW_HIDE, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, WM_CLOSE, WM_KEYDOWN, WM_MOVE, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCHITTEST,
     WM_NCLBUTTONDBLCLK, WM_NCPAINT, WM_SIZE, WM_SIZING, WM_SYSCOMMAND, WMSZ_BOTTOM,
     WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
-    WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+    WNDCLASSEXW, WS_CLIPCHILDREN,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -89,6 +89,10 @@ const MPV_WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MPV_WINDOW_POLL_BUDGET: Duration = Duration::from_secs(30);
 #[cfg(target_os = "windows")]
 const MAIN_THREAD_CALL_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const FULLSCREEN_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+#[cfg(target_os = "windows")]
+const FULLSCREEN_EXIT_POLL_BUDGET: Duration = Duration::from_millis(1500);
 
 const TIME_POS_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -351,13 +355,10 @@ pub struct MpvEmbedState {
 #[derive(Default)]
 pub struct MpvEmbedState;
 
-/// Window state saved on entering native fullscreen, restored on exit.
+/// Maximized flag saved on entering native fullscreen, restored on exit.
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Copy)]
 struct SavedWindowState {
-    style: isize,
-    ex_style: isize,
-    rect: RECT,
     maximized: bool,
 }
 
@@ -1960,7 +1961,7 @@ async fn pip_exit(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: S
 }
 
 // ---------------------------------------------------------------------------
-// Native fullscreen (tao's set_fullscreen leaves a maximized window at its restored size)
+// Native fullscreen: tao owns geometry via HTML fullscreen, this only wraps maximize (#214)
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
@@ -1980,21 +1981,6 @@ where
         .map_err(|_| "OTHER:main-thread call dropped".to_string())
 }
 
-// Chromium's HWNDMessageHandler::SetFullscreen mask: drop the frame, keep client-area chrome.
-#[cfg(target_os = "windows")]
-fn fullscreen_style_bits(style: isize) -> isize {
-    style & !((WS_CAPTION.0 as isize) | (WS_THICKFRAME.0 as isize))
-}
-
-#[cfg(target_os = "windows")]
-fn fullscreen_ex_style_bits(ex_style: isize) -> isize {
-    ex_style
-        & !((WS_EX_DLGMODALFRAME.0 as isize)
-            | (WS_EX_WINDOWEDGE.0 as isize)
-            | (WS_EX_CLIENTEDGE.0 as isize)
-            | (WS_EX_STATICEDGE.0 as isize))
-}
-
 /// Idempotent: a second enter (state already saved) is a no-op.
 #[cfg(target_os = "windows")]
 fn enter_window_fullscreen(hwnd: HWND, state: &MpvEmbedState) -> Result<(), String> {
@@ -2006,34 +1992,7 @@ fn enter_window_fullscreen(hwnd: HWND, state: &MpvEmbedState) -> Result<(), Stri
     if maximized {
         unsafe { SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM(SC_RESTORE as usize)), Some(LPARAM(0))) };
     }
-    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
-    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-    let mut rect = RECT::default();
-    unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|error| format!("OTHER:{error}"))?;
-
-    unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style_bits(style)) };
-    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, fullscreen_ex_style_bits(ex_style)) };
-
-    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
-    let mut monitor_info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-    if !unsafe { GetMonitorInfoW(monitor, &mut monitor_info) }.as_bool() {
-        return Err("OTHER:failed to read monitor info".to_string());
-    }
-    let monitor_rect = monitor_info.rcMonitor;
-    unsafe {
-        SetWindowPos(
-            hwnd,
-            None,
-            monitor_rect.left,
-            monitor_rect.top,
-            monitor_rect.right - monitor_rect.left,
-            monitor_rect.bottom - monitor_rect.top,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        )
-    }
-    .map_err(|error| format!("OTHER:{error}"))?;
-
-    *guard = Some(SavedWindowState { style, ex_style, rect, maximized });
+    *guard = Some(SavedWindowState { maximized });
     Ok(())
 }
 
@@ -2042,20 +2001,6 @@ fn enter_window_fullscreen(hwnd: HWND, state: &MpvEmbedState) -> Result<(), Stri
 fn exit_window_fullscreen(hwnd: HWND, state: &MpvEmbedState) -> Result<(), String> {
     let mut guard = state.fullscreen.lock().unwrap_or_else(|poison| poison.into_inner());
     let Some(saved) = guard.take() else { return Ok(()) };
-    unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, saved.style) };
-    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, saved.ex_style) };
-    unsafe {
-        SetWindowPos(
-            hwnd,
-            None,
-            saved.rect.left,
-            saved.rect.top,
-            saved.rect.right - saved.rect.left,
-            saved.rect.bottom - saved.rect.top,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        )
-    }
-    .map_err(|error| format!("OTHER:{error}"))?;
     if saved.maximized {
         unsafe { SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM(SC_MAXIMIZE as usize)), Some(LPARAM(0))) };
     }
@@ -2074,8 +2019,24 @@ fn apply_window_fullscreen(app: &AppHandle, enabled: bool) -> Result<(), String>
     }
 }
 
+// tao flips is_fullscreen() first and queues its restore on the main thread; wait it out.
+#[cfg(target_os = "windows")]
+async fn wait_for_html_fullscreen_exit(app: &AppHandle) {
+    let Some(main_window) = app.get_webview_window("main") else { return };
+    let deadline = Instant::now() + FULLSCREEN_EXIT_POLL_BUDGET;
+    while matches!(main_window.is_fullscreen(), Ok(true)) {
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(FULLSCREEN_EXIT_POLL_INTERVAL).await;
+    }
+}
+
 #[cfg(target_os = "windows")]
 async fn set_window_fullscreen(app: AppHandle, enabled: bool) -> Result<(), String> {
+    if !enabled {
+        wait_for_html_fullscreen_exit(&app).await;
+    }
     let app_for_main_thread = app.clone();
     run_on_main_thread_and_wait(&app, move || apply_window_fullscreen(&app_for_main_thread, enabled)).await??;
     let state = app.state::<MpvEmbedState>();
@@ -3701,30 +3662,6 @@ mod tests {
         let changes = surface_change_set(&Some(previous), &entered_pip);
         assert!(changes.topology);
         assert!(changes.pointer_mode);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn fullscreen_style_bits_drops_the_caption_and_thick_frame() {
-        let style = (WS_CAPTION.0 | WS_THICKFRAME.0 | 0x1000_0000) as isize;
-        assert_eq!(fullscreen_style_bits(style), 0x1000_0000);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn fullscreen_style_bits_leaves_unrelated_bits_untouched() {
-        assert_eq!(fullscreen_style_bits(0x1000_0000), 0x1000_0000);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn fullscreen_ex_style_bits_drops_the_frame_edge_bits() {
-        let ex_style = (WS_EX_DLGMODALFRAME.0
-            | WS_EX_WINDOWEDGE.0
-            | WS_EX_CLIENTEDGE.0
-            | WS_EX_STATICEDGE.0
-            | 0x1000_0000) as isize;
-        assert_eq!(fullscreen_ex_style_bits(ex_style), 0x1000_0000);
     }
 
     #[test]
