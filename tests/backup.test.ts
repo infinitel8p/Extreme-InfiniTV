@@ -124,6 +124,7 @@ vi.mock("@/scripts/lib/app-settings.js", () => ({
   EXTERNAL_PLAYER_PREF_VALUES: ["mpv", "vlc", "ask"],
   getAndroidNativePlayerEnabled: () => settingsState.androidNativePlayer,
   setAndroidNativePlayerEnabled: (on: boolean) => { settingsState.androidNativePlayer = on },
+  getAndroidNativePlayerOptedOut: () => !settingsState.androidNativePlayer,
   getWriteNfoEnabled: () => settingsState.writeNfo,
   setWriteNfoEnabled: (on: boolean) => { settingsState.writeNfo = on },
   getProgressRetentionDays: () => settingsState.progressRetentionDays,
@@ -511,6 +512,68 @@ describe("importAll", () => {
     expect(settingsState.externalPlayerPref).toBe("vlc")
     expect(settingsState.progressRetentionDays).toBe(30)
     expect(settingsState.updateChannel).toBe("beta")
+  })
+
+  it("ignores a legacy androidNativePlayer:false (was just the old default, not an opt-out)", async () => {
+    settingsState.androidNativePlayer = true
+    await importAll({
+      format: "extreme-infinitv-backup",
+      version: 1,
+      creds: { entries: [], selectedId: "" },
+      prefs: {},
+      appSettings: { playback: { androidNativePlayer: false } },
+    })
+
+    expect(settingsState.androidNativePlayer).toBe(true)
+  })
+
+  it("enables the android native player on a legacy androidNativePlayer:true", async () => {
+    settingsState.androidNativePlayer = false
+    await importAll({
+      format: "extreme-infinitv-backup",
+      version: 1,
+      creds: { entries: [], selectedId: "" },
+      prefs: {},
+      appSettings: { playback: { androidNativePlayer: true } },
+    })
+
+    expect(settingsState.androidNativePlayer).toBe(true)
+  })
+
+  it("androidNativePlayerOptOut:true wins over a legacy androidNativePlayer:true", async () => {
+    settingsState.androidNativePlayer = true
+    await importAll({
+      format: "extreme-infinitv-backup",
+      version: 1,
+      creds: { entries: [], selectedId: "" },
+      prefs: {},
+      appSettings: { playback: { androidNativePlayer: true, androidNativePlayerOptOut: true } },
+    })
+
+    expect(settingsState.androidNativePlayer).toBe(false)
+  })
+
+  it("androidNativePlayerOptOut:false enables it", async () => {
+    settingsState.androidNativePlayer = false
+    await importAll({
+      format: "extreme-infinitv-backup",
+      version: 1,
+      creds: { entries: [], selectedId: "" },
+      prefs: {},
+      appSettings: { playback: { androidNativePlayerOptOut: false } },
+    })
+
+    expect(settingsState.androidNativePlayer).toBe(true)
+  })
+
+  it("round-trips the android native player opt-out state through export then import", async () => {
+    settingsState.androidNativePlayer = false
+    const snapshot = await exportAll()
+    settingsState.androidNativePlayer = true
+
+    await importAll(snapshot)
+
+    expect(settingsState.androidNativePlayer).toBe(false)
   })
 
   it("round-trips the discord client id and only restores muted ids for imported entries", async () => {

@@ -283,6 +283,8 @@ export interface NativeVodProgressOptions {
   kind: "vod" | "episode"
   id: string | number
   url: string
+  ua?: string
+  referer?: string
   title?: string
   posterUrl?: string
   startMs?: number
@@ -321,6 +323,8 @@ export function launchAndroidNativeVodWithProgress(
   const launched = launchAndroidNativeVod({
     contentKey,
     url: opts.url,
+    ua: opts.ua,
+    referer: opts.referer,
     title: opts.title,
     posterUrl: opts.posterUrl,
     startMs: opts.startMs,

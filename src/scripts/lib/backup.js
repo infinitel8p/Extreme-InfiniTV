@@ -73,6 +73,7 @@ import {
   EXTERNAL_PLAYER_PREF_VALUES,
   getAndroidNativePlayerEnabled,
   setAndroidNativePlayerEnabled,
+  getAndroidNativePlayerOptedOut,
   getWriteNfoEnabled,
   setWriteNfoEnabled,
   getProgressRetentionDays,
@@ -304,6 +305,7 @@ export async function exportAll() {
         audioTranscodeAuto: getAudioTranscodeAuto(),
         externalPlayerPref: getExternalPlayerPref(),
         androidNativePlayer: getAndroidNativePlayerEnabled(),
+        androidNativePlayerOptOut: getAndroidNativePlayerOptedOut(),
         writeNfo: getWriteNfoEnabled(),
       },
       behavior: {
@@ -581,8 +583,11 @@ export async function importAll(blob, options = {}) {
         setExternalPlayerPref(playback.externalPlayerPref)
         summary.appSettings++
       }
-      if (typeof playback.androidNativePlayer === "boolean") {
-        setAndroidNativePlayerEnabled(playback.androidNativePlayer)
+      if (typeof playback.androidNativePlayerOptOut === "boolean") {
+        setAndroidNativePlayerEnabled(!playback.androidNativePlayerOptOut)
+        summary.appSettings++
+      } else if (playback.androidNativePlayer === true) {
+        setAndroidNativePlayerEnabled(true)
         summary.appSettings++
       }
       if (typeof playback.writeNfo === "boolean") {

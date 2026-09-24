@@ -382,6 +382,51 @@ describe("language grouping", () => {
   })
 })
 
+describe("android native player toggle", () => {
+  it("parseAndroidNativePlayerSetting treats anything but \"0\" as on", async () => {
+    const { parseAndroidNativePlayerSetting } = await import("@/scripts/lib/app-settings.js")
+    expect(parseAndroidNativePlayerSetting("")).toBe(true)
+    expect(parseAndroidNativePlayerSetting("1")).toBe(true)
+    expect(parseAndroidNativePlayerSetting("0")).toBe(false)
+  })
+
+  it("defaults to enabled (unset means on)", async () => {
+    const { getAndroidNativePlayerEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getAndroidNativePlayerEnabled()).toBe(true)
+  })
+
+  it("stores nothing when explicitly enabled", async () => {
+    const { setAndroidNativePlayerEnabled } = await import("@/scripts/lib/app-settings.js")
+    setAndroidNativePlayerEnabled(true)
+    expect(localStorage.getItem("xt_android_native_player")).toBe(null)
+  })
+
+  it("writes an explicit off flag", async () => {
+    const { getAndroidNativePlayerEnabled, setAndroidNativePlayerEnabled } =
+      await import("@/scripts/lib/app-settings.js")
+    setAndroidNativePlayerEnabled(false)
+    expect(localStorage.getItem("xt_android_native_player")).toBe("0")
+    expect(getAndroidNativePlayerEnabled()).toBe(false)
+  })
+
+  it("fires ANDROID_NATIVE_PLAYER_EVENT with the correct detail.value in both directions", async () => {
+    const { ANDROID_NATIVE_PLAYER_EVENT, setAndroidNativePlayerEnabled } =
+      await import("@/scripts/lib/app-settings.js")
+    const received: boolean[] = []
+    const listener = (event: Event) => {
+      received.push((event as CustomEvent).detail.value)
+    }
+    document.addEventListener(ANDROID_NATIVE_PLAYER_EVENT, listener)
+    try {
+      setAndroidNativePlayerEnabled(false)
+      setAndroidNativePlayerEnabled(true)
+    } finally {
+      document.removeEventListener(ANDROID_NATIVE_PLAYER_EVENT, listener)
+    }
+    expect(received).toEqual([false, true])
+  })
+})
+
 describe("TMDb / TVDB enrichment toggles", () => {
   it("TMDb defaults to enabled (unset means on)", async () => {
     const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")

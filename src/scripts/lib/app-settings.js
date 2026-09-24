@@ -454,22 +454,25 @@ export function setCloseToTray(on) {
   pushCloseToTrayToBackend(!!on)
 }
 
-// Android: opt-in toggle for the native ExoPlayer Activity. When on, plays
-// movies / series / live TV through the native VideoActivity instead of the
-// in-WebView Video.js player. Enables proper PiP, MediaSession lock-screen controls
-// and hardened HLS via ExoPlayer. Default off until on-device validation completes.
-//
-// Storage: "1" for opt-in. Default ("" / missing) keeps the existing
-// in-WebView path unchanged.
+// Android native ExoPlayer toggle for live / VOD / downloads. On by default, "0" opts out.
+export function parseAndroidNativePlayerSetting(raw) {
+  return raw !== "0"
+}
+
 export function getAndroidNativePlayerEnabled() {
-  return readLS(KEY_ANDROID_NATIVE_PLAYER, "") === "1"
+  return parseAndroidNativePlayerSetting(readLS(KEY_ANDROID_NATIVE_PLAYER, ""))
 }
 
 export function setAndroidNativePlayerEnabled(on) {
-  writeLS(KEY_ANDROID_NATIVE_PLAYER, on ? "1" : "")
+  writeLS(KEY_ANDROID_NATIVE_PLAYER, on ? "" : "0")
   document.dispatchEvent(
     new CustomEvent(ANDROID_NATIVE_PLAYER_EVENT, { detail: { value: !!on } })
   )
+}
+
+/** Raw opt-out flag (backup/restore needs to tell "explicitly off" from "never set"). */
+export function getAndroidNativePlayerOptedOut() {
+  return readLS(KEY_ANDROID_NATIVE_PLAYER, "") === "0"
 }
 
 // Android: when the user ticks "Always use this app" in the external-player

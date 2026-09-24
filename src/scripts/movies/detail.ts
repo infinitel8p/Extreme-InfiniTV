@@ -46,6 +46,7 @@ import {
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
+import { tryAndroidNativeVodPlayback } from "@/scripts/lib/android-native-vod.ts"
 import {
   clearAmbient,
   setAmbient as setAmbientOn,
@@ -57,11 +58,6 @@ import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
 import {
-  androidNativePlayerAvailable,
-  launchAndroidNativeVodWithProgress,
-} from "@/scripts/lib/android-video-launcher.js"
-import {
-  getAndroidNativePlayerEnabled,
   getPlayerBackend,
   DEFAULT_PLAYER_BACKEND,
   getVideoScale,
@@ -971,15 +967,6 @@ async function startPlayback(options = {}) {
     pushRecent(activePlaylistId, "vod", movie.id, movie.name, movie.logo || null)
   }
 
-  if (await tryAndroidIntentPlayback(detailSrc)) return
-
-  const localSrc = await getLocalPlayableSrc(detailSrc)
-  const playSrc = localSrc || detailSrc
-  const mountSrc = detailSrc
-  // The asset.localhost/asset:// mount URL doesn't reliably parse as http(s), so the container
-  // decision for a local download uses the download's on-disk path instead.
-  const localDownloadPath = localSrc ? await getLocalDownloadPath(detailSrc) : null
-  if (requestId !== playRequestId) return
   const saved = activePlaylistId
     ? getProgress(activePlaylistId, "vod", movie.id)
     : null
@@ -992,28 +979,36 @@ async function startPlayback(options = {}) {
         })()
       : 0
 
-  // Native ExoPlayer Activity path
-  if (
-    androidNativePlayerAvailable &&
-    getAndroidNativePlayerEnabled() &&
-    activePlaylistId
-  ) {
+  if (activePlaylistId) {
     const nativeDns = (await getActiveDnsOverrideAsync())?.raw ?? null
     if (requestId !== playRequestId) return
-    const launched = launchAndroidNativeVodWithProgress({
+    const launched = await tryAndroidNativeVodPlayback({
       playlistId: activePlaylistId,
-      contentKey: `vod:${movie.id}`,
       kind: "vod",
       id: movie.id,
-      url: playSrc,
+      contentKey: `vod:${movie.id}`,
+      remoteUrl: detailSrc,
       title: movie.name,
       posterUrl: movie.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      ua: getUserAgent() || undefined,
       dns: nativeDns,
-      progressExtras: { title: movie.name, logo: movie.logo || null },
+      progressExtras: { name: movie.name, logo: movie.logo || null },
+      isStale: () => requestId !== playRequestId,
     })
     if (launched) return
+  } else if (await tryAndroidIntentPlayback(detailSrc)) {
+    return
   }
+  if (requestId !== playRequestId) return
+
+  const localSrc = await getLocalPlayableSrc(detailSrc)
+  const playSrc = localSrc || detailSrc
+  const mountSrc = detailSrc
+  // The asset.localhost/asset:// mount URL doesn't reliably parse as http(s), so the container
+  // decision for a local download uses the download's on-disk path instead.
+  const localDownloadPath = localSrc ? await getLocalDownloadPath(detailSrc) : null
+  if (requestId !== playRequestId) return
 
   let backend = getPlayerBackend()
   log.debug("[xt:movie-detail] playback source", `id=${movie.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)

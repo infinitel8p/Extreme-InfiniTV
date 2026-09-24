@@ -2486,7 +2486,7 @@ function giveUpOnPlayback(ctx) {
   })
   log.info("[xt:livetv] start-failure verdict", { kind: failure.kind, codec: failure.codec, streamId: ctx.streamId })
   getPlayerInsights().record("giveup", failure.kind)
-  // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
+  // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery even when opted out.
   if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
     ctx.nativeFallbackTried = true
     if (

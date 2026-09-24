@@ -180,8 +180,7 @@ export async function getAndroidLocalUri(remoteUrl) {
   if (!AFs.isAndroidFsActive()) return null
   const path = await findCompletedDownloadPath(remoteUrl)
   if (!path || !AFs.isAndroidUri(path)) return null
-  if (typeof path === "string") return path
-  return typeof path.uri === "string" ? path.uri : null
+  return nativeUriString(path) || null
 }
 
 /**

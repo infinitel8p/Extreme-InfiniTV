@@ -49,6 +49,7 @@ import {
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
+import { tryAndroidNativeVodPlayback } from "@/scripts/lib/android-native-vod.ts"
 import {
   clearAmbient,
   setAmbient as setAmbientOn,
@@ -60,11 +61,6 @@ import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
 import {
-  androidNativePlayerAvailable,
-  launchAndroidNativeVodWithProgress,
-} from "@/scripts/lib/android-video-launcher.js"
-import {
-  getAndroidNativePlayerEnabled,
   getPlayerBackend,
   DEFAULT_PLAYER_BACKEND,
   getVideoScale,
@@ -1719,11 +1715,8 @@ async function playEpisode(episode, options = {}) {
     )
   }
 
-  // Mark before the Android intent handoff so the marker is in place if
-  // the user comes back to the page from the system player.
+  // Marked before the Android handoff so it survives a return from the native player.
   markNowPlayingEpisode(episode.id)
-
-  if (await tryAndroidIntentPlayback(src)) return
   if (requestId !== playRequestId) return
 
   if (nowPlayingEl) {
@@ -1735,12 +1728,6 @@ async function playEpisode(episode, options = {}) {
   externalBtnHandle?.refresh()
   playTvBtnHandle?.refresh()
 
-  const localSrc = await getLocalPlayableSrc(src)
-  const playSrc = localSrc || src
-  // The asset.localhost/asset:// mount URL doesn't reliably parse as http(s), so the container
-  // decision for a local download uses the download's on-disk path instead.
-  const localDownloadPath = localSrc ? await getLocalDownloadPath(src) : null
-  if (requestId !== playRequestId) return
   const saved = activePlaylistId
     ? getProgress(activePlaylistId, "episode", episode.id)
     : null
@@ -1753,25 +1740,22 @@ async function playEpisode(episode, options = {}) {
         })()
       : 0
 
-  // Native ExoPlayer Activity path
-  if (
-    androidNativePlayerAvailable &&
-    getAndroidNativePlayerEnabled() &&
-    activePlaylistId
-  ) {
+  if (activePlaylistId) {
     const nativeDns = (await getActiveDnsOverrideAsync())?.raw ?? null
     if (requestId !== playRequestId) return
-    const launched = launchAndroidNativeVodWithProgress({
+    const launched = await tryAndroidNativeVodPlayback({
       playlistId: activePlaylistId,
-      contentKey: `ep:${episode.id}`,
       kind: "episode",
       id: episode.id,
-      url: playSrc,
+      contentKey: `ep:${episode.id}`,
+      remoteUrl: src,
       title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}`,
       posterUrl: series?.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      ua: getUserAgent() || undefined,
       dns: nativeDns,
       progressExtras: progressExtrasFor(episode),
+      isStale: () => requestId !== playRequestId,
       onCompleted: () => {
         // Trigger the same Up Next overlay the WebView player path uses.
         document.dispatchEvent(new CustomEvent("xt:series-episode-ended", {
@@ -1780,7 +1764,17 @@ async function playEpisode(episode, options = {}) {
       },
     })
     if (launched) return
+  } else if (await tryAndroidIntentPlayback(src)) {
+    return
   }
+  if (requestId !== playRequestId) return
+
+  const localSrc = await getLocalPlayableSrc(src)
+  const playSrc = localSrc || src
+  // The asset.localhost/asset:// mount URL doesn't reliably parse as http(s), so the container
+  // decision for a local download uses the download's on-disk path instead.
+  const localDownloadPath = localSrc ? await getLocalDownloadPath(src) : null
+  if (requestId !== playRequestId) return
 
   let backend = getPlayerBackend()
   log.debug("[xt:series-detail] playback source", `id=${episode.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)
