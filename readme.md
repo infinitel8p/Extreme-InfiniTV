@@ -60,30 +60,42 @@
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/Desktop/home.png" alt="Extreme InfiniTV home screen showing Live TV, Movies, and Series tiles with Continue Watching strip" width="780"/>
+  <a href="https://github.com/user-attachments/assets/d64e41f5-564f-4c2f-bff2-8a769ad23ec9">
+    <img src="docs/media/extreme-infinitv-promo.webp" alt="Extreme InfiniTV promo tour: Live TV with programme guide, movies and series grids, detail pages, and casting to a TV" width="780"/>
+  </a>
+</p>
+
+<p align="center">
+  <img src="docs/src/assets/screenshots/Desktop/home.png" alt="Extreme InfiniTV home screen showing Live TV, Movies, and Series tiles with Continue Watching strip" width="780"/>
 </p>
 
 <details>
-<summary>More screenshots (Live TV, EPG, Movies, Series, Android TV, mobile)</summary>
+<summary>More screenshots (Live TV, EPG, Movies, Series, Android TV, casting, mobile)</summary>
 
 **Desktop**
 
 | | | |
 |---|---|---|
-| <img src="docs/screenshots/Desktop/livetv.png" alt="Live TV channel list with inline EPG showing now/next programmes"/> | <img src="docs/screenshots/Desktop/movies.png" alt="Movies poster grid with category filtering"/> | <img src="docs/screenshots/Desktop/series.png" alt="Series detail view with seasons and episodes"/> |
-| <img src="docs/screenshots/Desktop/epg.png" alt="Full XMLTV schedule grid for the EPG page"/> | <img src="docs/screenshots/Desktop/settings.png" alt="Settings page with playlists, display, network, and downloads"/> | <img src="docs/screenshots/Desktop/favorites.png" alt="Favorites page showing the cross-playlist union of starred items"/> |
+| <img src="docs/src/assets/screenshots/Desktop/livetv.png" alt="Live TV channel list with inline EPG showing now/next programmes"/> | <img src="docs/src/assets/screenshots/Desktop/movies.png" alt="Movies poster grid with category filtering"/> | <img src="docs/src/assets/screenshots/Desktop/series.png" alt="Series detail view with seasons and episodes"/> |
+| <img src="docs/src/assets/screenshots/Desktop/epg.png" alt="Full XMLTV schedule grid for the EPG page"/> | <img src="docs/src/assets/screenshots/Desktop/settings.png" alt="Settings page with playlists, display, network, and downloads"/> | <img src="docs/src/assets/screenshots/Desktop/favorites.png" alt="Favorites page showing the cross-playlist union of starred items"/> |
 
 **Android TV (dedicated 10-foot interface, D-pad focus)**
 
 | | | |
 |---|---|---|
-| <img src="docs/screenshots/Android-TV/tv.png" alt="Android TV home screen with an artwork hero and a favorites rail"/> | <img src="docs/screenshots/Android-TV/tv-live.png" alt="Live TV on Android TV with channel tiles and a programme panel"/> | <img src="docs/screenshots/Android-TV/tv-movies.png" alt="Movies grid on the Android TV interface with ratings and language pills"/> |
+| <img src="docs/src/assets/screenshots/Android-TV/tv.png" alt="Android TV home screen with an artwork hero and a favorites rail"/> | <img src="docs/src/assets/screenshots/Android-TV/tv-live.png" alt="Live TV on Android TV with channel tiles and a programme panel"/> | <img src="docs/src/assets/screenshots/Android-TV/tv-movies.png" alt="Movies grid on the Android TV interface with ratings and language pills"/> |
+
+**Casting to Android TV (pair once, play from your phone or desktop)**
+
+| | |
+|---|---|
+| <img src="docs/media/casting-pairing-1920x1080.png" alt="Android TV receiver showing its LAN address and six-digit pair code next to a phone's Play on TV dialog"/> | <img src="docs/media/casting-playing-1920x1080.png" alt="A movie playing on the TV while the phone shows the cast remote with seek, volume, and stop casting controls"/> |
 
 **Phone (portrait, touch)**
 
 | | | |
 |---|---|---|
-| <img src="docs/screenshots/Galaxy-S20-Ultra/home.png" alt="Extreme InfiniTV home screen on a phone in portrait" width="240"/> | <img src="docs/screenshots/Galaxy-S20-Ultra/livetv.png" alt="Live TV on a phone with bottom navigation" width="240"/> | <img src="docs/screenshots/Galaxy-S20-Ultra/series.png" alt="Series poster grid on a phone in portrait" width="240"/> |
+| <img src="docs/src/assets/screenshots/Galaxy-S20-Ultra/home.png" alt="Extreme InfiniTV home screen on a phone in portrait" width="240"/> | <img src="docs/src/assets/screenshots/Galaxy-S20-Ultra/livetv.png" alt="Live TV on a phone with bottom navigation" width="240"/> | <img src="docs/src/assets/screenshots/Galaxy-S20-Ultra/series.png" alt="Series poster grid on a phone in portrait" width="240"/> |
 
 </details>
 
@@ -147,13 +159,27 @@ winget install --id 9NN162Z0WXSR --source msstore
 
 ### macOS: "Extreme InfiniTV.app" cannot be opened
 
-The macOS build is not yet notarized by Apple, so Gatekeeper blocks it on first launch with a message like _"Apple could not verify Extreme InfiniTV.app is free of malware"_. After dragging the app from the `.dmg` into `/Applications`, remove the quarantine flag from a Terminal:
+The macOS build is not yet notarized by Apple, so Gatekeeper can block it on first launch with a message like _"Apple could not verify Extreme InfiniTV.app is free of malware"_.
+
+After dragging the app from the `.dmg` into `/Applications`, try opening it once. If macOS shows the warning and there is no **Open** button in the dialog, close the warning with **Done**, then:
+
+1. Open the Apple menu and choose **System Settings**.
+2. Open **Privacy & Security**.
+3. Scroll down to the **Security** section.
+4. Click **Open Anyway** next to the message about Extreme InfiniTV being blocked.
+5. Confirm with your Mac login password if prompted, then click **Open** in the warning dialog.
+
+**Open Anyway** only shows up after a launch attempt, and macOS remembers the exception once approved. See [Apple's Gatekeeper instructions](https://support.apple.com/102445).
+
+#### Terminal alternative
+
+You can also remove the quarantine attribute from Terminal:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Extreme InfiniTV.app"
 ```
 
-Then open the app normally. You only need to do this once per install.
+Then open the app normally.
 
 ## Develop
 

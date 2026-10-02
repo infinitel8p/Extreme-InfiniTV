@@ -56,6 +56,7 @@ vi.mock("@/scripts/lib/creds.js", () => ({
   isLocalM3UHost: () => false,
   isCustomHost: (host: string) => String(host).startsWith("xt-custom://"),
   readLocalM3UContent: async () => "",
+  getEntryDnsOverride: () => null,
 }))
 
 vi.mock("@/scripts/lib/cache.js", () => ({
@@ -81,19 +82,25 @@ vi.mock("@/scripts/lib/xtream-api.js", () => ({
       return { ok: true, status: 200, json: async () => [] }
     }
     const body = JSON.stringify(liveStreams)
-    return { ok: true, status: 200, text: async () => body }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => body,
+      arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+    }
   },
 }))
 
 vi.mock("@/scripts/lib/provider-fetch.js", () => ({
   providerFetch: async () => ({ ok: true, status: 200, text: async () => "" }),
   streamingText: async (response: any) => response.text(),
+  streamingBytes: async (response: any) => response.arrayBuffer(),
 }))
 
 vi.mock("@/scripts/lib/account-info.js", () => ({ ensureUserInfo: async () => null }))
 vi.mock("@/scripts/lib/i18n.js", () => ({ t: (key: string) => key }))
 vi.mock("@/scripts/lib/log.js", () => ({
-  log: { log: () => {}, warn: () => {}, error: () => {}, info: () => {} },
+  log: { log: () => {}, warn: () => {}, error: () => {}, info: () => {}, debug: () => {} },
   redactUrl: (value: string) => value,
 }))
 

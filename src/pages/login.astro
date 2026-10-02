@@ -314,6 +314,59 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				</details>
 			</div>
 
+			<!-- Advanced: custom DNS server (Xtream + M3U; hidden for local files,
+			     which have no remote requests to resolve). Same disclosure pattern
+			     as Backup domains above. -->
+			<details id="dns-section" class="group rounded-xl border border-line bg-surface">
+				<summary
+					class="flex items-center justify-between gap-3 px-4 py-3 cursor-pointer
+						hover:bg-surface-2 focus-visible:bg-surface-2 transition-colors rounded-xl
+						list-none min-h-12">
+					<span class="flex flex-col gap-0.5 min-w-0">
+						<span data-i18n="login.dns.toggle" class="text-sm font-medium text-fg">
+							DNS server (optional)
+						</span>
+						<span
+							data-i18n="login.dns.summaryHelper"
+							class="text-xs text-fg-3 leading-relaxed">
+							Only if your provider needs a specific DNS server. Leave empty to use your system's.
+						</span>
+					</span>
+					<IconChevronDown
+						aria-hidden="true"
+						stroke={2}
+						class="size-4 shrink-0 text-fg-3 transition-[transform,color] duration-200
+							group-open:rotate-180 group-open:text-accent"
+					/>
+				</summary>
+
+				<div class="flex flex-col gap-3 px-4 pb-4 pt-1">
+					<div class="flex flex-col gap-2">
+						<div class="flex gap-2">
+							<input
+								id="dnsServer"
+								type="text"
+								placeholder="1.1.1.1 or https://dnsforge.de/dns-query"
+								aria-label="DNS server"
+								data-i18n-attr="placeholder:dns.placeholder;aria-label:dns.label"
+								autocapitalize="off"
+								spellcheck="false"
+								class="field-input flex-1 min-w-0 font-mono"
+							/>
+							<button
+								id="dnsTestBtn"
+								type="button"
+								class="inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-3 py-1.5 text-sm text-fg-2
+									hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:border-accent transition-colors
+									disabled:opacity-50 disabled:cursor-not-allowed">
+								<span data-i18n="dns.test">Test</span>
+							</button>
+						</div>
+						<span id="dnsStatus" role="status" aria-live="polite" class="hidden text-xs leading-relaxed"></span>
+					</div>
+				</div>
+			</details>
+
 			<!-- M3U fields -->
 			<div id="m3u-fields" class="hidden flex-col gap-6">
 				<label class="flex flex-col gap-2">
@@ -574,6 +627,9 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	} from "@/scripts/lib/epg-data.js";
 	import { ICON_X } from "@/scripts/lib/icons.ts";
 	import { snifferAvailable } from "@/scripts/lib/stream-sniffer.ts";
+	import { parseDnsServer } from "@/scripts/lib/dns-config.ts";
+	import { dnsProxyAvailable } from "@/scripts/lib/dns-proxy.ts";
+	import { runDnsCheck, describeDnsError, formatDnsOutcome, dnsOutcomeTone, hostnameOf } from "@/scripts/lib/dns-test.ts";
 
 	const EPG_URL_RX = /^https?:\/\/[^\s]+$/i;
 
@@ -616,6 +672,11 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	const mirrorsDetails = $("mirrors-section");
 	const mirrorsListEl = $("mirrorsList");
 	const mirrorsAddBtn = $("mirrorsAddBtn");
+	const dnsDetails = $("dns-section");
+	const dnsInputEl = /** @type {HTMLInputElement} */ ($("dnsServer"));
+	const dnsTestBtn = $("dnsTestBtn");
+	const dnsTestBtnLabel = dnsTestBtn?.querySelector("span");
+	const dnsStatusEl = $("dnsStatus");
 	const xtreamAdvancedDetails = $("xtream-advanced");
 	const liveContainerEl = /** @type {HTMLSelectElement} */ ($("liveContainer"));
 	let liveContainerTouched = false;
@@ -922,6 +983,87 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		const row = addMirrorRow();
 		row?.querySelector("input[data-role='mirror-server']")?.focus();
 	});
+
+	// ---- Custom DNS server (Xtream + M3U tabs) ----
+	function setDnsStatus(message, tone) {
+		if (!dnsStatusEl) return;
+		dnsStatusEl.classList.remove("hidden", "text-bad", "text-good", "text-warn", "text-fg-3");
+		dnsStatusEl.removeAttribute("data-i18n");
+		if (!message) {
+			dnsStatusEl.textContent = "";
+			dnsStatusEl.classList.add("hidden");
+			return;
+		}
+		dnsStatusEl.classList.add(
+			tone === "bad" ? "text-bad" : tone === "good" ? "text-good" : tone === "warn" ? "text-warn" : "text-fg-3"
+		);
+		dnsStatusEl.textContent = message;
+	}
+
+	function validateDnsInput() {
+		const raw = (dnsInputEl?.value || "").trim();
+		if (!raw) {
+			setDnsStatus(null);
+			dnsInputEl?.removeAttribute("aria-invalid");
+			return true;
+		}
+		if (!parseDnsServer(raw)) {
+			setDnsStatus(t("dns.invalid"), "bad");
+			dnsInputEl?.setAttribute("aria-invalid", "true");
+			return false;
+		}
+		setDnsStatus(null);
+		dnsInputEl?.removeAttribute("aria-invalid");
+		return true;
+	}
+
+	function currentDnsProbeUrl() {
+		return mode === "xtream" ? serverEl.value.trim() : mode === "m3u" ? m3uEl.value.trim() : "";
+	}
+
+	function refreshDnsTestAvailability() {
+		if (!dnsProxyAvailable() || !dnsTestBtn) return;
+		dnsTestBtn.disabled = !hostnameOf(currentDnsProbeUrl());
+	}
+
+	dnsInputEl?.setAttribute("aria-describedby", "dnsStatus");
+
+	if (!dnsProxyAvailable()) {
+		if (dnsInputEl) dnsInputEl.readOnly = true;
+		if (dnsTestBtn) dnsTestBtn.disabled = true;
+		setDnsStatus(t("dns.webUnavailable"), "");
+	} else {
+		dnsInputEl?.addEventListener("blur", validateDnsInput);
+		m3uEl?.addEventListener("input", refreshDnsTestAvailability);
+		dnsTestBtn?.addEventListener("click", async () => {
+			if (!validateDnsInput()) return;
+			const raw = (dnsInputEl?.value || "").trim();
+			const server = parseDnsServer(raw);
+			if (!server) {
+				setDnsStatus(t("dns.invalid"), "bad");
+				return;
+			}
+			const probeUrl = currentDnsProbeUrl();
+			const host = hostnameOf(probeUrl);
+			if (!host) {
+				setDnsStatus(t("dns.noHost"), "bad");
+				return;
+			}
+			dnsTestBtn.disabled = true;
+			if (dnsTestBtnLabel) dnsTestBtnLabel.textContent = t("dns.testing");
+			try {
+				const outcome = await runDnsCheck(server, host, probeUrl);
+				setDnsStatus(formatDnsOutcome(outcome), dnsOutcomeTone(outcome));
+			} catch (error) {
+				setDnsStatus(describeDnsError(error), "bad");
+			} finally {
+				if (dnsTestBtnLabel) dnsTestBtnLabel.textContent = t("dns.test");
+				refreshDnsTestAvailability();
+			}
+		});
+		refreshDnsTestAvailability();
+	}
+
 	epgPrimaryEl?.addEventListener("blur", validateEpgUrlInputs);
 	document.addEventListener(EPG_SOURCE_STATUS_EVENT, (event) => {
 		applySourceStatuses(/** @type {CustomEvent} */ (event).detail);
@@ -1098,6 +1240,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		mFields.classList.toggle("flex", isM);
 		lFields.classList.toggle("hidden", !isL);
 		lFields.classList.toggle("flex", isL);
+		if (dnsDetails) dnsDetails.style.display = isL ? "none" : "";
+		refreshDnsTestAvailability();
 
 		if (prev && prev !== next) {
 			const shown = isX ? xFields : isM ? mFields : lFields;
@@ -1281,6 +1425,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 			if (!passEl.value) passEl.value = parsed.password;
 			showStatus("info", t("login.status.credentialsExtracted"));
 		}
+		refreshDnsTestAvailability();
 	});
 
 	function clearStatus() {
@@ -1414,7 +1559,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	// each mirror are independent servers), so we still await all of them -
 	// but a single rejection must not take the others down with it.
 	function safeResolveServerScheme(candidate) {
-		return resolveServerScheme(candidate).catch((error) => ({
+		const dns = (dnsInputEl?.value || "").trim();
+		return resolveServerScheme({ ...candidate, dns }).catch((error) => ({
 			serverUrl: candidate.serverUrl,
 			scheme: "http",
 			swapped: false,
@@ -1494,7 +1640,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					return;
 				}
 				showStatus("busy", t("login.status.fetching"));
-				const resolved = await resolveM3UScheme(rawUrl);
+				const resolved = await resolveM3UScheme(rawUrl, { dns: (dnsInputEl?.value || "").trim() });
 				if (m3uEl.value.trim() !== resolved.url) m3uEl.value = resolved.url;
 				const result = resolved.test;
 				if (result.status === "active") {
@@ -1576,15 +1722,16 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					verdictMessage: t("diagnostic.running"),
 				});
 			};
+			const dnsForDiagnostic = (dnsInputEl?.value || "").trim();
 			let result;
 			if (mode === "xtream") {
 				result = await runXtreamDiagnostic({
 					serverUrl: serverEl.value.trim(),
 					username: userEl.value.trim(),
 					password: passEl.value.trim(),
-				}, { onProgress });
+				}, { onProgress, entry: { dns: dnsForDiagnostic } });
 			} else if (mode === "m3u") {
-				result = await runM3UDiagnostic(m3uEl.value.trim(), { onProgress });
+				result = await runM3UDiagnostic(m3uEl.value.trim(), { onProgress, entry: { dns: dnsForDiagnostic } });
 			} else {
 				diagnosticResultEl.classList.add("hidden");
 				return;
@@ -1607,6 +1754,12 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				showStatus("unavailable", t("login.epg.invalidUrl"));
 				return;
 			}
+			if (!validateDnsInput()) {
+				dnsDetails?.setAttribute("open", "");
+				showStatus("unavailable", t("dns.invalid"));
+				return;
+			}
+			const dns = mode === "local-m3u" ? undefined : (dnsInputEl?.value || "").trim();
 			const { primary: epgUrl, additional: additionalEpgUrls } =
 				readEpgUrlsFromForm();
 			const disableProviderEpg =
@@ -1663,6 +1816,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					epgUrl,
 					additionalEpgUrls,
 					disableProviderEpg,
+					dns,
 				};
 				if (editing) {
 					await updateEntry(editing._id, patch);
@@ -1680,7 +1834,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				// whichever the playlist actually serves under, fall back to the
 				// typed scheme (or http) when the provider is unreachable.
 				showStatus("busy", t("login.status.fetching"));
-				const resolvedM3U = await resolveM3UScheme(rawUrl);
+				const resolvedM3U = await resolveM3UScheme(rawUrl, { dns });
 				if (m3uEl.value.trim() !== resolvedM3U.url) m3uEl.value = resolvedM3U.url;
 				const patch = {
 					type: "m3u",
@@ -1690,6 +1844,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					url: resolvedM3U.url,
 					epgUrl,
 					additionalEpgUrls,
+					dns,
 				};
 				if (editing) {
 					await updateEntry(editing._id, patch);
@@ -1753,9 +1908,16 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	});
 
 	// ---- Boot: prefill for editing, or default to "add Xtream" ----
+	let editNotFound = false;
 	if (editingId) {
-		const entries = await getEntries();
-		editing = entries.find((e) => e._id === editingId) || null;
+		try {
+			const entries = await getEntries();
+			editing = entries.find((e) => e._id === editingId) || null;
+		} catch (error) {
+			log.warn("[xt:login] failed to load entries for edit:", error);
+			editing = null;
+		}
+		editNotFound = !editing;
 	}
 	if (editing) {
 		pageTitle.removeAttribute("data-i18n");
@@ -1788,6 +1950,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		) {
 			epgDetails?.setAttribute("open", "");
 		}
+		if (dnsInputEl) dnsInputEl.value = editing.dns || "";
+		if (editing.dns) dnsDetails?.setAttribute("open", "");
 		if (editing.type === "xtream") {
 			serverEl.value = editing.serverUrl || "";
 			userEl.value = editing.username || "";
@@ -1830,4 +1994,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	} else {
 		setMode("xtream");
 	}
+	if (editNotFound) {
+		showStatus("unavailable", t("login.status.editNotFound"));
+	}
+	refreshDnsTestAvailability();
 </script>

@@ -27,10 +27,11 @@ export function buildCatalogMenuActions(target: CatalogMenuTarget): ActionSheetI
     },
   ]
   if (target.includeWatchlist && target.kind !== "live") {
-    const onWatchlist = isOnWatchlist(target.playlistId, target.kind, target.id)
+    const kind = target.kind
+    const onWatchlist = isOnWatchlist(target.playlistId, kind, target.id)
     actions.push({
       label: t(onWatchlist ? "list.menu.watchlistRemove" : "list.menu.watchlistAdd"),
-      onSelect: () => toggleWatchlist(target.playlistId, target.kind, target.id, extras),
+      onSelect: () => toggleWatchlist(target.playlistId, kind, target.id, extras),
     })
   }
   return actions

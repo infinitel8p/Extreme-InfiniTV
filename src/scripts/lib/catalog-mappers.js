@@ -1,6 +1,16 @@
-// Pure Xtream row mappers shared by catalog.js and (later) native ingest.
+// Pure Xtream row mappers shared by catalog.js and native/worker ingest.
 
 import { normalize } from "@/scripts/lib/text.js"
+
+// Shared across every name sort in this file (and the catalog ingest worker) so a
+// per-call localeCompare never re-builds the same collator on a multi-thousand-row sort.
+export const NAME_COLLATOR = new Intl.Collator("en", { sensitivity: "base" })
+
+/** Unwraps a raw Xtream streams/movies/series payload, tolerating the bare-array and {results} shapes. */
+export function unwrapRows(parsed, arrayKey) {
+  if (Array.isArray(parsed)) return parsed
+  return (parsed?.[arrayKey]) || (parsed?.results) || []
+}
 
 export function parseCategoriesToMap(data) {
   const arr = Array.isArray(data)
@@ -15,7 +25,7 @@ export function parseCategoriesToMap(data) {
   )
 }
 
-export function mapXtreamLiveRows(rawRows, categoryMap) {
+export function mapXtreamLiveRows(rawRows, categoryMap, fallbackCategory) {
   return (rawRows || [])
     .map((ch) => {
       const name = String(ch.name || "")
@@ -34,6 +44,7 @@ export function mapXtreamLiveRows(rawRows, categoryMap) {
           }
         }
       }
+      if (!category && fallbackCategory) category = fallbackCategory
       return {
         id: Number(ch.stream_id),
         name,
@@ -41,7 +52,7 @@ export function mapXtreamLiveRows(rawRows, categoryMap) {
         logo: ch.stream_icon || null,
         tvgId: String(ch.epg_channel_id || "") || undefined,
         chno: Number(ch.num) || undefined,
-        norm: normalize(name + " " + category),
+        norm: normalize(name),
         tvArchive: Number(ch.tv_archive) || 0,
         tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
       }
@@ -49,7 +60,7 @@ export function mapXtreamLiveRows(rawRows, categoryMap) {
     .filter((x) => x.id && x.name)
 }
 
-export function mapXtreamVodRows(rawRows, categoryMap) {
+export function mapXtreamVodRows(rawRows, categoryMap, fallbackCategory) {
   return (rawRows || [])
     .map((m) => {
       const name = String(m.name || m.title || "")
@@ -67,6 +78,9 @@ export function mapXtreamVodRows(rawRows, categoryMap) {
       if (!category && categoryId != null && categoryMap?.size) {
         category = categoryMap.get(String(categoryId)) || ""
       }
+      // norm is built from the raw category so "Uncategorized" never becomes search noise.
+      const norm = normalize(`${name} ${category} ${year}`)
+      if (!category && fallbackCategory) category = fallbackCategory
       const added = Number(m.added) || 0
       const tmdb = Number(m.tmdb) || Number(m.tmdb_id) || null
       return {
@@ -79,14 +93,12 @@ export function mapXtreamVodRows(rawRows, categoryMap) {
         category,
         plot: "",
         added,
-        norm: normalize(`${name} ${category} ${year}`),
+        norm,
         tmdb,
       }
     })
     .filter((m) => m.id && m.name)
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-    )
+    .sort((a, b) => NAME_COLLATOR.compare(a.name, b.name))
 }
 
 /** True when `rows` predate the `tmdb` field and need a background backfill. */
@@ -96,7 +108,7 @@ export function rowsNeedTmdbBackfill(rows) {
   return !!firstRow && typeof firstRow === "object" && !("tmdb" in firstRow)
 }
 
-export function mapXtreamSeriesRows(rawRows, categoryMap) {
+export function mapXtreamSeriesRows(rawRows, categoryMap, fallbackCategory) {
   return (rawRows || [])
     .map((s) => {
       const name = String(s.name || s.title || "")
@@ -115,6 +127,9 @@ export function mapXtreamSeriesRows(rawRows, categoryMap) {
       if (!category && categoryId != null && categoryMap?.size) {
         category = categoryMap.get(String(categoryId)) || ""
       }
+      // norm is built from the raw category so "Uncategorized" never becomes search noise.
+      const norm = normalize(`${name} ${category} ${year}`)
+      if (!category && fallbackCategory) category = fallbackCategory
       const added =
         Number(s.last_modified) ||
         Number(s.added) ||
@@ -132,15 +147,13 @@ export function mapXtreamSeriesRows(rawRows, categoryMap) {
         category,
         plot: s.plot || "",
         added,
-        norm: normalize(`${name} ${category} ${year}`),
+        norm,
         tmdb,
         genre: String(s.genre || "").trim(),
       }
     })
     .filter((s) => s.id && s.name)
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-    )
+    .sort((a, b) => NAME_COLLATOR.compare(a.name, b.name))
 }
 
 /** True when `rows` predate the `genre` field and need a background backfill. */

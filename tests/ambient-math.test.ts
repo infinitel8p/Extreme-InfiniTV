@@ -5,6 +5,7 @@ import {
   toAmbient,
   ambientCss,
   blendTowardSlate,
+  posterTintCss,
 } from "../src/scripts/lib/ambient-math"
 
 function solidRgba(width: number, height: number, r: number, g: number, b: number, alpha = 255): Uint8ClampedArray {
@@ -143,5 +144,50 @@ describe("blendTowardSlate", () => {
   it("clamps out-of-range amounts", () => {
     expect(blendTowardSlate({ l: 0.55, c: 0.08, h: 140 }, -1)).toEqual({ l: 0.55, c: 0.08, h: 140 })
     expect(blendTowardSlate({ l: 0.55, c: 0.08, h: 140 }, 2).c).toBeCloseTo(0, 5)
+  })
+})
+
+describe("posterTintCss", () => {
+  function parseOklchValues(css: string): Array<{ l: number; c: number; h: number }> {
+    const matches = [...css.matchAll(/oklch\(([\d.]+)% ([\d.]+) ([\d.]+)\)/g)]
+    return matches.map((match) => ({
+      l: Number(match[1]),
+      c: Number(match[2]),
+      h: Number(match[3]),
+    }))
+  }
+
+  it("produces a light-dark() wrapper around two oklch() values", () => {
+    const css = posterTintCss({ r: 200, g: 40, b: 40 })
+    expect(css.startsWith("light-dark(")).toBe(true)
+    expect(parseOklchValues(css)).toHaveLength(2)
+  })
+
+  it("keeps the hue near red in both variants for a saturated red input", () => {
+    const [light, dark] = parseOklchValues(posterTintCss({ r: 220, g: 30, b: 30 }))
+    expect(light.h).toBeGreaterThanOrEqual(25)
+    expect(light.h).toBeLessThanOrEqual(35)
+    expect(dark.h).toBeGreaterThanOrEqual(25)
+    expect(dark.h).toBeLessThanOrEqual(35)
+  })
+
+  it("never exceeds the max chroma", () => {
+    const [light, dark] = parseOklchValues(posterTintCss({ r: 30, g: 220, b: 60 }))
+    expect(light.c).toBeLessThanOrEqual(0.06)
+    expect(dark.c).toBeLessThanOrEqual(0.06)
+  })
+
+  it("keeps the light variant in the 80-88% band and the dark variant in the 30-40% band", () => {
+    const [light, dark] = parseOklchValues(posterTintCss({ r: 40, g: 90, b: 210 }))
+    expect(light.l).toBeGreaterThanOrEqual(80)
+    expect(light.l).toBeLessThanOrEqual(88)
+    expect(dark.l).toBeGreaterThanOrEqual(30)
+    expect(dark.l).toBeLessThanOrEqual(40)
+  })
+
+  it("yields near-zero chroma for a grey input", () => {
+    const [light, dark] = parseOklchValues(posterTintCss({ r: 128, g: 128, b: 128 }))
+    expect(light.c).toBeCloseTo(0, 3)
+    expect(dark.c).toBeCloseTo(0, 3)
   })
 })

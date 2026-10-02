@@ -42,6 +42,7 @@
   function buildEntry(playlistId, { kind, id }, lookups) {
     const meta = getFavoriteMeta(playlistId, kind, id)
     const item = lookups[kind]?.get(Number(id))
+    if (item?.isHeader) return null
     // Hidden-channel favorites and unresolved custom-playlist channels both
     // miss the live lookup once the catalog is cached - can't tune either.
     const unavailable = kind === "live" && !item && !!lookups.liveCacheAvailable
@@ -95,7 +96,10 @@
   function buildEntries(playlistId) {
     const raw = getGlobalFavorites(playlistId)
     const filtered = filterKind === "all" ? raw : raw.filter((row) => row.kind === filterKind)
-    return filtered.map((entry) => buildEntry(playlistId, entry, lookups || {})).slice(0, 12)
+    return filtered
+      .map((entry) => buildEntry(playlistId, entry, lookups || {}))
+      .filter((entry) => entry !== null)
+      .slice(0, 12)
   }
 
   let reloadGeneration = 0

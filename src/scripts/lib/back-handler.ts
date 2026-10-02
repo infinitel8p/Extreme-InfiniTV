@@ -13,7 +13,8 @@ export function registerBackInterceptor(interceptor: BackInterceptor): () => voi
   }
 }
 
-function handleBack(): boolean {
+/** Runs interceptors, then closes a dialog/popover/fullscreen. Returns whether it consumed the event. */
+export function handleBack(): boolean {
   for (let i = interceptors.length - 1; i >= 0; i--) {
     try {
       if (interceptors[i]()) return true

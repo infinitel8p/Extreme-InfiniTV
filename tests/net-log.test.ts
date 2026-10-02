@@ -6,6 +6,7 @@ import {
   makeNetLogEntry,
   pushWithCapacity,
   shouldRecordKind,
+  formatNetLogLine,
   NET_LOG_CAPACITY,
   NET_LOG_EVENT,
 } from "../src/scripts/lib/net-log"
@@ -196,6 +197,36 @@ describe("shouldRecordKind", () => {
   })
 })
 
+describe("formatNetLogLine", () => {
+  it("formats an ok entry as kind method status duration transport url", () => {
+    const entry = makeNetLogEntry({ method: "get", url: "https://x.test/a", kind: "api", transport: "tauri", status: 200 }, 1)
+    expect(formatNetLogLine(entry)).toBe("api GET 200 0ms tauri https://x.test/a")
+  })
+
+  it("appends error= for an error entry", () => {
+    const entry = makeNetLogEntry({ url: "https://x.test/a", error: new Error("boom") }, 1)
+    expect(formatNetLogLine(entry)).toBe("other GET - 0ms native https://x.test/a error=boom")
+  })
+
+  it("appends outcome=aborted for an aborted entry", () => {
+    const entry = makeNetLogEntry({ url: "https://x.test/a", outcome: "aborted" }, 1)
+    expect(formatNetLogLine(entry)).toBe("other GET - 0ms native https://x.test/a outcome=aborted")
+  })
+
+  it("prints - for a null status", () => {
+    const entry = makeNetLogEntry({ url: "https://x.test/a" }, 1)
+    expect(formatNetLogLine(entry)).toContain(" - ")
+  })
+
+  it("redacts credentials from the url", () => {
+    const entry = makeNetLogEntry({ url: "https://x.test/live/alice/hunter2/1.m3u8", status: 200 }, 1)
+    const line = formatNetLogLine(entry)
+    expect(line).not.toContain("alice")
+    expect(line).not.toContain("hunter2")
+    expect(line).toContain("/live/***/***/1.m3u8")
+  })
+})
+
 describe("network log store", () => {
   beforeEach(() => {
     vi.resetModules()
@@ -262,6 +293,33 @@ describe("network log store", () => {
     expect(getNetworkLog().entries.length).toBe(1)
   })
 
+  it("mirrors a debug line to a log sink for kind api when verbose logging is on", async () => {
+    const { setVerboseLogging, addLogSink } = await import("../src/scripts/lib/log")
+    const { recordNetLog } = await import("../src/scripts/lib/net-log")
+    setVerboseLogging(true)
+    const sink = vi.fn()
+    const detach = addLogSink(sink)
+    recordNetLog({ url: "https://x.test/api", kind: "api", status: 200 })
+    detach()
+    setVerboseLogging(false)
+    expect(sink).toHaveBeenCalledTimes(1)
+    expect(sink.mock.calls[0][0]).toBe("debug")
+    expect(sink.mock.calls[0][1]).toContain("api GET 200")
+  })
+
+  it("does not mirror a kind image entry when include-images is off, even with verbose logging on", async () => {
+    const { setVerboseLogging, addLogSink } = await import("../src/scripts/lib/log")
+    const { recordNetLog, getNetLogIncludeImages } = await import("../src/scripts/lib/net-log")
+    expect(getNetLogIncludeImages()).toBe(false)
+    setVerboseLogging(true)
+    const sink = vi.fn()
+    const detach = addLogSink(sink)
+    recordNetLog({ url: "https://x.test/logo.png", kind: "image", status: 200 })
+    detach()
+    setVerboseLogging(false)
+    expect(sink).not.toHaveBeenCalled()
+  })
+
   it("persists the include-images preference across module reloads", async () => {
     const { setNetLogIncludeImages } = await import("../src/scripts/lib/net-log")
     setNetLogIncludeImages(true)
@@ -285,15 +343,13 @@ describe("network log session persistence", () => {
     sessionStorage.clear()
   })
 
-  async function flushCoalescedTick(): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  }
-
   it("survives a simulated navigation via module re-import", async () => {
+    vi.useFakeTimers()
     const { recordNetLog } = await import("../src/scripts/lib/net-log")
     recordNetLog({ url: "https://x.test/1", status: 200 })
     recordNetLog({ url: "https://x.test/2", status: 200 })
-    await flushCoalescedTick()
+    vi.runAllTimers()
+    vi.useRealTimers()
 
     vi.resetModules()
     const { getNetworkLog } = await import("../src/scripts/lib/net-log")
@@ -307,7 +363,6 @@ describe("network log session persistence", () => {
   it("clears the persisted copy so a later import sees nothing", async () => {
     const { recordNetLog, clearNetworkLog } = await import("../src/scripts/lib/net-log")
     recordNetLog({ url: "https://x.test/1", status: 200 })
-    await flushCoalescedTick()
     clearNetworkLog()
 
     vi.resetModules()
@@ -353,16 +408,18 @@ describe("network log session persistence", () => {
   })
 
   it("keeps recording in memory when sessionStorage.setItem throws", async () => {
+    vi.useFakeTimers()
     const { recordNetLog, getNetworkLog } = await import("../src/scripts/lib/net-log")
     const setItemSpy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("QuotaExceededError")
     })
 
     expect(() => recordNetLog({ url: "https://x.test/1", status: 200 })).not.toThrow()
-    await flushCoalescedTick()
+    expect(() => vi.runAllTimers()).not.toThrow()
 
     expect(getNetworkLog().entries.length).toBe(1)
     setItemSpy.mockRestore()
+    vi.useRealTimers()
   })
 
   it("coalesces persistence writes to at most one setItem per tick for a burst of records", async () => {
@@ -377,6 +434,26 @@ describe("network log session persistence", () => {
     vi.runAllTimers()
     expect(setItemSpy).toHaveBeenCalledTimes(1)
 
+    setItemSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it("dispatches the change event immediately, ahead of the debounced session write", async () => {
+    vi.useFakeTimers()
+    const { recordNetLog } = await import("../src/scripts/lib/net-log")
+    const listener = vi.fn()
+    document.addEventListener(NET_LOG_EVENT, listener)
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem")
+
+    recordNetLog({ url: "https://x.test/1", status: 200 })
+    vi.advanceTimersByTime(0)
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(setItemSpy).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(2000)
+    expect(setItemSpy).toHaveBeenCalledTimes(1)
+
+    document.removeEventListener(NET_LOG_EVENT, listener)
     setItemSpy.mockRestore()
     vi.useRealTimers()
   })

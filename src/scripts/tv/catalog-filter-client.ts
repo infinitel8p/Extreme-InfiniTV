@@ -3,7 +3,7 @@
 // replies superseded by a newer request for the same catalog.
 
 import { filterAndSortIndexes, type GridFilterEntry, type GridFilterState } from "@/scripts/lib/tv-grid-filter"
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.ts"
+import { normalize, parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.ts"
 import { log } from "@/scripts/lib/log.js"
 import { effectTier } from "@/scripts/tv/motion"
 import type { CatalogFilterWorkerParams, CatalogFilterWorkerResponse } from "./catalog-worker"
@@ -52,13 +52,14 @@ function filterSync<T extends WorkerCatalogEntry>(entries: T[], params: CatalogF
 
 interface SearchableEntry {
   norm?: string
+  name?: string | null
 }
 
 function searchSync<T extends SearchableEntry>(entries: T[], query: string, cap: number): Uint32Array {
-  const tokens = normalize(query).split(" ").filter(Boolean)
+  const tokens = parseSearchQuery(query)
   const scored: Array<{ index: number; score: number }> = []
   for (let index = 0; index < entries.length; index++) {
-    const score = scoreNormMatch(entries[index].norm || "", tokens)
+    const score = scoreNormMatch(entries[index].norm || "", tokens, entries[index].name)
     if (score > 0) scored.push({ index, score })
   }
   scored.sort((left, right) => right.score - left.score)
@@ -109,8 +110,9 @@ function noteWorkerActivity(): void {
   idleReleaseTimer = setTimeout(releaseCatalogWorker, IDLE_RELEASE_MS)
 }
 
+// Survives ClientRouter swaps; only idle and memory pressure release it.
 if (typeof document !== "undefined") {
-  document.addEventListener("astro:before-swap", releaseCatalogWorker)
+  document.addEventListener("xt:memory-pressure", releaseCatalogWorker)
 }
 
 function getWorker(): Worker | null {

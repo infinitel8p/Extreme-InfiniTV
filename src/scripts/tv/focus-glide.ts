@@ -1,9 +1,9 @@
 // TV gliding focus ring: follows focus with a smoothed rAF loop instead of a static outline.
 
-import { motionAllowed } from "@/scripts/tv/motion"
+import { motionAllowed, heavyEffectsAllowed } from "@/scripts/tv/motion"
 import { PERF_MODE_EVENT } from "@/scripts/lib/app-settings.js"
-import { applyAmbient, clearAmbient } from "@/scripts/tv/ambient-color"
 import type { ImgKind } from "@/scripts/lib/img-scale"
+import type * as AmbientColorModule from "@/scripts/tv/ambient-color"
 
 interface GlideRect {
   left: number
@@ -19,10 +19,13 @@ const CHASE_SNAP_EPSILON_PX = 0.75
 const CHASE_TAU_MIN_MS = 22
 const CHASE_TAU_MAX_MS = 45
 const CHASE_TAU_DISTANCE_DIVISOR = 25
-const PILL_RADIUS_RATIO = 0.4
 const HIDE_DELAY_MS = 80
+// keepFocusedInView and the card lift move the target for 180ms after focusin.
+const GOAL_TRACK_MS = 400
 // Mirrors tv.css's `#tv-focus-glide` opacity transition duration.
 const CROSS_VIEW_FADE_MS = 120
+// Ambient glow extraction is comparatively expensive; only run it once focus stops hopping.
+const AMBIENT_GLOW_DEBOUNCE_MS = 250
 
 let mounted = false
 let attached = false
@@ -30,16 +33,32 @@ let glideEl: HTMLDivElement | null = null
 let reducedMotionQuery: MediaQueryList | null = null
 
 let ringTarget: HTMLElement | null = null
-let current: GlideRect | null = null
+// The target's box; re-read each frame only while the post-hop transitions can still move it.
+let goal: GlideRect | null = null
+// Ring's animated position; size follows the goal directly (see applySize).
+let current: { left: number; top: number } | null = null
 let visible = false
 let settledFrames = 0
 let lastFrameTime = 0
 let rafId = 0
 let hideTimerId = 0
 let crossViewFadeTimerId = 0
+let ambientGlowTimerId = 0
+let goalTrackUntil = 0
+let appliedSize: { width: number; height: number; radius: number } | null = null
 let previousViewRoot: Element | null = null
 
 const radiusCache = new WeakMap<HTMLElement, number>()
+
+// Deferred so a low-tier TV that never attaches never pulls provider-fetch into the boot chunk.
+let ambientColorModule: typeof AmbientColorModule | null = null
+function loadAmbientColor(): Promise<typeof AmbientColorModule> {
+  if (ambientColorModule) return Promise.resolve(ambientColorModule)
+  return import("@/scripts/tv/ambient-color").then((module) => {
+    ambientColorModule = module
+    return module
+  })
+}
 
 function getRadius(element: HTMLElement): number {
   const cached = radiusCache.get(element)
@@ -58,11 +77,6 @@ function ensureGlideEl(): HTMLDivElement {
   element.id = "tv-focus-glide"
   element.setAttribute("aria-hidden", "true")
   element.dataset.visible = "false"
-  // Registers the ambient custom properties before this shadow relies on --tv-ambient-glow.
-  clearAmbient(element, { vars: ["--tv-ambient-glow"] })
-  // Same shadow tv.css declares, but the outer spill's colour now folds in the focused card's ambient tint.
-  element.style.boxShadow =
-    "0 0 0 1px var(--color-bg), 0 12px 40px -16px color-mix(in oklab, var(--color-accent) 55%, var(--tv-ambient-glow))"
   document.body.appendChild(element)
   glideEl = element
   return element
@@ -81,11 +95,13 @@ function resolveAmbientSource(target: HTMLElement): { imageUrl: string; kind: Im
 function updateAmbientGlow(target: HTMLElement): void {
   const source = resolveAmbientSource(target)
   const element = ensureGlideEl()
-  if (!source) {
-    clearAmbient(element, { vars: ["--tv-ambient-glow"] })
-    return
-  }
-  void applyAmbient(element, source.imageUrl, { vars: ["--tv-ambient-glow"], kind: source.kind })
+  void loadAmbientColor().then((module) => {
+    if (!source) {
+      module.clearAmbient(element, { vars: ["--tv-ambient-glow"] })
+      return
+    }
+    void module.applyAmbient(element, source.imageUrl, { vars: ["--tv-ambient-glow"], kind: source.kind })
+  })
 }
 
 /** Maps a focused element to the element whose rect the ring should draw around. */
@@ -109,12 +125,21 @@ function readGoal(target: HTMLElement): GlideRect {
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, radius: getRadius(target) }
 }
 
-function applyRect(rect: GlideRect): void {
+function applySize(rect: GlideRect): void {
+  const width = Math.round(rect.width)
+  const height = Math.round(rect.height)
+  const radius = Math.round(rect.radius)
+  if (appliedSize && appliedSize.width === width && appliedSize.height === height && appliedSize.radius === radius) return
+  appliedSize = { width, height, radius }
   const element = ensureGlideEl()
-  element.style.transform = `translate3d(${Math.round(rect.left)}px, ${Math.round(rect.top)}px, 0)`
-  element.style.width = `${Math.round(rect.width)}px`
-  element.style.height = `${Math.round(rect.height)}px`
-  element.style.borderRadius = `${Math.round(rect.radius)}px`
+  element.style.width = `${width}px`
+  element.style.height = `${height}px`
+  element.style.borderRadius = `${radius}px`
+}
+
+function applyPosition(left: number, top: number): void {
+  const element = ensureGlideEl()
+  element.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`
 }
 
 function showRing(): void {
@@ -126,17 +151,21 @@ function showRing(): void {
 function hideRing(): void {
   visible = false
   ringTarget = null
+  goal = null
   current = null
   previousViewRoot = null
   settledFrames = 0
   lastFrameTime = 0
+  goalTrackUntil = 0
+  appliedSize = null
   cancelAnimationFrame(rafId)
   rafId = 0
   cancelCrossViewFade()
+  cancelAmbientGlow()
   delete document.documentElement.dataset.tvGlide
   if (glideEl) {
     glideEl.dataset.visible = "false"
-    clearAmbient(glideEl, { vars: ["--tv-ambient-glow"] })
+    ambientColorModule?.clearAmbient(glideEl, { vars: ["--tv-ambient-glow"] })
   }
 }
 
@@ -152,6 +181,12 @@ function cancelCrossViewFade(): void {
   crossViewFadeTimerId = 0
 }
 
+function cancelAmbientGlow(): void {
+  if (!ambientGlowTimerId) return
+  window.clearTimeout(ambientGlowTimerId)
+  ambientGlowTimerId = 0
+}
+
 function scheduleHide(): void {
   cancelHide()
   hideTimerId = window.setTimeout(() => {
@@ -160,8 +195,8 @@ function scheduleHide(): void {
   }, HIDE_DELAY_MS)
 }
 
-function isPillRect(rect: GlideRect): boolean {
-  return rect.height > 0 && rect.radius >= rect.height * PILL_RADIUS_RATIO
+function armGoalTracking(): void {
+  goalTrackUntil = performance.now() + GOAL_TRACK_MS
 }
 
 /** Shorter tau (faster catch-up) the closer the ring gets, so long and short hops both settle smoothly. */
@@ -170,34 +205,31 @@ function chaseTauMs(remainingPx: number): number {
 }
 
 function stepFollow(now: number): void {
-  if (!ringTarget || !ringTarget.isConnected || !current) {
+  if (!ringTarget || !ringTarget.isConnected || !current || !goal) {
     hideRing()
     return
   }
   const dt = lastFrameTime ? now - lastFrameTime : 16
   lastFrameTime = now
-  const goal = readGoal(ringTarget)
+  const trackingGoal = now < goalTrackUntil
+  if (trackingGoal) {
+    goal = readGoal(ringTarget)
+    applySize(goal)
+  }
   const remaining = Math.hypot(goal.left - current.left, goal.top - current.top)
   if (remaining < CHASE_SNAP_EPSILON_PX) {
-    current = { ...goal }
+    current = { left: goal.left, top: goal.top }
   } else {
     const factor = 1 - Math.exp(-dt / chaseTauMs(remaining))
     current.left += (goal.left - current.left) * factor
     current.top += (goal.top - current.top) * factor
-    current.width += (goal.width - current.width) * factor
-    current.height += (goal.height - current.height) * factor
-    if (isPillRect(goal) || isPillRect(current)) current.radius = goal.radius
-    else current.radius += (goal.radius - current.radius) * factor
   }
-  applyRect(current)
+  applyPosition(current.left, current.top)
 
   const settledNow =
-    Math.abs(goal.left - current.left) < SETTLE_EPSILON_PX &&
-    Math.abs(goal.top - current.top) < SETTLE_EPSILON_PX &&
-    Math.abs(goal.width - current.width) < SETTLE_EPSILON_PX &&
-    Math.abs(goal.height - current.height) < SETTLE_EPSILON_PX
+    Math.abs(goal.left - current.left) < SETTLE_EPSILON_PX && Math.abs(goal.top - current.top) < SETTLE_EPSILON_PX
   settledFrames = settledNow ? settledFrames + 1 : 0
-  if (settledFrames >= SETTLE_FRAMES) {
+  if (settledFrames >= SETTLE_FRAMES && !trackingGoal) {
     rafId = 0
     lastFrameTime = 0
     return
@@ -213,21 +245,23 @@ function startFollowLoop(): void {
 }
 
 /** Instantly repositions the ring behind a 120ms fade instead of lerping across unrelated content. */
-function snapAcrossView(goal: GlideRect): void {
+function snapAcrossView(nextGoal: GlideRect): void {
   cancelCrossViewFade()
   const element = ensureGlideEl()
   if (!motionAllowed()) {
-    current = { ...goal }
-    applyRect(current)
+    current = { left: nextGoal.left, top: nextGoal.top }
+    applyPosition(current.left, current.top)
+    armGoalTracking()
     startFollowLoop()
     return
   }
   element.dataset.visible = "false"
   crossViewFadeTimerId = window.setTimeout(() => {
     crossViewFadeTimerId = 0
-    current = { ...goal }
-    applyRect(current!)
+    current = { left: nextGoal.left, top: nextGoal.top }
+    applyPosition(current.left, current.top)
     element.dataset.visible = "true"
+    armGoalTracking()
     startFollowLoop()
   }, CROSS_VIEW_FADE_MS)
 }
@@ -244,12 +278,15 @@ function trackTarget(target: HTMLElement): void {
   const previousDisconnected = ringTarget !== null && !ringTarget.isConnected
   previousViewRoot = viewRoot
   ringTarget = ring
-  const goal = readGoal(ring)
+  const nextGoal = readGoal(ring)
+  goal = nextGoal
+  applySize(nextGoal)
+  armGoalTracking()
 
   // First appearance (or after a page swap) snaps in place; a live target glides from its old spot.
   if (!visible || !current) {
-    current = { ...goal }
-    applyRect(current)
+    current = { left: nextGoal.left, top: nextGoal.top }
+    applyPosition(current.left, current.top)
     showRing()
     startFollowLoop()
     return
@@ -257,7 +294,7 @@ function trackTarget(target: HTMLElement): void {
   if (crossedView || previousDisconnected) {
     cancelAnimationFrame(rafId)
     rafId = 0
-    snapAcrossView(goal)
+    snapAcrossView(nextGoal)
     return
   }
   startFollowLoop()
@@ -270,7 +307,12 @@ function onFocusIn(event: FocusEvent): void {
     return
   }
   trackTarget(target)
-  updateAmbientGlow(target)
+  // Ambient extraction only runs once focus stops hopping for a beat, not on every hop.
+  cancelAmbientGlow()
+  ambientGlowTimerId = window.setTimeout(() => {
+    ambientGlowTimerId = 0
+    updateAmbientGlow(target)
+  }, AMBIENT_GLOW_DEBOUNCE_MS)
 }
 
 function onFocusOut(event: FocusEvent): void {
@@ -296,7 +338,11 @@ function onPageLoad(): void {
 }
 
 function onWindowResize(): void {
-  if (ringTarget) startFollowLoop()
+  if (!ringTarget) return
+  goal = readGoal(ringTarget)
+  applySize(goal)
+  armGoalTracking()
+  startFollowLoop()
 }
 
 function attach(): void {
@@ -326,10 +372,11 @@ function detach(): void {
   hideRing()
   glideEl?.remove()
   glideEl = null
+  appliedSize = null
 }
 
 function syncAttachment(): void {
-  if (motionAllowed()) attach()
+  if (heavyEffectsAllowed()) attach()
   else detach()
 }
 

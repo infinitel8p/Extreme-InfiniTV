@@ -210,7 +210,8 @@ export function buildEntryCard<T extends EntryLike>(
   const posterWrap = document.createElement("div")
   posterWrap.dataset.posterWrap = "1"
   posterWrap.className =
-    "logo-skel aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
+    "logo-skel poster-develop aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
+  if (idx < 12) posterWrap.style.setProperty("--develop-delay", `${idx * 30}ms`)
 
   if (entry.logo) {
     const img = document.createElement("img")
@@ -221,8 +222,7 @@ export function buildEntryCard<T extends EntryLike>(
     img.referrerPolicy = "no-referrer"
     img.width = 200
     img.height = 300
-    img.className =
-      "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+    img.className = "h-full w-full object-cover group-hover:scale-[1.03]"
     img.onload = () => {
       posterWrap.dataset.loaded = "true"
     }

@@ -77,8 +77,9 @@ export function openTvDevicePicker(
             <h2 id="${DIALOG_ID}-title" class="text-lg font-semibold leading-tight tracking-tight"></h2>
             ${subtitleHtml}
           </div>
-          <button type="button" data-role="close" class="ms-auto shrink-0 min-h-11 min-w-11 grid place-items-center rounded-xl text-fg-3 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2">${ICON_X}</button>
+          <button type="button" data-role="close" class="ms-auto shrink-0 min-h-11 min-w-11 grid place-items-center rounded-full text-fg-3 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2">${ICON_X}</button>
         </header>
+        <span data-role="dialog-status" class="sr-only" aria-live="polite"></span>
         <ul data-role="list" class="flex flex-col gap-1 overflow-y-auto min-h-0 list-none m-0 p-0"></ul>
         <div data-role="scan-line" class="flex items-center gap-3 shrink-0 px-3 min-h-11">
           <span data-role="scan-status" class="flex items-center gap-2 min-w-0 text-sm text-fg-3"></span>
@@ -106,7 +107,10 @@ export function openTvDevicePicker(
               </div>
             </div>
             <span data-role="form-error" class="hidden text-xs text-bad"></span>
-            <button type="submit" data-role="pair-submit" class="btn-primary self-end"></button>
+            <button type="submit" data-role="pair-submit" class="btn-primary self-end">
+              <span data-role="pair-submit-icon" class="btn-icon" aria-hidden="true">${ICON_DEVICE_TV}</span>
+              <span data-role="pair-submit-label"></span>
+            </button>
           </form>
         </div>
       </div>
@@ -119,7 +123,8 @@ export function openTvDevicePicker(
       if (subtitleEl) subtitleEl.textContent = options.contentTitle
     }
     const closeBtn = dialog.querySelector<HTMLElement>('[data-role="close"]')!
-    closeBtn.setAttribute("aria-label", t("common.cancel"))
+    closeBtn.setAttribute("aria-label", t("common.close"))
+    closeBtn.title = t("common.close")
 
     const listEl = dialog.querySelector<HTMLUListElement>('[data-role="list"]')!
     const scanStatusEl = dialog.querySelector<HTMLElement>('[data-role="scan-status"]')!
@@ -138,7 +143,7 @@ export function openTvDevicePicker(
     dialog.querySelector<HTMLElement>('[data-role="host-label"]')!.textContent = t("cast.picker.host")
     dialog.querySelector<HTMLElement>('[data-role="port-label"]')!.textContent = t("cast.picker.port")
     dialog.querySelector<HTMLElement>('[data-role="code-label"]')!.textContent = t("cast.picker.code")
-    dialog.querySelector<HTMLButtonElement>('[data-role="pair-submit"]')!.textContent = t("cast.picker.pair")
+    dialog.querySelector<HTMLElement>('[data-role="pair-submit-label"]')!.textContent = t("cast.picker.pair")
 
     const hostInput = dialog.querySelector<HTMLInputElement>('[data-role="host-input"]')!
     const portInput = dialog.querySelector<HTMLInputElement>('[data-role="port-input"]')!
@@ -147,6 +152,11 @@ export function openTvDevicePicker(
     const portError = dialog.querySelector<HTMLElement>('[data-role="port-error"]')!
     const codeError = dialog.querySelector<HTMLElement>('[data-role="code-error"]')!
     const formError = dialog.querySelector<HTMLElement>('[data-role="form-error"]')!
+    const dialogStatusEl = dialog.querySelector<HTMLElement>('[data-role="dialog-status"]')!
+
+    function setDialogStatus(text: string): void {
+      if (dialogStatusEl.textContent !== text) dialogStatusEl.textContent = text
+    }
 
     if (options.prefillHost) hostInput.value = options.prefillHost
     portInput.value = String(options.prefillPort || DEFAULT_RECEIVER_PORT)
@@ -159,13 +169,13 @@ export function openTvDevicePicker(
     }
 
     const ROW_BTN_CLASS =
-      "xt-picker-row flex-1 min-w-0 flex items-center gap-3.5 min-h-11 px-3 py-2.5 rounded-xl text-left hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.98]"
+      "xt-picker-row flex-1 min-w-0 flex items-center gap-3.5 min-h-11 px-3 py-2.5 rounded-xl text-start hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.97]"
 
     /** Appends a muted " +N" hint to a host:port label when more addresses are known. */
     function appendHostsHint(hostPortEl: HTMLElement, hosts: string[] | undefined): void {
       if (!hosts || hosts.length <= 1) return
       const hintEl = document.createElement("span")
-      hintEl.className = "text-fg-3/70"
+      hintEl.className = "text-fg-3"
       hintEl.textContent = ` +${hosts.length - 1}`
       hostPortEl.appendChild(hintEl)
     }
@@ -323,15 +333,20 @@ export function openTvDevicePicker(
 
     function renderReachabilityStatus(statusEl: HTMLElement, status: ReachabilityStatus | undefined): void {
       statusEl.replaceChildren()
+      if (status === undefined) {
+        const pending = document.createElement("span")
+        pending.className = "h-3 w-10 rounded-full skel"
+        pending.setAttribute("aria-hidden", "true")
+        statusEl.appendChild(pending)
+        return
+      }
       const dot = document.createElement("span")
       dot.setAttribute("aria-hidden", "true")
       dot.className = `size-1.5 rounded-full ${status === "online" ? "bg-ok" : "bg-fg-3/40"}`
       statusEl.appendChild(dot)
-      if (status === "online") {
-        statusEl.appendChild(document.createTextNode(t("cast.picker.online")))
-      } else if (status === "unreachable") {
-        statusEl.appendChild(document.createTextNode(t("cast.picker.unreachable")))
-      }
+      statusEl.appendChild(
+        document.createTextNode(status === "online" ? t("cast.picker.online") : t("cast.picker.unreachable"))
+      )
     }
 
     function updateReachabilityRow(hostPortKey: string): void {
@@ -454,6 +469,7 @@ export function openTvDevicePicker(
     rescanBtn.addEventListener("click", onRescanClick)
 
     let resolved = false
+    let spatialNavCleanup: (() => void) | undefined
     const settle = (choice: TvDevice | null) => {
       if (resolved) return
       resolved = true
@@ -469,14 +485,18 @@ export function openTvDevicePicker(
       const iconEl = row.querySelector<HTMLElement>('[data-role="device-icon"]')!
       const rowErrorEl = row.querySelector<HTMLElement>('[data-role="row-error"]')!
       button.disabled = true
+      button.setAttribute("aria-busy", "true")
       iconEl.classList.add("animate-spin")
       rowErrorEl.classList.add("hidden")
+      setDialogStatus(t("cast.picker.connecting"))
       const probed = await probeTvDevice(device.host, device.port, device.hosts)
       if (!probed) {
         button.disabled = false
+        button.removeAttribute("aria-busy")
         iconEl.classList.remove("animate-spin")
         rowErrorEl.textContent = t("cast.pair.unreachable")
         rowErrorEl.classList.remove("hidden")
+        setDialogStatus("")
         return
       }
       settle(device)
@@ -536,6 +556,8 @@ export function openTvDevicePicker(
       const submitBtn = dialog.querySelector<HTMLButtonElement>('[data-role="pair-submit"]')!
       submitBtn.disabled = true
       submitBtn.dataset.loading = "true"
+      submitBtn.setAttribute("aria-busy", "true")
+      setDialogStatus(t("cast.picker.connecting"))
       try {
         const device = await pairTvDevice({
           host: result.host,
@@ -548,6 +570,8 @@ export function openTvDevicePicker(
       } catch (err) {
         submitBtn.disabled = false
         delete submitBtn.dataset.loading
+        submitBtn.removeAttribute("aria-busy")
+        setDialogStatus("")
         const message = err instanceof Error ? err.message : ""
         formError.textContent =
           message === "badCode"
@@ -591,6 +615,8 @@ export function openTvDevicePicker(
 
     function detach() {
       cancelDiscovery()
+      spatialNavCleanup?.()
+      spatialNavCleanup = undefined
       rescanBtn.removeEventListener("click", onRescanClick)
       listEl.removeEventListener("click", onListClick)
       toggleAddBtn.removeEventListener("click", onToggleAdd)
@@ -614,7 +640,7 @@ export function openTvDevicePicker(
       return
     }
 
-    attachDialogSpatialNav(dialog, {
+    spatialNavCleanup = attachDialogSpatialNav(dialog, {
       defaultElement: `#${DIALOG_ID} [data-role="device-btn"], #${DIALOG_ID} [data-role="found-btn"], #${DIALOG_ID} [data-role="toggle-add"], #${DIALOG_ID} [data-role="host-input"]`,
     })
 

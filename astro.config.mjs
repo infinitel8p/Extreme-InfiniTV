@@ -21,6 +21,8 @@ export default defineConfig({
     },
     build: {
       chunkSizeWarningLimit: 800,
+      // Lowers lightningcss's light-dark(); Astro always builds client JS as esnext
+      cssTarget: ["chrome111", "safari16.4", "firefox128"],
     },
     optimizeDeps: {
       include: [

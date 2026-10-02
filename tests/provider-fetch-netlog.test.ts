@@ -4,6 +4,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 vi.mock("@/scripts/lib/app-settings.js", () => ({
   getUserAgent: () => "",
   getNetworkTimeoutSeconds: () => 15,
+  getGlobalDns: () => null,
+  DNS_EVENT: "xt:dns-changed",
 }))
 
 vi.mock("@/scripts/lib/log.js", async () => {
@@ -134,7 +136,7 @@ describe("providerFetch net-log instrumentation", () => {
   })
 
   it("respects logKind and strips it from the init passed to fetch", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 200 }))
     globalThis.fetch = fetchMock as unknown as typeof fetch
 
     const { providerFetch } = await loadProviderFetch(false)

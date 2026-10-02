@@ -1,6 +1,6 @@
 // "Play on TV" escape-hatch button, VOD-only (movies/series detail); mirrors external-player-button.ts.
 
-import { isTauri } from "@/scripts/lib/creds.js"
+import { isTauri, getActiveDnsOverride } from "@/scripts/lib/creds.js"
 import { resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { playOnTv, type PlayOnTvOptions } from "@/scripts/lib/tv-cast.js"
@@ -59,6 +59,7 @@ export function setupPlayOnTvButton(
             durationSeconds: hooks.getDurationSeconds?.(),
           })
         : null
+    if (descriptor) descriptor.dns = getActiveDnsOverride()?.raw ?? null
     const castContext = hooks.getCastContext?.() || null
     await playOnTv({
       buildDescriptor: () => descriptor,

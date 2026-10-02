@@ -5,7 +5,7 @@ import {
   mapXtreamVodRows,
   mapXtreamSeriesRows,
 } from "../src/scripts/lib/catalog-mappers.js"
-import { normalize } from "../src/scripts/lib/text"
+import { normalize, parseSearchQuery, scoreNormMatch } from "../src/scripts/lib/text"
 
 describe("parseCategoriesToMap", () => {
   it("accepts a plain array", () => {
@@ -83,7 +83,7 @@ describe("mapXtreamLiveRows", () => {
       ],
       new Map()
     )
-    expect(rows.map((row) => row.name)).toEqual(["Valid"])
+    expect(rows.map((row: { name: string }) => row.name)).toEqual(["Valid"])
   })
 
   it("coerces tv_archive and tv_archive_duration to numbers", () => {
@@ -101,12 +101,52 @@ describe("mapXtreamLiveRows", () => {
     expect(rows[0].tvArchiveDuration).toBe(0)
   })
 
-  it("sets norm to normalize(name + ' ' + category)", () => {
+  it("sets norm to normalize(name), ignoring category", () => {
     const rows = mapXtreamLiveRows(
       [{ stream_id: 1, name: "CNN", category_name: "News" }],
       new Map()
     )
-    expect(rows[0].norm).toBe(normalize("CNN News"))
+    expect(rows[0].norm).toBe(normalize("CNN"))
+  })
+
+  it("does not let category or tvg-id leak a whole-word match into norm", () => {
+    const rows = mapXtreamLiveRows(
+      [
+        {
+          stream_id: 1,
+          name: "AUS| ORF 1 HD",
+          category_name: "AT",
+          epg_channel_id: "ORF1.at",
+        },
+      ],
+      new Map()
+    )
+    expect(scoreNormMatch(rows[0].norm, parseSearchQuery("AT|"))).toBe(0)
+    expect(scoreNormMatch(rows[0].norm, parseSearchQuery("ORF"))).toBeGreaterThan(0)
+  })
+
+  it("uses fallbackCategory when category can't be resolved", () => {
+    const rows = mapXtreamLiveRows(
+      [{ stream_id: 1, name: "Ch", category_id: 99 }],
+      new Map(),
+      "Uncategorized"
+    )
+    expect(rows[0].category).toBe("Uncategorized")
+  })
+
+  it("does not apply fallbackCategory when category resolves", () => {
+    const categoryMap = new Map([["10", "News"]])
+    const rows = mapXtreamLiveRows(
+      [{ stream_id: 1, name: "Ch", category_id: 10 }],
+      categoryMap,
+      "Uncategorized"
+    )
+    expect(rows[0].category).toBe("News")
+  })
+
+  it("keeps category empty when fallbackCategory is omitted", () => {
+    const rows = mapXtreamLiveRows([{ stream_id: 1, name: "Ch" }], new Map())
+    expect(rows[0].category).toBe("")
   })
 })
 
@@ -120,7 +160,7 @@ describe("mapXtreamVodRows", () => {
       ],
       new Map()
     )
-    expect(rows.map((row) => row.name)).toEqual(["Apple", "banana", "cherry"])
+    expect(rows.map((row: { name: string }) => row.name)).toEqual(["Apple", "banana", "cherry"])
   })
 
   it("defaults added to 0 when missing", () => {
@@ -168,6 +208,35 @@ describe("mapXtreamVodRows", () => {
     )
     expect(rows).toEqual([])
   })
+
+  it("uses fallbackCategory when category can't be resolved", () => {
+    const rows = mapXtreamVodRows(
+      [{ stream_id: 1, name: "Movie" }],
+      new Map(),
+      "Uncategorized"
+    )
+    expect(rows[0].category).toBe("Uncategorized")
+  })
+
+  it("does not apply fallbackCategory when category resolves", () => {
+    const categoryMap = new Map([["9", "Comedy"]])
+    const rows = mapXtreamVodRows(
+      [{ stream_id: 1, name: "Movie", category_ids: [9] }],
+      categoryMap,
+      "Uncategorized"
+    )
+    expect(rows[0].category).toBe("Comedy")
+  })
+
+  it("excludes fallbackCategory from norm", () => {
+    const rows = mapXtreamVodRows(
+      [{ stream_id: 1, name: "Movie" }],
+      new Map(),
+      "Uncategorized"
+    )
+    expect(rows[0].norm).not.toContain(normalize("Uncategorized"))
+    expect(rows[0].norm).toBe(normalize("Movie"))
+  })
 })
 
 describe("mapXtreamSeriesRows", () => {
@@ -214,7 +283,7 @@ describe("mapXtreamSeriesRows", () => {
       ],
       new Map()
     )
-    expect(rows.map((row) => row.name)).toEqual(["Apple", "banana"])
+    expect(rows.map((row: { name: string }) => row.name)).toEqual(["Apple", "banana"])
   })
 
   it("resolves category via category_ids[0] fallback then category_id", () => {
@@ -237,5 +306,34 @@ describe("mapXtreamSeriesRows", () => {
   it("keeps plot from the source row", () => {
     const rows = mapXtreamSeriesRows([{ series_id: 1, name: "A", plot: "A story" }], new Map())
     expect(rows[0].plot).toBe("A story")
+  })
+
+  it("uses fallbackCategory when category can't be resolved", () => {
+    const rows = mapXtreamSeriesRows(
+      [{ series_id: 1, name: "A" }],
+      new Map(),
+      "Uncategorized"
+    )
+    expect(rows[0].category).toBe("Uncategorized")
+  })
+
+  it("does not apply fallbackCategory when category resolves", () => {
+    const categoryMap = new Map([["7", "Drama"]])
+    const rows = mapXtreamSeriesRows(
+      [{ series_id: 1, name: "A", category_ids: [7] }],
+      categoryMap,
+      "Uncategorized"
+    )
+    expect(rows[0].category).toBe("Drama")
+  })
+
+  it("excludes fallbackCategory from norm", () => {
+    const rows = mapXtreamSeriesRows(
+      [{ series_id: 1, name: "A" }],
+      new Map(),
+      "Uncategorized"
+    )
+    expect(rows[0].norm).not.toContain(normalize("Uncategorized"))
+    expect(rows[0].norm).toBe(normalize("A"))
   })
 })

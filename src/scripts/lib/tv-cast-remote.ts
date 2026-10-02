@@ -7,6 +7,7 @@ import { formatElapsedSinceStart, formatPaddedHms } from "@/scripts/lib/format.j
 import { debounce } from "@/scripts/lib/debounce.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { log } from "@/scripts/lib/log.js"
+import { castErrorInlineText } from "@/scripts/lib/tv-cast-error-copy.js"
 import {
   getCastSession,
   castPause,
@@ -74,8 +75,8 @@ function ensureDialog(): HTMLDialogElement | null {
   node.id = DIALOG_ID
   node.setAttribute("aria-labelledby", `${DIALOG_ID}-title`)
   node.className = [
-    "fixed inset-0 sm:inset-y-0 sm:start-auto sm:end-0 m-0",
-    "w-screen sm:w-[26rem] h-dvh sm:h-full max-w-none sm:max-w-[26rem] max-h-none",
+    "fixed inset-0 sm:start-auto sm:end-0 sm:top-[var(--xt-titlebar-h,0px)] sm:bottom-0 m-0 z-[10001]",
+    "w-screen sm:w-[26rem] h-dvh sm:h-auto max-w-none sm:max-w-[26rem] max-h-none",
     "rounded-none sm:rounded-s-2xl border-0 sm:border-s sm:border-line",
     "bg-surface text-fg p-0 open:flex flex-col overflow-hidden backdrop:bg-black/60",
   ].join(" ")
@@ -84,13 +85,37 @@ function ensureDialog(): HTMLDialogElement | null {
   return dlg
 }
 
+const SCRIM_ID = "xt-cast-remote-scrim"
+
+/** Stands in for `::backdrop`, which only renders for modal dialogs. Clears the titlebar so
+    the window controls stay reachable. */
+function mountScrim(onDismiss: () => void): void {
+  if (typeof document === "undefined" || document.getElementById(SCRIM_ID)) return
+  const scrim = document.createElement("div")
+  scrim.id = SCRIM_ID
+  scrim.setAttribute("aria-hidden", "true")
+  scrim.className =
+    "fixed inset-x-0 bottom-0 top-[var(--xt-titlebar-h,0px)] z-[10000] bg-black/60 xt-cast-scrim"
+  scrim.addEventListener("click", onDismiss)
+  document.body.appendChild(scrim)
+}
+
+function unmountScrim(): void {
+  document.getElementById(SCRIM_ID)?.remove()
+}
+
 function formatClock(seconds: number): string {
   return formatPaddedHms(Math.max(0, Math.floor(seconds)))
 }
 
 const TRANSPORT_BUTTON_CLASS =
   "min-h-11 min-w-11 grid place-items-center rounded-full text-fg-2 enabled:hover:bg-surface-2 enabled:hover:text-fg " +
-  "enabled:focus-visible:bg-surface-2 disabled:opacity-40"
+  "enabled:focus-visible:bg-surface-2 disabled:opacity-50"
+
+/** Writes textContent only on change, so a live region doesn't re-announce an unchanged value. */
+function setLiveText(element: HTMLElement, text: string): void {
+  if (element.textContent !== text) element.textContent = text
+}
 
 function buildSkeleton(dialog: HTMLDialogElement): void {
   dialog.innerHTML = `
@@ -99,7 +124,7 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
 
       <header class="relative shrink-0 flex items-start gap-3 ps-4 pe-2 pb-3 pt-[calc(1rem+env(safe-area-inset-top,0px))] short-viewport:pb-2 short-viewport:pt-[calc(0.5rem+env(safe-area-inset-top,0px))]">
         <span data-role="artwork" class="grid size-14 shrink-0 place-items-center overflow-hidden rounded-lg bg-surface-2 text-fg-3 ring-1 ring-inset ring-line short-viewport:size-11">
-          <img data-role="artwork-img" alt="" class="hidden h-full w-full min-h-0 min-w-0 object-contain" />
+          <img data-role="artwork-img" alt="" class="hidden h-full w-full min-h-0 min-w-0 object-contain" onerror="this.classList.add('hidden');this.nextElementSibling?.classList.remove('hidden')" />
           <span data-role="artwork-fallback" aria-hidden="true">${ICON_DEVICE_TV}</span>
         </span>
         <div class="flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5">
@@ -124,7 +149,7 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
           <p data-role="error-line" role="alert" class="text-sm text-bad"></p>
           <button type="button" data-role="retry" class="self-start min-h-11 rounded-full px-3 text-xs font-semibold text-accent hover:bg-surface-2 focus-visible:bg-surface-2 disabled:opacity-60"></button>
           <details data-role="error-log" class="hidden text-xs text-fg-3">
-            <summary data-role="error-log-summary" class="cursor-pointer select-none">
+            <summary data-role="error-log-summary" class="min-h-11 cursor-pointer select-none hover:text-fg">
               <span data-role="error-log-summary-text"></span>
             </summary>
             <div data-role="error-log-text" class="mt-1 whitespace-pre-wrap break-words text-[11px] leading-snug"></div>
@@ -140,7 +165,7 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
         <div data-role="metadata" class="hidden flex-col gap-2 text-fg-3">
           <div data-role="metadata-now-meta" class="hidden text-xs tabular-nums"></div>
           <div data-role="metadata-heading" class="hidden text-sm font-medium leading-tight text-fg line-clamp-1"></div>
-          <button type="button" data-role="metadata-plot-btn" class="hidden w-full text-start" aria-expanded="false">
+          <button type="button" data-role="metadata-plot-btn" class="hidden w-full min-h-11 text-start hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" aria-expanded="false">
             <p data-role="metadata-plot" class="text-xs leading-snug line-clamp-3"></p>
             <span data-role="metadata-plot-toggle" class="mt-0.5 inline-block text-xs font-medium text-accent"></span>
           </button>
@@ -148,7 +173,7 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
           <div data-role="metadata-genre-row" class="hidden text-xs"></div>
         </div>
 
-        <button type="button" data-role="picker-entry" class="hidden w-full min-h-12 items-center gap-3 rounded-lg border border-line px-3 text-start hover:bg-surface-2 focus-visible:bg-surface-2">
+        <button type="button" data-role="picker-entry" class="hidden w-full min-h-11 items-center gap-3 rounded-lg border border-line px-3 text-start hover:bg-surface-2 focus-visible:bg-surface-2">
           <span class="shrink-0 text-fg-3" aria-hidden="true">${ICON_LIST_DETAILS}</span>
           <span data-role="picker-entry-label" class="flex-1 min-w-0 truncate text-sm"></span>
         </button>
@@ -156,7 +181,11 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
 
       <div class="relative flex shrink-0 flex-col gap-3 border-t border-line bg-surface px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] short-viewport:gap-2 short-viewport:pt-2">
         <div data-role="scrubber" class="flex flex-col gap-1.5">
-          <input data-role="seek-range" type="range" min="0" max="0" step="1" value="0" class="h-1.5 w-full cursor-pointer accent-accent" />
+          <div class="relative flex h-11 w-full items-center">
+            <div class="mpv-controls__track" aria-hidden="true"></div>
+            <div data-role="seek-fill" class="mpv-controls__fill" aria-hidden="true"></div>
+            <input data-role="seek-range" type="range" min="0" max="0" step="1" value="0" class="mpv-controls__range w-full cursor-pointer" />
+          </div>
           <div class="flex items-center justify-between text-xs tabular-nums text-fg-3">
             <span data-role="position-time"></span>
             <span data-role="duration-time"></span>
@@ -171,18 +200,22 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
         <div class="flex items-center justify-center gap-1 sm:gap-2">
           <button type="button" data-role="prev" class="${TRANSPORT_BUTTON_CLASS}">${ICON_PLAYER_TRACK_PREV}</button>
           <button type="button" data-role="back30" class="${TRANSPORT_BUTTON_CLASS}">${ICON_REWIND_BACKWARD_30}</button>
-          <button type="button" data-role="playpause" class="mx-1 grid min-h-14 min-w-14 place-items-center rounded-full bg-accent text-on-accent hover:brightness-110 focus-visible:brightness-110"></button>
+          <button type="button" data-role="playpause" class="mx-1 grid min-h-14 min-w-14 place-items-center rounded-full bg-accent text-bg text-2xl transition-[filter,transform] duration-150 ease-[cubic-bezier(0.16,1,0.3,1)] hover:brightness-110 active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"></button>
           <button type="button" data-role="forward30" class="${TRANSPORT_BUTTON_CLASS}">${ICON_REWIND_FORWARD_30}</button>
           <button type="button" data-role="next" class="${TRANSPORT_BUTTON_CLASS}">${ICON_PLAYER_TRACK_NEXT}</button>
         </div>
 
         <div data-role="volume-row" class="invisible flex items-center gap-3">
           <button type="button" data-role="mute" class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-full text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2"></button>
-          <input data-role="volume-range" type="range" min="0" max="1" step="0.05" value="1" class="h-1.5 flex-1 cursor-pointer accent-accent" />
+          <div class="relative flex h-11 flex-1 items-center">
+            <div class="mpv-controls__track" aria-hidden="true"></div>
+            <div data-role="volume-fill" class="mpv-controls__fill" aria-hidden="true"></div>
+            <input data-role="volume-range" type="range" min="0" max="1" step="0.05" value="1" class="mpv-controls__range w-full cursor-pointer" />
+          </div>
         </div>
 
         <div class="flex flex-col gap-2 short-viewport:flex-row">
-          <button type="button" data-role="footer-open" class="btn hidden short-viewport:flex-1"></button>
+          <button type="button" data-role="footer-open" class="btn hidden truncate short-viewport:flex-1"></button>
           <button type="button" data-role="footer-stop" class="btn-danger short-viewport:flex-1"></button>
         </div>
       </div>
@@ -213,6 +246,7 @@ interface RemoteRefs {
   metadataSkeleton: HTMLElement
   scrubber: HTMLElement
   seekRange: HTMLInputElement
+  seekFill: HTMLElement
   positionTime: HTMLElement
   durationTime: HTMLElement
   liveElapsed: HTMLElement
@@ -238,6 +272,7 @@ interface RemoteRefs {
   volumeRow: HTMLElement
   mute: HTMLButtonElement
   volumeRange: HTMLInputElement
+  volumeFill: HTMLElement
   footerOpen: HTMLButtonElement
   footerStop: HTMLButtonElement
 }
@@ -265,6 +300,7 @@ function collectRefs(dialog: HTMLDialogElement): RemoteRefs {
     metadataSkeleton: query("metadata-skeleton"),
     scrubber: query("scrubber"),
     seekRange: query<HTMLInputElement>("seek-range"),
+    seekFill: query("seek-fill"),
     positionTime: query("position-time"),
     durationTime: query("duration-time"),
     liveElapsed: query("live-elapsed"),
@@ -290,6 +326,7 @@ function collectRefs(dialog: HTMLDialogElement): RemoteRefs {
     volumeRow: query("volume-row"),
     mute: query<HTMLButtonElement>("mute"),
     volumeRange: query<HTMLInputElement>("volume-range"),
+    volumeFill: query("volume-fill"),
     footerOpen: query<HTMLButtonElement>("footer-open"),
     footerStop: query<HTMLButtonElement>("footer-stop"),
   }
@@ -397,11 +434,23 @@ function applyAvailability(refs: RemoteRefs, availability: { previous: boolean; 
   refs.next.disabled = !availability.next
 }
 
+/** The range's own track is transparent, so the fill div is the only thing that paints progress. */
+function updateSeekFill(refs: RemoteRefs): void {
+  const max = Number(refs.seekRange.max) || 0
+  const pct = max > 0 ? (Number(refs.seekRange.value) / max) * 100 : 0
+  refs.seekFill.style.width = `${Math.min(100, Math.max(0, pct))}%`
+}
+
+function updateVolumeFill(refs: RemoteRefs): void {
+  refs.volumeFill.style.width = `${Number(refs.volumeRange.value) * 100}%`
+}
+
 function applyScrubberState(refs: RemoteRefs, state: CastState): void {
   const previousMax = Number(refs.seekRange.max)
   const duration = state.durationSeconds ?? (Number.isFinite(previousMax) ? previousMax : 0)
   refs.seekRange.max = String(Math.max(duration, 0))
   refs.seekRange.value = String(state.positionSeconds)
+  updateSeekFill(refs)
   refs.positionTime.textContent = formatClock(state.positionSeconds)
   refs.durationTime.textContent = state.durationSeconds != null ? formatClock(state.durationSeconds) : ""
 }
@@ -416,16 +465,14 @@ function stateLabel(state: CastState): string {
   return state.state === "paused" ? t("cast.remote.statePaused") : t("cast.remote.statePlaying")
 }
 
-function applyState(refs: RemoteRefs, state: CastState): void {
+function applyState(refs: RemoteRefs, state: CastState, deviceName: string): void {
   if (state.state === "error") {
-    refs.stateEl.textContent = t("cast.pill.error")
-    refs.errorLine.textContent = state.error
-      ? t("cast.remote.errorDetail", { detail: state.error })
-      : t("cast.remote.errorGeneric")
+    setLiveText(refs.stateEl, t("cast.pill.error"))
+    setLiveText(refs.errorLine, castErrorInlineText(state.error, deviceName, t))
     refs.errorBlock.classList.remove("hidden")
     refs.errorBlock.classList.add("flex")
   } else {
-    refs.stateEl.textContent = stateLabel(state)
+    setLiveText(refs.stateEl, stateLabel(state))
     refs.errorBlock.classList.add("hidden")
     refs.errorBlock.classList.remove("flex")
     if (!isBusyStateValue(state.state)) setPlayPauseIcon(refs, state.state === "paused")
@@ -433,6 +480,7 @@ function applyState(refs: RemoteRefs, state: CastState): void {
   if (state.volume !== undefined) {
     refs.volumeRow.classList.remove("invisible")
     refs.volumeRange.value = String(state.volume)
+    updateVolumeFill(refs)
     setMuteIcon(refs, !!state.muted)
   }
 }
@@ -588,10 +636,19 @@ export function openCastRemote(): void {
   let channelPanel: CastPickerPanelHandle | null = null
   let pickerKind: "channels" | "episodes" | null = null
   let panelOpen = false
+  let spatialNavCleanup: (() => void) | undefined
   const idleTeardownGuard = createIdleTeardownGuard()
 
   function setBusy(busy: boolean): void {
     refs.busy.classList.toggle("hidden", !busy)
+  }
+
+  /** A broken poster URL falls back to the header thumbnail instead of a broken-image icon. */
+  function onPosterError(): void {
+    refs.poster.classList.add("hidden")
+    refs.poster.classList.remove("flex")
+    refs.artwork.classList.remove("hidden")
+    refs.wash.style.opacity = "0"
   }
 
   /** Channel id currently on the receiver, for the panel's now-playing accent. */
@@ -612,13 +669,14 @@ export function openCastRemote(): void {
     if (!stopArmed) return
     stopArmed = false
     refs.footerStop.textContent = t("cast.pill.stop")
-    refs.footerStop.removeAttribute("aria-describedby")
+    refs.footerStop.removeAttribute("aria-label")
   }
 
   /** Same two-press guard the pill uses, so one destructive action behaves the same on both surfaces. */
   function armStop(): void {
     stopArmed = true
-    refs.footerStop.textContent = t("cast.pill.stopConfirmLabel")
+    refs.footerStop.textContent = t("cast.pill.stopConfirm")
+    refs.footerStop.setAttribute("aria-label", t("cast.pill.stopConfirmLabel"))
     clearStopArmTimeout()
     stopArmTimeout = setTimeout(disarmStop, STOP_CONFIRM_WINDOW_MS)
   }
@@ -1001,7 +1059,7 @@ export function openCastRemote(): void {
     }
     if (state.volume !== undefined) lastKnownVolume = state.volume
     if (state.muted !== undefined) lastKnownMuted = state.muted
-    applyState(refs, state)
+    applyState(refs, state, currentSession.deviceName)
     setBusy(isBusyStateValue(state.state))
     updateLiveElapsedTicking(currentSession, state.state === "playing")
     if (state.state === "error") updateErrorLog(refs, currentSession)
@@ -1012,7 +1070,7 @@ export function openCastRemote(): void {
   }
 
   function onFeedHealth(health: CastFeedHealth): void {
-    if (health.consecutiveMisses > 0) refs.stateEl.textContent = t("cast.pill.reconnecting")
+    if (health.consecutiveMisses > 0) setLiveText(refs.stateEl, t("cast.pill.reconnecting"))
   }
 
   function onFeedLost(): void {
@@ -1032,6 +1090,7 @@ export function openCastRemote(): void {
     lastKnownPositionSeconds = clamped
     suppressPositionUntil = Date.now() + SEEK_SUPPRESS_MS
     refs.seekRange.value = String(clamped)
+    updateSeekFill(refs)
     refs.positionTime.textContent = formatClock(clamped)
     castSeek(device(), clamped)
       .then(() => pokeCastStateFeed())
@@ -1074,12 +1133,14 @@ export function openCastRemote(): void {
   }
 
   function onSeekInput(): void {
+    updateSeekFill(refs)
     refs.positionTime.textContent = formatClock(Number(refs.seekRange.value))
   }
 
   function onVolumeInput(): void {
     lastKnownVolume = Number(refs.volumeRange.value)
     lastKnownMuted = false
+    updateVolumeFill(refs)
     setMuteIcon(refs, false)
     debouncedSetVolume(lastKnownVolume, false)
   }
@@ -1176,6 +1237,10 @@ export function openCastRemote(): void {
     const target = event.target as HTMLElement | null
     const typing = !!target?.closest("input, textarea, select, [contenteditable]")
     const key = event.key.toLowerCase()
+    if (key === "escape" && !dialog.matches(":modal")) {
+      onCancel(event)
+      return
+    }
     if (typing) return
     if (key === " " || key === "k") {
       if (target?.closest("button")) return
@@ -1204,6 +1269,13 @@ export function openCastRemote(): void {
     }
   }
 
+  /** Playpause is hidden in connected-only mode, and the channel picker isn't always available. */
+  function firstFocusableControl(): HTMLButtonElement {
+    if (!refs.playpause.classList.contains("hidden")) return refs.playpause
+    if (!refs.pickerEntry.classList.contains("hidden")) return refs.pickerEntry
+    return refs.footerStop
+  }
+
   function settleClose(): void {
     try {
       if (dialog.open) dialog.close()
@@ -1217,17 +1289,22 @@ export function openCastRemote(): void {
   }
 
   function detach(): void {
+    unmountScrim()
     stopLiveElapsedTicker()
     clearStopArmTimeout()
     channelPanel?.destroy()
     channelPanel = null
     feedUnsubscribe()
+    spatialNavCleanup?.()
+    spatialNavCleanup = undefined
     dialog.removeEventListener("click", onClick)
     dialog.removeEventListener("keydown", onKeyDown)
     refs.seekRange.removeEventListener("pointerdown", onSeekPointerDown)
     refs.seekRange.removeEventListener("change", onSeekChange)
     refs.seekRange.removeEventListener("input", onSeekInput)
     refs.volumeRange.removeEventListener("input", onVolumeInput)
+    refs.footerStop.removeEventListener("blur", disarmStop)
+    refs.posterImg.removeEventListener("error", onPosterError)
     dialog.removeEventListener("cancel", onCancel)
     dialog.removeEventListener("close", onClose)
     document.removeEventListener(CAST_SESSION_EVENT, onSessionChanged)
@@ -1244,22 +1321,31 @@ export function openCastRemote(): void {
   refs.seekRange.addEventListener("change", onSeekChange)
   refs.seekRange.addEventListener("input", onSeekInput)
   refs.volumeRange.addEventListener("input", onVolumeInput)
+  refs.footerStop.addEventListener("blur", disarmStop)
+  refs.posterImg.addEventListener("error", onPosterError)
   dialog.addEventListener("cancel", onCancel)
   dialog.addEventListener("close", onClose)
   document.addEventListener(CAST_SESSION_EVENT, onSessionChanged)
   document.addEventListener(LOCALE_EVENT, onLocaleChange)
 
+  const asSidebar = document.documentElement.hasAttribute("data-tauri-desktop")
   try {
-    dialog.showModal()
+    if (asSidebar) {
+      dialog.show()
+      mountScrim(settleClose)
+    } else {
+      dialog.showModal()
+    }
   } catch (err) {
-    log.warn("[xt:tv-cast-remote] showModal failed:", err)
+    log.warn("[xt:tv-cast-remote] open failed:", err)
     detach()
     return
   }
 
-  attachDialogSpatialNav(dialog, {
-    defaultElement: `#${DIALOG_ID} [data-role="playpause"]`,
+  const initialFocusTarget = firstFocusableControl()
+  spatialNavCleanup = attachDialogSpatialNav(dialog, {
+    defaultElement: `#${DIALOG_ID} [data-role="${initialFocusTarget.dataset.role}"]`,
   })
 
-  refs.playpause.focus()
+  initialFocusTarget.focus()
 }

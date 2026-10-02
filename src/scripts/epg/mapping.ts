@@ -3,7 +3,7 @@
 import { log } from "@/scripts/lib/log.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { normalize } from "@/scripts/lib/text.js"
+import { matchesNormQuery, normalize, parseSearchQuery, type SearchToken } from "@/scripts/lib/text.js"
 import {
   loadCreds,
   getActiveEntry,
@@ -77,7 +77,8 @@ async function getActiveChannels(): Promise<Channel[]> {
   activeIsM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   // Overrides live in prefs, so a cache-only read has to wait for them.
   await ensureOverridesReady()
-  return readCachedLiveChannels(activePlaylistId) as Channel[]
+  const channels = readCachedLiveChannels(activePlaylistId) as (Channel & { isHeader?: boolean })[]
+  return channels.filter((channel) => !channel.isHeader)
 }
 
 function escapeHtml(input: string) {
@@ -132,16 +133,12 @@ function recomputeCachedNorm() {
 }
 
 function rebuildFiltered() {
-  const search = normalize(mapSearchEl?.value || "")
-  const tokens = search.length ? search.split(" ") : []
+  const tokens = parseSearchQuery(mapSearchEl?.value || "")
   filteredChannels = []
   for (let i = 0; i < cachedChannels.length; i++) {
     const channel = cachedChannels[i]
     if (!channelMatchesFilter(channel)) continue
-    if (tokens.length) {
-      const haystack = cachedChannelsNorm[i]
-      if (!tokens.every((token) => haystack.includes(token))) continue
-    }
+    if (!matchesNormQuery(cachedChannelsNorm[i], tokens, channel.name)) continue
     filteredChannels.push(channel)
   }
 }
@@ -355,6 +352,18 @@ function openPicker(channel: Channel) {
 
 const PICKER_RENDER_CAP = 200
 
+function fieldTier(haystack: string, token: SearchToken): number {
+  if (!haystack) return 0
+  if (haystack === token.text) return 3
+  if (token.wholeWord) {
+    const padded = " " + haystack + " "
+    return padded.includes(" " + token.text + " ") ? 2 : 0
+  }
+  if (haystack.startsWith(token.text)) return 2
+  if (haystack.includes(token.text)) return 1
+  return 0
+}
+
 function renderPickList() {
   if (!pickListEl) return
   const available = getAvailableEpgChannels(activePlaylistId)
@@ -371,8 +380,7 @@ function renderPickList() {
   }
   if (pickStatusEl) pickStatusEl.removeAttribute("data-i18n")
 
-  const search = normalize(pickSearchEl?.value || "")
-  const tokens = search.length ? search.split(" ") : []
+  const tokens = parseSearchQuery(pickSearchEl?.value || "")
   const currentOverride = pickerChannelId != null
     ? getChannelEpgOverride(activePlaylistId, pickerChannelId)
     : ""
@@ -387,10 +395,9 @@ function renderPickList() {
       const nameNorm = normalize(entry.name)
       let tokenHits = 0
       for (const token of tokens) {
-        if (nameNorm === token || idNorm === token) tokenHits += 3
-        else if (nameNorm.startsWith(token) || idNorm.startsWith(token)) tokenHits += 2
-        else if (nameNorm.includes(token) || idNorm.includes(token)) tokenHits += 1
-        else { tokenHits = 0; break }
+        const tier = Math.max(fieldTier(nameNorm, token), fieldTier(idNorm, token))
+        if (!tier) { tokenHits = 0; break }
+        tokenHits += tier
       }
       if (!tokenHits) continue
       score = tokenHits + Math.min(entry.count, 200) / 200

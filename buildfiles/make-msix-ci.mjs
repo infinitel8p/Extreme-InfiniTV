@@ -50,6 +50,16 @@ if (!existsSync(ffmpegSourcePath)) {
   process.exit(1)
 }
 
+const mpvBuiltPath = path.join(ROOT, "src-tauri", "target", "release", "infinitv-mpv.exe")
+const mpvBinariesPath = path.join(ROOT, "src-tauri", "binaries", "infinitv-mpv-x86_64-pc-windows-msvc.exe")
+const mpvSourcePath = existsSync(mpvBuiltPath) ? mpvBuiltPath : mpvBinariesPath
+// Runtime is unpublished/unpinned for now; skip staging it rather than hard-fail.
+const mpvAvailable = existsSync(mpvSourcePath)
+if (!mpvAvailable) {
+  console.warn(`Warning: missing mpv sidecar. Looked at:\n  ${mpvBuiltPath}\n  ${mpvBinariesPath}`)
+  console.warn("Skipping mpv sidecar staging.")
+}
+
 // Reuses the tauri-generated icons instead of a captured Assets/ folder, so
 // the MSIX always ships the current app branding.
 const iconsSourceDir = path.join(ROOT, "src-tauri", "icons")
@@ -81,6 +91,7 @@ console.log(`Staging in ${stagingDir}`)
 
 cpSync(exePath, path.join(stagingDir, "extreme-infinitv.exe"))
 cpSync(ffmpegSourcePath, path.join(stagingDir, "infinitv-ffmpeg.exe"))
+if (mpvAvailable) cpSync(mpvSourcePath, path.join(stagingDir, "infinitv-mpv.exe"))
 mkdirSync(path.join(stagingDir, "Assets"), { recursive: true })
 for (const iconName of manifestIcons) {
   cpSync(path.join(iconsSourceDir, iconName), path.join(stagingDir, "Assets", iconName))

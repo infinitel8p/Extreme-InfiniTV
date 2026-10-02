@@ -247,6 +247,7 @@ export function openAndroidPlayerPicker(
     }
 
     function detach() {
+      if (!dialog) return
       dialog.removeEventListener("click", onClick)
       dialog.removeEventListener("cancel", onCancel)
       dialog.removeEventListener("close", onClose)

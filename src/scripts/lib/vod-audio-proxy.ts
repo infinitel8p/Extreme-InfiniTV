@@ -1,7 +1,9 @@
 // Desktop ffmpeg VOD audio-remux proxy client: one session at a time.
 
 import { log } from "@/scripts/lib/log.js"
+import { splitUrlAuth } from "@/scripts/lib/url-auth.ts"
 import { getFfmpegPath, SETTINGS_EVENT } from "@/scripts/lib/app-settings.js"
+import { resolveDnsRoutedUrl } from "@/scripts/lib/provider-fetch.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { toastWarn } from "@/scripts/lib/toast.js"
 
@@ -98,11 +100,18 @@ export async function startVodAudioRemux(
   if (!vodAudioRemuxPlatformAvailable) return null
   try {
     const { invoke } = await import("@tauri-apps/api/core")
+    const { url: cleanUrl, authorization: splitAuthorization } = splitUrlAuth(options.url)
+    let routedUrl = cleanUrl
+    try {
+      routedUrl = (await resolveDnsRoutedUrl(cleanUrl, undefined)).url
+    } catch (err) {
+      log.warn("[xt:vod-audio-proxy] dns-routed url resolve failed:", err)
+    }
     const result = (await invoke("register_vod_audio_remux", {
-      url: options.url,
+      url: routedUrl,
       // An empty UA gets rejected or silently rerouted by some panels, so fall back to the WebView's own UA.
       userAgent: options.userAgent || (typeof navigator !== "undefined" ? navigator.userAgent : null) || null,
-      authorization: options.authorization ?? null,
+      authorization: options.authorization ?? splitAuthorization ?? null,
       audioStreamIndex: options.audioStreamIndex,
       startSeconds: options.startSeconds,
       transcodeAudio: options.transcodeAudio,

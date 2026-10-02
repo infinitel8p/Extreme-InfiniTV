@@ -54,9 +54,10 @@ export async function fetchReleases(
     }
   } catch {}
 
-  const response = await fetch(
+  const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
+  const response = await providerFetch(
     `https://api.github.com/repos/${repoSlug}/releases?per_page=${PER_PAGE}`,
-    { headers: { Accept: "application/vnd.github+json" } }
+    { headers: { Accept: "application/vnd.github+json" }, logKind: "update", dns: "global" }
   )
   if (!response.ok) throw new Error(`GitHub API ${response.status}`)
   const raw = (await response.json()) as Array<{

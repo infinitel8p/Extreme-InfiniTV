@@ -1,13 +1,13 @@
 {
   "productName": "Extreme InfiniTV",
   "mainBinaryName": "extreme-infinitv",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "identifier": "com.infinitel8p.xtream",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:4321",
-    "beforeDevCommand": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs && pnpm run dev",
-    "beforeBuildCommand": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs && pnpm run build"
+    "beforeDevCommand": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs && node ./src/scripts/ensure-mpv-runtime.mjs && pnpm run dev",
+    "beforeBuildCommand": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs && node ./src/scripts/ensure-mpv-runtime.mjs && pnpm run build"
   },
   "app": {
     "macOSPrivateApi": true,
@@ -50,7 +50,7 @@
     "copyright": "© 2025 Ludovico Ferrara",
     "createUpdaterArtifacts": true,
     "android": {
-      "versionCode": 109009000
+      "versionCode": 200009000
     },
     "icon": [
       "icons/32x32.png",

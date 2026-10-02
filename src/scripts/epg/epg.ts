@@ -8,7 +8,8 @@ import {
   safeHttpUrl,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
-import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
+import { mapXtreamLiveRows, parseCategoriesToMap } from "@/scripts/lib/catalog-mappers.js"
+import { t, initI18n, getActiveLocale, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
@@ -26,7 +27,7 @@ import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
 import { channelSupportsCatchup, isCatchupPlayable } from "@/scripts/lib/catchup.ts"
 import {
   ensureLoaded as ensurePrefsLoaded,
-  getFavorites,
+  getFavoritesOrdered,
   getRecents,
   getChannelEpgOverride,
   setChannelEpgOverride,
@@ -39,17 +40,22 @@ import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { getDensityFactor } from "@/scripts/lib/app-settings.js"
+import { createTimeline } from "@/scripts/lib/epg-timeline.ts"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
 
 const PX_PER_HOUR = 200
-const HOURS_VISIBLE = 6
 const ROW_HEIGHT = Math.max(44, Math.round(64 * getDensityFactor()))
 const CHANNEL_COL_WIDTH = 240
 const MAX_CHANNELS = 150
-const DAY_MS = 24 * 60 * 60 * 1000
+const HOUR_MS = 60 * 60 * 1000
+const HALF_HOUR_MS = 30 * 60 * 1000
+const DAY_APPROX_MS = 24 * HOUR_MS
 const CATCHUP_LOOKBACK_DAYS = 7
+const SCRUB_HOURS = 3
+const TICK_STEP_MINUTES = 30
+const FALLBACK_VIEWPORT_WIDTH = 1200
 
 // ----------------------------
 // UI refs
@@ -61,6 +67,8 @@ const bodyEl = document.getElementById("epg-body")
 const titleEl = document.getElementById("epg-title")
 const refreshBtn = document.getElementById("epg-refresh")
 const nowBtn = document.getElementById("epg-now")
+const earlierBtn = document.getElementById("epg-earlier")
+const laterBtn = document.getElementById("epg-later")
 const prevDayBtn = document.getElementById("epg-prev-day")
 const nextDayBtn = document.getElementById("epg-next-day")
 const dayLabelEl = document.getElementById("epg-day-label")
@@ -78,7 +86,10 @@ let channels = []
 let allChannels = []
 /** @type {Map<string, Array<{start:number,stop:number,title:string,desc:string}>>} channel id (tvg-id, lower-cased) → sorted programmes */
 const programmes = new Map()
-let viewStart = 0
+/** @type {ReturnType<typeof createTimeline> | null} */
+let timeline = null
+/** @type {{fromX:number,toX:number} | null} */
+let cellRange = null
 
 const picker = mountCategoryPicker({
   kind: "epg",
@@ -90,6 +101,10 @@ const picker = mountCategoryPicker({
   // counts every entry — not just ones with a tvg-id. The schedule grid
   // continues to drop tvg-id-less rows downstream.
   getItems: () => allChannels,
+  onSyncToggle: () => {
+    syncCategoryTitle()
+    applyCategory()
+  },
 })
 
 function setStatus(text) {
@@ -268,44 +283,69 @@ function hideStatus() {
 // ----------------------------
 // Render
 // ----------------------------
-function roundHalfHourFloor(ts) {
-  const half = 30 * 60 * 1000
-  return Math.floor(ts / half) * half
+function startOfDay(ts) {
+  const day = new Date(ts)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
 }
 
-function startOfHour(ts) {
-  const hour = 60 * 60 * 1000
-  return Math.floor(ts / hour) * hour
+// Calendar-day arithmetic (not +/- 86400000ms) so DST-shifted 23h/25h days land right.
+function addDays(dayStart, delta) {
+  const day = new Date(dayStart)
+  day.setDate(day.getDate() + delta)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
 }
 
-// Bounds match the catch-up window: up to 7 days back, up to 12h of upcoming
-// schedule ahead of now.
-function clampViewStart(ts) {
+function buildTimeline() {
   const now = Date.now()
-  const min = startOfHour(now - CATCHUP_LOOKBACK_DAYS * DAY_MS)
-  const max = now + 12 * 60 * 60 * 1000
-  return Math.max(min, Math.min(max, ts))
+  return createTimeline({
+    railStart: addDays(startOfDay(now), -CATCHUP_LOOKBACK_DAYS),
+    railEnd: addDays(startOfDay(now + 36 * HOUR_MS), 1),
+    pxPerHour: PX_PER_HOUR,
+  })
 }
 
-function isViewingToday() {
-  const now = new Date()
-  const viewed = new Date(viewStart)
-  return (
-    now.getFullYear() === viewed.getFullYear() &&
-    now.getMonth() === viewed.getMonth() &&
-    now.getDate() === viewed.getDate()
-  )
+function trackViewportWidth() {
+  const width = (gridEl?.clientWidth || 0) - CHANNEL_COL_WIDTH
+  return width > 0 ? width : FALLBACK_VIEWPORT_WIDTH
 }
+
+let shownDayStart = 0
 
 function updateDayLabel() {
-  if (!dayLabelEl) return
-  dayLabelEl.textContent = isViewingToday()
-    ? t("epg.today")
-    : new Intl.DateTimeFormat(getActiveLocale(), {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-      }).format(new Date(viewStart))
+  if (!dayLabelEl || !timeline || !gridEl) return
+  const dayStart = timeline.dayLabelForScroll(gridEl.scrollLeft)
+  if (dayStart === shownDayStart) return
+  shownDayStart = dayStart
+  const offset = Math.round((dayStart - startOfDay(Date.now())) / DAY_APPROX_MS)
+  dayLabelEl.textContent =
+    offset === 0
+      ? t("epg.today")
+      : offset === -1
+      ? t("epg.yesterday")
+      : offset === 1
+      ? t("epg.tomorrow")
+      : fmtDayLabel(dayStart)
+}
+
+function updateDayNavState() {
+  if (!timeline || !gridEl) return
+  const maxScroll = timeline.clampScroll(Infinity, trackViewportWidth())
+  const atMin = gridEl.scrollLeft <= 0
+  const atMax = gridEl.scrollLeft >= maxScroll - 1
+  if (prevDayBtn instanceof HTMLButtonElement && prevDayBtn.disabled !== atMin) {
+    prevDayBtn.disabled = atMin
+    prevDayBtn.setAttribute("aria-disabled", String(atMin))
+  }
+  if (nextDayBtn instanceof HTMLButtonElement && nextDayBtn.disabled !== atMax) {
+    nextDayBtn.disabled = atMax
+    nextDayBtn.setAttribute("aria-disabled", String(atMax))
+  }
+}
+
+function navigateToLive(channelId) {
+  window.location.href = `/livetv?channel=${encodeURIComponent(String(channelId))}`
 }
 
 function navigateToCatchup(channelId, startDisplayMs, stopDisplayMs, title, catchupId) {
@@ -319,48 +359,82 @@ function navigateToCatchup(channelId, startDisplayMs, stopDisplayMs, title, catc
     (catchupId ? `&cid=${encodeURIComponent(catchupId)}` : "")
 }
 
+let timeFormat = null
+let dayFormat = null
+
 function fmtTime(ts) {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(ts))
+  timeFormat ??= new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" })
+  return timeFormat.format(new Date(ts))
 }
 
-function timeToX(ts) {
-  return ((ts - viewStart) / (60 * 60 * 1000)) * PX_PER_HOUR
+function fmtDayLabel(ts) {
+  dayFormat ??= new Intl.DateTimeFormat(getActiveLocale(), {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  })
+  return dayFormat.format(new Date(ts))
 }
+
+document.addEventListener(LOCALE_EVENT, () => {
+  timeFormat = null
+  dayFormat = null
+  shownDayStart = 0
+  if (timeline) {
+    updateDayLabel()
+    renderTimeHeader()
+  }
+})
 
 function renderTimeHeader() {
-  if (!headerInner) return
+  if (!headerInner || !timeline) return
   headerInner.replaceChildren()
-  headerInner.style.width = `${HOURS_VISIBLE * PX_PER_HOUR}px`
-
-  // Half-hour ticks across the visible window.
-  for (let i = 0; i <= HOURS_VISIBLE * 2; i++) {
-    const ts = viewStart + i * 30 * 60 * 1000
+  headerInner.style.width = `${timeline.width}px`
+  const range = cellRange ?? { fromX: 0, toX: timeline.width }
+  const ticks = timeline.rulerTicks(
+    timeline.xToTime(range.fromX),
+    timeline.xToTime(range.toX),
+    TICK_STEP_MINUTES
+  )
+  const fragment = document.createDocumentFragment()
+  for (const { ts, x, isMidnight } of ticks) {
     const tick = document.createElement("div")
-    const isHour = i % 2 === 0
+    const isHour = new Date(ts).getMinutes() === 0
     tick.className =
-      "absolute top-0 bottom-0 flex items-end pb-1 select-none " +
-      (isHour
+      "absolute top-0 bottom-0 flex items-end pb-1 select-none whitespace-nowrap " +
+      (isMidnight
+        ? "border-l border-accent text-accent text-xs tabular-nums px-1.5 font-semibold"
+        : isHour
         ? "border-l border-line text-fg-2 text-xs tabular-nums px-1.5 font-medium"
         : "border-l border-line/40 text-fg-3 text-2xs tabular-nums px-1.5")
-    tick.style.left = `${(i * 30 * PX_PER_HOUR) / 60}px`
-    tick.textContent = fmtTime(ts)
-    headerInner.appendChild(tick)
+    tick.style.left = `${x}px`
+    tick.textContent = isMidnight ? fmtDayLabel(ts) : fmtTime(ts)
+    fragment.appendChild(tick)
   }
+  headerInner.appendChild(fragment)
 }
 
-function renderChannelRow(channel, programmesForRow) {
+const trackStripes =
+  `repeating-linear-gradient(to right, var(--color-line) 0 1px, transparent 1px ${PX_PER_HOUR}px),` +
+  `repeating-linear-gradient(to right, transparent 0 ${PX_PER_HOUR / 2}px, ` +
+  `color-mix(in oklab, var(--color-line) 40%, transparent) ${PX_PER_HOUR / 2}px ${PX_PER_HOUR / 2 + 1}px, ` +
+  `transparent ${PX_PER_HOUR / 2 + 1}px ${PX_PER_HOUR}px)`
+
+function renderChannelRow(channel) {
   const row = document.createElement("div")
   row.className = "epg-row flex items-stretch border-b border-line"
   row.style.height = `${ROW_HEIGHT}px`
 
   // Sticky channel info column.
-  const info = document.createElement("div")
+  const info = document.createElement("button")
+  info.type = "button"
   info.className =
-    "shrink-0 sticky left-0 z-10 bg-bg flex items-center gap-2 px-3 border-r border-line"
+    "shrink-0 sticky left-0 z-10 bg-bg flex items-center gap-2 px-3 border-r border-line " +
+    "text-left cursor-pointer outline-none hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent"
   info.style.width = `${CHANNEL_COL_WIDTH}px`
+  info.title = channel.name
+  info.setAttribute("aria-label", `${channel.name} - ${t("epg.watchNow")}`)
+  info.addEventListener("click", () => navigateToLive(channel.id))
 
   const logo = document.createElement("div")
   logo.className =
@@ -422,107 +496,157 @@ function renderChannelRow(channel, programmesForRow) {
 
   row.appendChild(info)
 
-  // Programme track - relative-positioned host for absolute cells.
   const track = document.createElement("div")
   track.className = "epg-track relative shrink-0"
-  track.style.width = `${HOURS_VISIBLE * PX_PER_HOUR}px`
-
-  // Background grid (half-hour stripes) for visual rhythm.
-  for (let i = 1; i <= HOURS_VISIBLE * 2; i++) {
-    const line = document.createElement("div")
-    line.className =
-      "absolute top-0 bottom-0 w-px " +
-      (i % 2 === 0 ? "bg-line" : "bg-line/40")
-    line.style.left = `${(i * 30 * PX_PER_HOUR) / 60}px`
-    track.appendChild(line)
-  }
-
-  const visEnd = viewStart + HOURS_VISIBLE * 60 * 60 * 1000
-
-  const nowMs = Date.now()
-  const canChannelCatchup = channelSupportsCatchup(channel)
-
-  for (const p of programmesForRow) {
-    if (p.stop <= viewStart || p.start >= visEnd) continue
-    const left = Math.max(0, timeToX(p.start))
-    const right = Math.min(timeToX(p.stop), HOURS_VISIBLE * PX_PER_HOUR)
-    const width = Math.max(2, right - left)
-    const isLive = p.start <= nowMs && p.stop > nowMs
-    const isPast = p.stop <= nowMs
-    // rawStart/rawStop recover true XMLTV time so catch-up never sees the guide-display tvg-shift.
-    const rawStart = p.rawStart ?? p.start
-    const rawStop = p.rawStop ?? p.stop
-    const canReplay = isPast && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)
-
-    const cell = document.createElement("button")
-    cell.type = "button"
-    cell.className =
-      "epg-cell absolute top-1 bottom-1 rounded-lg px-2 py-1 text-left outline-none " +
-      "border transition-[background-color,color,border-color,transform] duration-150 ease-out overflow-hidden " +
-      "active:scale-[0.97] " +
-      (isLive
-        ? "border-accent bg-accent-soft text-fg hover:bg-accent/20 focus-visible:bg-accent/20"
-        : canReplay
-        ? "epg-cell-replay border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg"
-        : isPast
-        ? "epg-cell-past border-line bg-surface text-fg-3 hover:bg-surface-2 hover:text-fg-2 focus-visible:bg-surface-2 focus-visible:text-fg-2"
-        : "border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg") +
-      " focus-visible:ring-1 focus-visible:ring-accent"
-    cell.style.left = `${left}px`
-    cell.style.width = `${width}px`
-    cell.title = `${fmtTime(p.start)}–${fmtTime(p.stop)} · ${p.title}${p.desc ? "\n\n" + p.desc : ""}`
-    cell.addEventListener("click", () => {
-      const dialogOpts = {
-        title: p.title,
-        desc: p.desc,
-        start: p.start,
-        stop: p.stop,
-        channelName: channel.name,
-        channelId: channel.id,
-      }
-      if (canReplay) {
-        dialogOpts.onCatchup = () =>
-          navigateToCatchup(channel.id, rawStart, rawStop, p.title, p.catchupId)
-      } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)) {
-        dialogOpts.onWatchFromStart = () =>
-          navigateToCatchup(channel.id, rawStart, rawStop, p.title, p.catchupId)
-      }
-      openProgrammeDialog(dialogOpts)
-    })
-
-    const titleLine = document.createElement("div")
-    titleLine.className = "truncate text-xs font-medium"
-    if (canReplay) {
-      const replayDot = document.createElement("span")
-      replayDot.className = "epg-cell-replay-dot"
-      replayDot.title = t("catchup.badge")
-      titleLine.appendChild(replayDot)
-      titleLine.appendChild(document.createTextNode(p.title))
-    } else {
-      titleLine.textContent = p.title
-    }
-    const timeLine = document.createElement("div")
-    timeLine.className = "truncate text-2xs text-fg-3 tabular-nums"
-    timeLine.textContent = `${fmtTime(p.start)}–${fmtTime(p.stop)}`
-    cell.append(titleLine, timeLine)
-
-    track.appendChild(cell)
-  }
+  track.style.width = `${timeline.width}px`
+  track.style.backgroundImage = trackStripes
 
   row.appendChild(track)
-  return row
+  return { row, track }
+}
+
+function buildProgrammeCell(channel, rowIdx, cellInfo, nowMs, canChannelCatchup) {
+  const p = cellInfo.programme
+  const isLive = p.start <= nowMs && p.stop > nowMs
+  const isPast = p.stop <= nowMs
+  // rawStart/rawStop recover true XMLTV time so catch-up never sees the guide-display tvg-shift.
+  const rawStart = p.rawStart ?? p.start
+  const rawStop = p.rawStop ?? p.stop
+  const canReplay = isPast && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)
+
+  const cell = document.createElement("button")
+  cell.type = "button"
+  cell.dataset.rowIdx = String(rowIdx)
+  cell.className =
+    "epg-cell absolute top-1 bottom-1 rounded-lg px-2 " +
+    (ROW_HEIGHT <= 44 ? "py-0.5 " : "py-1 ") +
+    "flex flex-col justify-center gap-0.5 leading-tight text-left outline-none " +
+    "border transition-[background-color,color,border-color,transform] duration-150 ease-out overflow-hidden " +
+    "active:scale-[0.97] " +
+    (isLive
+      ? "border-accent bg-accent-soft text-fg hover:bg-accent/20 focus-visible:bg-accent/20"
+      : canReplay
+      ? "epg-cell-replay border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg"
+      : isPast
+      ? "epg-cell-past border-line bg-surface text-fg-3 hover:bg-surface-2 hover:text-fg-2 focus-visible:bg-surface-2 focus-visible:text-fg-2"
+      : "border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg") +
+    " focus-visible:ring-1 focus-visible:ring-accent"
+  cell.style.left = `${cellInfo.x}px`
+  cell.style.width = `${cellInfo.width}px`
+  cell.title = `${fmtTime(p.start)}–${fmtTime(p.stop)} · ${p.title}${p.desc ? "\n\n" + p.desc : ""}`
+  cell.addEventListener("click", () => {
+    const dialogOpts = {
+      title: p.title,
+      desc: p.desc,
+      start: p.start,
+      stop: p.stop,
+      channelName: channel.name,
+      channelId: channel.id,
+    }
+    if (canReplay) {
+      dialogOpts.onCatchup = () =>
+        navigateToCatchup(channel.id, rawStart, rawStop, p.title, p.catchupId)
+    } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)) {
+      dialogOpts.onWatchFromStart = () =>
+        navigateToCatchup(channel.id, rawStart, rawStop, p.title, p.catchupId)
+    }
+    openProgrammeDialog(dialogOpts)
+  })
+
+  const titleLine = document.createElement("div")
+  titleLine.className = "truncate w-full min-w-0 leading-tight text-xs font-medium"
+  if (canReplay) {
+    const replayDot = document.createElement("span")
+    replayDot.className = "epg-cell-replay-dot"
+    replayDot.title = t("catchup.badge")
+    titleLine.appendChild(replayDot)
+    titleLine.appendChild(document.createTextNode(p.title))
+  } else {
+    titleLine.textContent = p.title
+  }
+  const timeLine = document.createElement("div")
+  timeLine.className = "truncate w-full min-w-0 leading-tight text-2xs text-fg-3 tabular-nums"
+  timeLine.textContent = `${fmtTime(p.start)}–${fmtTime(p.stop)}`
+  cell.append(titleLine, timeLine)
+  return cell
+}
+
+/** @type {Map<number, {channel:any,list:any[],track:HTMLElement,cells:Map<number,HTMLElement>}>} */
+const rowStates = new Map()
+
+function syncRowCells(rowIdx) {
+  const state = rowStates.get(rowIdx)
+  if (!state || !timeline || !cellRange) return
+  const wanted = timeline.programmeCellsInWindow(
+    state.list,
+    timeline.xToTime(cellRange.fromX),
+    timeline.xToTime(cellRange.toX)
+  )
+  const seenKeys = new Map()
+  const wantedKeys = wanted.map((cellInfo) => {
+    const baseKey = `${cellInfo.start}:${cellInfo.stop}`
+    const duplicates = seenKeys.get(baseKey) ?? 0
+    seenKeys.set(baseKey, duplicates + 1)
+    return duplicates ? `${baseKey}#${duplicates}` : baseKey
+  })
+  const wantedKeySet = new Set(wantedKeys)
+  for (const [key, cell] of state.cells) {
+    if (wantedKeySet.has(key) || cell === document.activeElement) continue
+    cell.remove()
+    state.cells.delete(key)
+  }
+  const nowMs = Date.now()
+  const canChannelCatchup = channelSupportsCatchup(state.channel)
+  const ordered = wanted.map(
+    (cellInfo, i) =>
+      state.cells.get(wantedKeys[i]) ??
+      buildProgrammeCell(state.channel, rowIdx, cellInfo, nowMs, canChannelCatchup)
+  )
+  let reference = null
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    const cell = ordered[i]
+    if (cell.parentNode !== state.track || cell.nextSibling !== reference) {
+      state.track.insertBefore(cell, reference)
+    }
+    state.cells.set(wantedKeys[i], cell)
+    reference = cell
+  }
+}
+
+function computeCellRange() {
+  const viewportWidth = trackViewportWidth()
+  const { fromX, toX } = timeline.visibleWindow(
+    gridEl?.scrollLeft || 0,
+    viewportWidth,
+    viewportWidth
+  )
+  return { fromX, toX }
+}
+
+function refreshHorizontalWindow(force) {
+  if (!timeline || !gridEl) return
+  if (!force && cellRange) {
+    const viewportWidth = trackViewportWidth()
+    const visible = timeline.visibleWindow(gridEl.scrollLeft, viewportWidth)
+    const margin = viewportWidth / 2
+    const nearLeft = cellRange.fromX > 0 && visible.fromX < cellRange.fromX + margin
+    const nearRight = cellRange.toX < timeline.width && visible.toX > cellRange.toX - margin
+    if (!nearLeft && !nearRight) return
+  }
+  cellRange = computeCellRange()
+  for (const rowIdx of rowStates.keys()) syncRowCells(rowIdx)
+  renderTimeHeader()
 }
 
 function renderNowLine() {
-  if (!bodyEl) return
-  // Remove old indicator if any.
+  if (!bodyEl || !timeline) return
   bodyEl.querySelector("[data-now-line]")?.remove()
-  const x = timeToX(Date.now())
-  if (x < 0 || x > HOURS_VISIBLE * PX_PER_HOUR) return
+  const x = timeline.timeToX(Date.now())
+  if (x < 0 || x > timeline.width) return
   const line = document.createElement("div")
   line.dataset.nowLine = ""
   line.className =
-    "epg-now-line absolute top-0 bottom-0 w-px bg-accent pointer-events-none z-20"
+    "epg-now-line absolute top-0 bottom-0 w-px bg-accent pointer-events-none z-[9]"
   line.style.left = `${CHANNEL_COL_WIDTH + x}px`
   bodyEl.appendChild(line)
 }
@@ -572,6 +696,7 @@ function renderVirtualWindow() {
       clearRowLogoFallbackTimer(row)
       row.remove()
       renderedRows.delete(idx)
+      rowStates.delete(idx)
     }
   }
 
@@ -582,17 +707,16 @@ function renderVirtualWindow() {
     const key = effectiveTvgId(channel, activePlaylistId)
     // shiftChannelProgrammes stashes rawStart/rawStop so catch-up navigation can bypass tvg-shift.
     const list = key ? shiftChannelProgrammes(programmes.get(key) || [], channel.tvgShift) : []
-    const row = renderChannelRow(channel, list)
+    const { row, track } = renderChannelRow(channel)
     row.style.position = "absolute"
     row.style.top = `${idx * ROW_HEIGHT}px`
     row.style.left = "0"
     row.style.right = "0"
     row.dataset.rowIdx = String(idx)
-    for (const cell of row.querySelectorAll(".epg-cell")) {
-      ;(cell as HTMLElement).dataset.rowIdx = String(idx)
-    }
     bodyEl.appendChild(row)
     renderedRows.set(idx, row)
+    rowStates.set(idx, { channel, list, track, cells: new Map() })
+    syncRowCells(idx)
     added = true
   }
 
@@ -612,12 +736,28 @@ function onVirtualScroll() {
   requestAnimationFrame(() => {
     virtualScrollPending = false
     renderVirtualWindow()
+    refreshHorizontalWindow(false)
+    updateDayLabel()
+    updateDayNavState()
+    if (
+      pendingScrollTarget !== null &&
+      Math.abs(gridEl.scrollLeft - pendingScrollTarget) < 1
+    ) {
+      pendingScrollTarget = null
+    }
   })
 }
 
 function attachVirtualScrollListener() {
   if (virtualScrollAttached || !gridEl) return
   gridEl.addEventListener("scroll", onVirtualScroll, { passive: true })
+  const dropPendingScroll = () => {
+    pendingScrollTarget = null
+  }
+  gridEl.addEventListener("scrollend", dropPendingScroll, { passive: true })
+  gridEl.addEventListener("wheel", dropPendingScroll, { passive: true })
+  gridEl.addEventListener("touchstart", dropPendingScroll, { passive: true })
+  gridEl.addEventListener("pointerdown", dropPendingScroll, { passive: true })
   virtualScrollAttached = true
 }
 
@@ -730,18 +870,19 @@ function render() {
   if (!gridEl || !bodyEl || !headerInner) return
   hideStatus()
 
-  // Width of the grid content (channel col + visible time)
-  const totalWidth = CHANNEL_COL_WIDTH + HOURS_VISIBLE * PX_PER_HOUR
+  timeline = timeline ?? buildTimeline()
+  const totalWidth = CHANNEL_COL_WIDTH + timeline.width
   // Apply width to the inner sliding rail in case CSS hasn't.
   bodyEl.style.minWidth = `${totalWidth}px`
   headerInner.parentElement.style.minWidth = `${totalWidth}px`
-
-  renderTimeHeader()
 
   // Reset windowed render state
   for (const row of renderedRows.values()) clearRowLogoFallbackTimer(row)
   bodyEl.replaceChildren()
   renderedRows.clear()
+  rowStates.clear()
+  cellRange = computeCellRange()
+  renderTimeHeader()
   virtualizedRangeStart = -1
   virtualizedRangeEnd = -1
 
@@ -774,8 +915,13 @@ function pickChannels(cachedChannels) {
   const activeCat = picker.getActiveCat()
   let filtered
   if (activeCat === CAT_FAVORITES && activePlaylistId) {
-    const favs = getFavorites(activePlaylistId, "live")
-    filtered = cachedChannels.filter((channel) => favs.has(channel.id))
+    const byId = new Map(cachedChannels.map((channel) => [channel.id, channel]))
+    const orderedFavIds = getFavoritesOrdered(activePlaylistId, "live")
+    filtered = []
+    for (const favId of orderedFavIds) {
+      const channel = byId.get(favId)
+      if (channel) filtered.push(channel)
+    }
   } else if (activeCat === CAT_RECENTS && activePlaylistId) {
     const byId = new Map(cachedChannels.map((channel) => [channel.id, channel]))
     const recents = getRecents(activePlaylistId, "live")
@@ -811,19 +957,7 @@ async function fetchXtreamChannels() {
   const catRes = await xtreamApiFetch("get_live_categories")
   if (!catRes.ok) throw new Error(`HTTP ${catRes.status}`)
   const catData = await catRes.json().catch(() => [])
-  const catArr = Array.isArray(catData)
-    ? catData
-    : Array.isArray(catData?.categories)
-    ? catData.categories
-    : []
-  const catMap = new Map(
-    catArr
-      .filter((c) => c && c.category_id != null)
-      .map((c) => [
-        String(c.category_id),
-        String(c.category_name || "").trim(),
-      ])
-  )
+  const catMap = parseCategoriesToMap(catData)
 
   const r = await xtreamApiFetch("get_live_streams")
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -833,35 +967,7 @@ async function fetchXtreamChannels() {
     : Array.isArray(data?.streams)
     ? data.streams
     : []
-  return arr
-    .map((ch) => {
-      const ids =
-        (Array.isArray(ch.category_ids) &&
-          ch.category_ids.length &&
-          ch.category_ids) ||
-        (ch.category_id != null ? [ch.category_id] : [])
-      let category = String(ch.category_name || "").trim()
-      if (!category && ids.length && catMap.size) {
-        for (const id of ids) {
-          const n = catMap.get(String(id))
-          if (n) {
-            category = n
-            break
-          }
-        }
-      }
-      return {
-        id: Number(ch.stream_id),
-        name: String(ch.name || ""),
-        category,
-        logo: ch.stream_icon || null,
-        tvgId: String(ch.epg_channel_id || "") || undefined,
-        chno: Number(ch.num) || undefined,
-        tvArchive: Number(ch.tv_archive) || 0,
-        tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
-      }
-    })
-    .filter((x) => x.id && x.name)
+  return mapXtreamLiveRows(arr, catMap, t("stream.uncategorized") || "Uncategorized")
 }
 
 // ----------------------------
@@ -971,12 +1077,14 @@ async function init() {
   allChannels = cached
   picker.rerender()
 
-  viewStart = roundHalfHourFloor(Date.now() - 30 * 60 * 1000)
+  timeline = buildTimeline()
+  shownDayStart = 0
   updateDayLabel()
+  updateDayNavState()
   showLoadingSkeleton(t("epg.loadingFull"))
   programmes.clear()
   try {
-    const state = await loadProgrammes(activePlaylistId, creds, { force: true })
+    const state = await loadProgrammes(activePlaylistId, creds)
     if (!state) throw new Error("EPG fetch failed")
     for (const [k, v] of state.programmes) programmes.set(k, v)
   } catch (e) {
@@ -1004,6 +1112,57 @@ async function init() {
   }
 
   render()
+  scrollToNow(false)
+  syncViewToScroll()
+}
+
+// ----------------------------
+// Rail scrolling
+// ----------------------------
+function shouldReduceMotion() {
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+  const perfMode = document.documentElement.getAttribute("data-perf-mode") === "on"
+  return !!reduce || perfMode
+}
+
+function clampScrollLeft(x) {
+  if (!timeline) return Math.max(0, x)
+  return timeline.clampScroll(x, trackViewportWidth())
+}
+
+let pendingScrollTarget = null
+
+function scrollGridTo(x, smooth) {
+  if (!gridEl) return
+  const target = clampScrollLeft(x)
+  const farJump = Math.abs(target - gridEl.scrollLeft) > trackViewportWidth() * 3
+  if (smooth && !farJump && !shouldReduceMotion()) {
+    try {
+      gridEl.scrollTo({ left: target, behavior: "smooth" })
+      pendingScrollTarget = target
+      return
+    } catch {}
+  }
+  pendingScrollTarget = null
+  gridEl.scrollLeft = target
+  syncViewToScroll()
+}
+
+function syncViewToScroll() {
+  renderVirtualWindow()
+  refreshHorizontalWindow(false)
+  updateDayLabel()
+  updateDayNavState()
+}
+
+function scrollToNow(smooth) {
+  if (!timeline) return
+  scrollGridTo(timeline.timeToX(Date.now() - HALF_HOUR_MS), smooth)
+}
+
+function scrollGridBy(deltaPx) {
+  if (!gridEl) return
+  scrollGridTo((pendingScrollTarget ?? gridEl.scrollLeft) + deltaPx, true)
 }
 
 refreshBtn?.addEventListener("click", () => {
@@ -1012,35 +1171,21 @@ refreshBtn?.addEventListener("click", () => {
   init()
 })
 
-nowBtn?.addEventListener("click", () => {
-  if (!gridEl) return
-  viewStart = roundHalfHourFloor(Date.now() - 30 * 60 * 1000)
-  updateDayLabel()
-  if (programmes.size && channels.length) render()
-  // Centre the now-line about a third in from the left of the visible width.
-  const visible = gridEl.clientWidth || 0
-  const target = Math.max(
-    0,
-    CHANNEL_COL_WIDTH + timeToX(Date.now()) - Math.max(120, visible / 3)
-  )
-  try {
-    gridEl.scrollTo({ left: target, behavior: "smooth" })
-  } catch {
-    gridEl.scrollLeft = target
-  }
-})
+nowBtn?.addEventListener("click", () => scrollToNow(true))
 
 prevDayBtn?.addEventListener("click", () => {
-  viewStart = clampViewStart(viewStart - DAY_MS)
-  updateDayLabel()
-  if (programmes.size && channels.length) render()
+  if ((prevDayBtn as HTMLButtonElement).disabled) return
+  scrollGridBy(-24 * PX_PER_HOUR)
 })
 
 nextDayBtn?.addEventListener("click", () => {
-  viewStart = clampViewStart(viewStart + DAY_MS)
-  updateDayLabel()
-  if (programmes.size && channels.length) render()
+  if ((nextDayBtn as HTMLButtonElement).disabled) return
+  scrollGridBy(24 * PX_PER_HOUR)
 })
+
+earlierBtn?.addEventListener("click", () => scrollGridBy(-SCRUB_HOURS * PX_PER_HOUR))
+
+laterBtn?.addEventListener("click", () => scrollGridBy(SCRUB_HOURS * PX_PER_HOUR))
 
 document.addEventListener(EPG_OFFSET_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail

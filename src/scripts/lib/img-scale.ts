@@ -1,8 +1,23 @@
 // Pure sizing/URL helpers for the downscale-and-cache image pipeline.
 
-export type ImgKind = "logo" | "poster" | "backdrop"
+// "backdrop-hero" is the TV home hero band's own real-backdrop cache class: the band
+// never renders taller than ~40vh, so a full 1280px "backdrop" decode is wasted memory.
+export type ImgKind = "logo" | "poster" | "backdrop" | "backdrop-hero"
 
-export const IMG_KIND_MAX_DIM: Record<ImgKind, number> = { logo: 128, poster: 576, backdrop: 1280 }
+export const IMG_KIND_MAX_DIM: Record<ImgKind, number> = {
+  logo: 128,
+  poster: 576,
+  backdrop: 1280,
+  "backdrop-hero": 720,
+}
+
+const LITE_POSTER_MAX_DIM = 320
+
+/** Tier-aware max dimension: the lite tier keeps posters smaller to bound decode memory. */
+export function imgKindMaxDim(kind: ImgKind, isLite: boolean): number {
+  if (isLite && kind === "poster") return LITE_POSTER_MAX_DIM
+  return IMG_KIND_MAX_DIM[kind]
+}
 
 export function scaleToFit(
   width: number,

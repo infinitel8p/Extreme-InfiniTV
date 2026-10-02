@@ -1,7 +1,9 @@
 // Desktop client for the Rust MKV tee-proxy (vod_proxy.rs).
 
 import { log } from "@/scripts/lib/log.js"
+import { splitUrlAuth } from "@/scripts/lib/url-auth.ts"
 import { getUserAgent, getDownloadDir } from "@/scripts/lib/app-settings.js"
+import { resolveDnsRoutedUrl } from "@/scripts/lib/provider-fetch.js"
 
 export interface MkvSubtitleTrackInfo {
   number: number
@@ -229,10 +231,20 @@ async function openMkvProxySession(
 export async function prepareVodPlayback(sourceUrl: string): Promise<VodProxySession> {
   const passthrough: VodProxySession = { playbackUrl: sourceUrl, mkvSession: null }
   if (!vodProxyAvailable || !isMkvProxyCandidate(sourceUrl)) return passthrough
+  // register_vod_proxy has no authorization parameter, so a credentialed URL stays direct.
+  const { authorization } = splitUrlAuth(sourceUrl)
+  let registerUrl = sourceUrl
+  if (!authorization) {
+    try {
+      registerUrl = (await resolveDnsRoutedUrl(sourceUrl, undefined)).url
+    } catch (err) {
+      log.warn("[xt:vod-proxy] dns-routed url resolve failed:", err)
+    }
+  }
   const session = await openMkvProxySession(() => {
     // An empty UA gets rejected or silently rerouted by some panels, so fall back to the WebView's own UA.
     const userAgent = getUserAgent() || (typeof navigator !== "undefined" ? navigator.userAgent : null) || null
-    return invokeRegisterCommand("register_vod_proxy", { url: sourceUrl, userAgent })
+    return invokeRegisterCommand("register_vod_proxy", { url: registerUrl, userAgent })
   })
   if (session === null) log.warn("[xt:vod-proxy] falling back to direct playback")
   return session ?? passthrough

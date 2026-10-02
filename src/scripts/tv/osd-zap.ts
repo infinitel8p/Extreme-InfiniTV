@@ -3,6 +3,7 @@
 export interface ZapChannel {
   id: string | number
   chno?: number | null
+  unresolved?: true
 }
 
 /** Exact channel-number match wins; otherwise a 1-based list position; null when neither resolves. */

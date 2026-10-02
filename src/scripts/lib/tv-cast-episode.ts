@@ -5,6 +5,7 @@ import { log } from "@/scripts/lib/log.js"
 import { getCastSession, sessionAsDevice, castPlay, updateCastSession, type CastSession } from "@/scripts/lib/tv-cast.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { resolvePlaylistCreds } from "@/scripts/lib/tv-cast-live.js"
+import { getPlaylistDnsOverride } from "@/scripts/lib/creds.js"
 import { flattenSeriesEpisodes, type SeriesEpisodeEntry } from "@/scripts/lib/tv-cast-next.js"
 
 /** Season/episode list for a series, ordered and deduped. Empty when the provider has nothing. */
@@ -55,11 +56,13 @@ export async function castSeriesEpisode(
     if (!isCastableSrc(src)) return false
 
     const title = entry.title || `S${season}E${episodeNum}`
+    const dns = (await getPlaylistDnsOverride(playlistId))?.raw ?? null
     const descriptor = buildVodCastDescriptor({
       src,
       title,
       logo: session.logo,
       resumeSeconds: options.resumeSeconds || 0,
+      dns,
     })
     await castPlay(sessionAsDevice(session), descriptor, {
       seriesContext: { playlistId, seriesId, season, episodeNum },

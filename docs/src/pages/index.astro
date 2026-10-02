@@ -5,75 +5,36 @@ import type { IconName } from "../components/Icon.astro"
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "")
 
-const cards: { href: string; title: string; body: string; icon: IconName; featured?: boolean }[] = [
-  {
-    href: `${base}/getting-started/`,
-    title: "Getting started",
-    body: "Install Extreme InfiniTV, sign in, and start your first stream.",
-    icon: "rocket",
-    featured: true,
-  },
-  {
-    href: `${base}/playlists/`,
-    title: "Playlists (Xtream + M3U)",
-    body: "Add Xtream Codes credentials or paste an M3U / M3U8 URL.",
-    icon: "playlist",
-  },
-  {
-    href: `${base}/custom-playlists/`,
-    title: "Custom playlists",
-    body: "Build your own channel list from channels across all your playlists.",
-    icon: "playlist",
-  },
-  {
-    href: `${base}/add-from-website/`,
-    title: "Add from website",
-    body: "Turn a web page that plays a livestream into a playable channel.",
-    icon: "search",
-  },
-  {
-    href: `${base}/catch-up/`,
-    title: "Catch-up TV & replay",
-    body: "Replay programmes from your provider's archive, pause and rewind live TV.",
-    icon: "tv",
-  },
-  {
-    href: `${base}/audio-formats/`,
-    title: "Audio formats & silent channels",
-    body: "Why some channels play with no sound, and how the desktop app fixes it.",
-    icon: "volume",
-  },
-  {
-    href: `${base}/subtitles/`,
-    title: "Subtitles",
-    body: "Play movies and series with the subtitles embedded in the file.",
-    icon: "subtitles",
-  },
-  {
-    href: `${base}/external-players/`,
-    title: "External players",
-    body: "Hand off playback to MPV, VLC, or any installed Android video app.",
-    icon: "external",
-  },
-  {
-    href: `${base}/keyboard-and-d-pad/`,
-    title: "Keyboard + D-pad",
-    body: "Shortcuts for desktop and spatial navigation for TV remotes.",
-    icon: "keyboard",
-  },
-  {
-    href: `${base}/troubleshooting/`,
-    title: "Troubleshooting",
-    body: "Test a stream, fix EPG offsets, recover from a failed login.",
-    icon: "lifebuoy",
-  },
-  {
-    href: `${base}/translations/`,
-    title: "Translations",
-    body: "16 languages ship with the app. Help translate it into yours.",
-    icon: "language",
-  },
-]
+interface PageFrontmatter {
+  title?: string
+  description?: string
+  icon?: IconName
+  cardOrder?: number
+  featured?: boolean
+}
+
+const pages = import.meta.glob<{ frontmatter: PageFrontmatter }>("./*.{md,mdx}", {
+  eager: true,
+})
+
+const cards = Object.entries(pages)
+  .map(([file, page]) => {
+    const slug = file.replace(/^\.\//, "").replace(/\.mdx?$/, "")
+    const { title, description, icon, cardOrder, featured } = page.frontmatter
+    if (!title || !description) {
+      throw new Error(`docs/src/pages/${slug} needs both title and description in its frontmatter.`)
+    }
+    return {
+      href: `${base}/${slug}/`,
+      title,
+      body: description,
+      icon: (icon ?? "playlist") as IconName,
+      featured,
+      order: cardOrder ?? Number.MAX_SAFE_INTEGER,
+    }
+  })
+  .sort((left, right) => left.order - right.order || left.title.localeCompare(right.title))
+  .map(({ order: _order, ...card }) => card)
 ---
 
 <DocsLayout

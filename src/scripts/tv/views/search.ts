@@ -127,10 +127,11 @@ function toTvLiveChannel(row: LiveRow & { norm: string }): TvLiveChannel {
 
 // Cached rows already carry `norm`; fill the odd gap in place rather than copying a whole catalog.
 function withNorms<T extends { name?: string; category?: string | null; norm?: string }>(
-  rows: T[]
+  rows: T[],
+  nameOnly = false
 ): Array<T & { norm: string }> {
   for (const row of rows) {
-    if (!row.norm) row.norm = normalize(`${row.name || ""} ${row.category || ""}`)
+    if (!row.norm) row.norm = nameOnly ? normalize(row.name || "") : normalize(`${row.name || ""} ${row.category || ""}`)
   }
   return rows as Array<T & { norm: string }>
 }
@@ -426,7 +427,7 @@ const view: TvView = {
     }
 
     function rebuildIndex(): void {
-      channels = withNorms(readCachedLiveChannels(activePlaylistId) as LiveRow[])
+      channels = withNorms(readCachedLiveChannels(activePlaylistId) as LiveRow[], true)
       movies = withNorms((getCached(activePlaylistId, "vod")?.data || []) as CatalogRow[])
       series = withNorms((getCached(activePlaylistId, "series")?.data || []) as CatalogRow[])
       indexReady = true

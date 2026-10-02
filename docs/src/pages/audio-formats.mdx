@@ -3,6 +3,8 @@ layout: ../layouts/DocsLayout.astro
 title: "Audio formats & silent channels"
 description: "Why some live channels play with no sound, and how the desktop app fixes it automatically."
 lede: "Some live channels use audio the built-in player can't decode. On desktop, the app can fix that on the fly without touching the video."
+icon: "volume"
+cardOrder: 5
 ---
 
 import Callout from "../components/Callout.astro"
@@ -56,5 +58,5 @@ The app looks for FFmpeg in this order: your custom path first, then the bundled
 If a channel's *video* won't decode at all (not just the audio), fixing the audio won't help - the answer is still an external player. See [External players](./external-players/).
 
 <Callout type="note">
-  The bundled FFmpeg is a trimmed build licensed under LGPL. See **Settings > About > Open-source licenses** for the full notice.
+  The bundled FFmpeg is a trimmed build licensed under LGPL. See **Settings > About > Licenses and attribution** for the full notice.
 </Callout>

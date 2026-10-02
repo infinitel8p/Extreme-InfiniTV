@@ -41,6 +41,20 @@ export function qualityLabel(
 
 export interface QualityBadgeHandle {
   getMediaElement?: () => HTMLVideoElement | null
+  /** mpv-embedded has no media element; its engine stats carry the decoded dimensions instead. */
+  engineStats?: () => { videoWidth: number | null; videoHeight: number | null } | null
+  on?: (event: string, fn: (...args: unknown[]) => void) => void
+  off?: (event: string, fn: (...args: unknown[]) => void) => void
+}
+
+/** Picks the decoded-dimension source: the media element when there is one, else the handle's engine stats. */
+export function resolveQualityDimensions(
+  handle: QualityBadgeHandle,
+  videoEl: HTMLVideoElement | null
+): { width: number | null; height: number | null } {
+  if (videoEl) return { width: videoEl.videoWidth, height: videoEl.videoHeight }
+  const stats = handle.engineStats?.() ?? null
+  return { width: stats?.videoWidth ?? null, height: stats?.videoHeight ?? null }
 }
 
 const DEFAULT_VISIBLE_MS = 3000
@@ -61,7 +75,7 @@ export function attachQualityChip(
   options?: { visibleMs?: number }
 ): () => void {
   const videoEl = handle.getMediaElement?.() ?? null
-  if (!videoEl) return () => {}
+  if (!videoEl && !handle.engineStats) return () => {}
 
   const visibleMs = options?.visibleMs ?? DEFAULT_VISIBLE_MS
   let lastShownLabel: string | null = null
@@ -120,7 +134,8 @@ export function attachQualityChip(
   }
 
   function update(): void {
-    const label = qualityLabel(videoEl!.videoWidth, videoEl!.videoHeight)
+    const { width, height } = resolveQualityDimensions(handle, videoEl)
+    const label = qualityLabel(width, height)
     if (label && label !== lastShownLabel) {
       lastShownLabel = label
       showChip(label)
@@ -133,15 +148,27 @@ export function attachQualityChip(
     lastShownLabel = null
   }
 
-  videoEl.addEventListener("resize", update)
-  videoEl.addEventListener("loadedmetadata", update)
-  videoEl.addEventListener("emptied", reset)
+  if (videoEl) {
+    videoEl.addEventListener("resize", update)
+    videoEl.addEventListener("loadedmetadata", update)
+    videoEl.addEventListener("emptied", reset)
+  } else {
+    handle.on?.("resize", update)
+    handle.on?.("loadedmetadata", update)
+    handle.on?.("emptied", reset)
+  }
   update()
 
   return () => {
-    videoEl.removeEventListener("resize", update)
-    videoEl.removeEventListener("loadedmetadata", update)
-    videoEl.removeEventListener("emptied", reset)
+    if (videoEl) {
+      videoEl.removeEventListener("resize", update)
+      videoEl.removeEventListener("loadedmetadata", update)
+      videoEl.removeEventListener("emptied", reset)
+    } else {
+      handle.off?.("resize", update)
+      handle.off?.("loadedmetadata", update)
+      handle.off?.("emptied", reset)
+    }
     clearTimers()
     removeChip()
   }

@@ -147,8 +147,8 @@ describe("cast remote dialog", () => {
     expect(role("busy").classList.contains("hidden")).toBe(true)
   })
 
-  it("surfaces the error in an alert region with a retry action", () => {
-    pushState({ state: "error", error: "boom" })
+  it("surfaces an already-localized receiver sentence inline, not demoted to the log", () => {
+    pushState({ state: "error", error: "This TV can't decode HEVC video." })
     expect(role("error-block").classList.contains("hidden")).toBe(false)
     expect(role("error-line").getAttribute("role")).toBe("alert")
     expect(role("error-line").textContent).toBe("cast.remote.errorDetail")
@@ -162,7 +162,8 @@ describe("cast remote dialog", () => {
     const stop = role<HTMLButtonElement>("footer-stop")
     stop.click()
     expect(castStopMock).not.toHaveBeenCalled()
-    expect(stop.textContent).toBe("cast.pill.stopConfirmLabel")
+    expect(stop.textContent).toBe("cast.pill.stopConfirm")
+    expect(stop.getAttribute("aria-label")).toBe("cast.pill.stopConfirmLabel")
 
     stop.click()
     expect(castStopMock).toHaveBeenCalledTimes(1)
