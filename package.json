@@ -44,7 +44,7 @@
     "@tauri-apps/plugin-window-state": "~2.4.1",
     "artplayer": "^5.4.0",
     "astro": "^7.2.9",
-    "dompurify": "^3.4.14",
+    "dompurify": "^3.4.16",
     "hls.js": "^1.7.1",
     "marked": "^18.0.11",
     "mp4box": "^2.4.1",
