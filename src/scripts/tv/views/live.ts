@@ -3,13 +3,21 @@ import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
 import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
 import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
-import { getActiveEntry } from "@/scripts/lib/creds.js"
+import { getActiveEntry, getMergedEntries, isCustomHost } from "@/scripts/lib/creds.js"
+import { hydrateMergedRows, readMergedRows, ensureMergedRows } from "@/scripts/lib/merged-catalog.ts"
+import { buildMergedChannelGroups, resolveDeepLinkChannel } from "@/scripts/lib/merged-catalog-core.ts"
+import { remountOnMergedChange } from "@/scripts/tv/merged-remount"
 import { resolvePlaylistCreds } from "@/scripts/lib/tv-cast-live.js"
 import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
 import { ensureLive } from "@/scripts/lib/catalog.js"
+import { invalidateEntry } from "@/scripts/lib/cache.js"
+import { mutateCustomDoc, removeChannels, moveChannelWithinGroup } from "@/scripts/lib/custom-playlist.ts"
+import { confirmDialog } from "@/scripts/lib/confirm-dialog.ts"
+import { toast } from "@/scripts/lib/toast"
 import {
   ensureLoaded as ensurePreferencesLoaded,
   getFavorites,
+  getFavoritesOrdered,
   isFavorite,
   toggleFavorite,
   getHiddenCategories,
@@ -18,12 +26,21 @@ import {
   getCategorySort,
   getViewSort,
 } from "@/scripts/lib/preferences.js"
-import { buildCastChannelGroups, searchCastChannels, type CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
+import {
+  buildCastChannelGroups,
+  GROUP_ALL,
+  GROUP_FAVORITES,
+  type CastChannelGroup,
+} from "@/scripts/lib/tv-cast-channel-list"
+import { searchCatalog } from "@/scripts/tv/catalog-filter-client"
+import { sliceSiblingWindow, NATIVE_SIBLING_WINDOW_RADIUS } from "@/scripts/lib/channel-lite.ts"
 import {
   getProgrammesSync,
   loadProgrammes,
   getProgrammesForChannel,
   effectiveTvgId,
+  shiftChannelProgrammes,
+  displayedToUtcMs,
   EPG_LOADED_EVENT,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
@@ -45,7 +62,7 @@ import { debounce } from "@/scripts/lib/debounce"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
 import { playLive, playCatchup } from "@/scripts/tv/playback"
 import { attachLongPress, type LongPressHandle } from "@/scripts/tv/long-press.ts"
-import { createActionSheet, type ActionSheetHandle } from "@/scripts/tv/ui/action-sheet.ts"
+import { createActionSheet, type ActionSheetHandle, type ActionSheetItem } from "@/scripts/tv/ui/action-sheet.ts"
 import { createVirtualRows, type VirtualRowsHandle } from "@/scripts/tv/ui/virtual-rows"
 import {
   type LiveChannel,
@@ -53,11 +70,13 @@ import {
   buildGroupButton,
   buildChannelRowSkeleton,
   buildChannelRow,
+  buildChannelHeaderRow,
   createGuidePanel,
   type GuidePanelHandle,
 } from "@/scripts/tv/ui/live-row"
 
 const SEARCH_DEBOUNCE_MS = 140
+const SEARCH_RESULT_CAP = 500
 const GUIDE_DEBOUNCE_MS = 60
 const TICK_INTERVAL_MS = 60_000
 const EPG_GUARD_TIMEOUT_MS = 4000
@@ -76,12 +95,18 @@ const FAVORITES_CHANGED_EVENT = "xt:favorites-changed"
 const CHANNEL_ROW_FALLBACK_HEIGHT_REM = 4
 const CHANNEL_ROW_GAP_REM = 0.5
 const CHANNEL_ROW_OVERSCAN = 6
+// Matches buildGroupButton's min-h-[3.25rem] button and the track's gap-1.
+const GROUP_ROW_FALLBACK_HEIGHT_REM = 3.25
+const GROUP_ROW_GAP_REM = 0.25
 // Below this the "next" title column would crowd out the channel name; live-row.ts owns the CSS toggle.
 const NEXT_TITLE_MIN_COLUMN_REM = 26
 const GUIDE_DAY_CACHE_MAX = 10
 
 interface ViewState {
   playlistId: string
+  mergedPlaylistIds: string[]
+  isMerged: boolean
+  customPlaylistIds: Set<string>
   channels: LiveChannel[]
   channelById: Map<string, LiveChannel>
   groups: CastChannelGroup[]
@@ -90,7 +115,7 @@ interface ViewState {
   searchQuery: string
   playingChannelId: string | null
   guideChannel: LiveChannel | null
-  epgResolved: boolean
+  epgResolvedIds: Set<string>
   destroyed: boolean
 }
 
@@ -113,27 +138,27 @@ function buildShellMarkup(): string {
   return `
     <div class="grid h-full grid-cols-[10rem_minmax(0,1fr)_14rem] gap-4">
       <nav data-role="groups-col" class="flex min-h-0 flex-col overflow-hidden">
-        <p data-role="groups-heading" class="shrink-0 px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-fg-3"></p>
+        <p data-role="groups-heading" class="mb-3 flex min-h-10 shrink-0 items-center px-3 text-xs font-semibold uppercase tracking-wide text-fg-3"></p>
         <div data-role="groups-scroller" class="min-h-0 flex-1 overflow-hidden">
-          <div data-role="groups-track" class="flex flex-col gap-1"></div>
+          <div data-role="groups-track" class="relative flex flex-col gap-1"></div>
         </div>
       </nav>
 
-      <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden pt-2 px-2">
+      <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden">
         <div class="mb-3 flex min-h-10 shrink-0 items-center gap-2 rounded-2xl bg-surface-2 px-4 tv-focus-inset-within">
           <span class="shrink-0 text-fg-3" aria-hidden="true">${ICON_SEARCH}</span>
           <input data-role="search" type="search" autocomplete="off" spellcheck="false"
                  class="w-full rounded-2xl bg-transparent text-sm outline-none placeholder:text-fg-3" />
         </div>
-        <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden py-2">
-          <div data-role="channels-track" class="relative flex flex-col gap-2"></div>
+        <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden pb-2">
+          <div data-role="channels-track" class="relative flex flex-col gap-1"></div>
         </div>
         <p data-role="channels-status" class="hidden shrink-0 pt-3 text-center text-sm text-fg-3" role="status"></p>
       </div>
 
-      <div data-role="guide-col" class="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface">
+      <div data-role="guide-col" class="flex min-h-0 flex-col overflow-hidden">
         <div data-role="guide-scroller" class="min-h-0 flex-1 overflow-hidden">
-          <div data-role="guide-track" class="flex flex-col gap-1 p-3"></div>
+          <div data-role="guide-track" class="flex flex-col gap-2 pb-3"></div>
         </div>
       </div>
     </div>
@@ -162,6 +187,9 @@ const view: TvView = {
   mount(root: HTMLElement, ctx: TvViewContext) {
     const state: ViewState = {
       playlistId: "",
+      mergedPlaylistIds: [],
+      isMerged: false,
+      customPlaylistIds: new Set(),
       channels: [],
       channelById: new Map(),
       groups: [],
@@ -170,18 +198,24 @@ const view: TvView = {
       searchQuery: "",
       playingChannelId: null,
       guideChannel: null,
-      epgResolved: false,
+      epgResolvedIds: new Set(),
       destroyed: false,
     }
+    const titleById = new Map<string, string>()
 
     const unsubs: Array<() => void> = []
     let refs: Refs | null = null
     let channelRows: VirtualRowsHandle<LiveChannel> | null = null
+    let groupRows: VirtualRowsHandle<CastChannelGroup> | null = null
+    let activeGroupButtonEl: HTMLElement | null = null
     let guidePanel: GuidePanelHandle | null = null
     let tickTimer: ReturnType<typeof setInterval> | null = null
     let epgGuardTimer: ReturnType<typeof setTimeout> | null = null
     const actionSheet: ActionSheetHandle = createActionSheet("tv-live-channel-actions-dialog")
     let longPress: LongPressHandle | null = null
+    // Set from keydown/keyup on the channel list scroller; a held Up/Down/PageUp/PageDown
+    // suppresses the guide's dip animation and backdrop crossfade until the key is released.
+    let navKeyHeld = false
 
     // now-next mode: today's full lineup for the guided channel is fetched on demand
     // (the shared EPG state only carries the airing + upcoming programme) and kept
@@ -192,11 +226,27 @@ const view: TvView = {
     let epgRefreshTimer: ReturnType<typeof setInterval> | null = null
 
     // Memory-conservative TVs on an Xtream playlist read from the per-channel short-EPG
-    // client instead of the bulk XMLTV feed; resolved once creds are known, in boot().
-    let epgSource: TvEpgSource = "xmltv-full"
-    let xtreamCreds: XtreamCreds | null = null
+    // client instead of the bulk XMLTV feed; resolved per playlist once creds are known, in boot().
+    const epgSourceByPlaylist = new Map<string, TvEpgSource>()
+    const xtreamCredsByPlaylist = new Map<string, XtreamCreds | null>()
     const shortEpgCache = tvShortEpgCache()
     const shortEpgRowNowNext = new Map<string, ShortEpgNowNext>()
+
+    function channelPlaylistId(channel: LiveChannel): string {
+      return channel.playlistId ?? state.playlistId
+    }
+
+    function channelKeyOf(channel: LiveChannel): string {
+      return state.isMerged ? `${channelPlaylistId(channel)}:${channel.id}` : String(channel.id)
+    }
+
+    function epgSourceFor(playlistId: string): TvEpgSource {
+      return epgSourceByPlaylist.get(playlistId) ?? "xmltv-full"
+    }
+
+    function isCustomChannel(channel: LiveChannel): boolean {
+      return state.customPlaylistIds.has(channelPlaylistId(channel))
+    }
 
     function startOfToday(): number {
       const date = new Date()
@@ -205,21 +255,24 @@ const view: TvView = {
     }
 
     function paintChannelRow(row: HTMLElement, channel: LiveChannel, programmes: Map<string, Programme[]> | null): void {
+      if (channel.isHeader) return
+      const playlistId = channelPlaylistId(channel)
       const nowLine = row.querySelector<HTMLElement>('[data-role="now"]')
       const nextLine = row.querySelector<HTMLElement>('[data-role="next"]')
       const progressFill = row.querySelector<HTMLElement>('[data-role="progress"]')
       const { current, next } =
-        epgSource === "short-epg"
-          ? shortEpgNowNextSlot(shortEpgRowNowNext.get(String(channel.id)) ?? null)
-          : computeNowNext(programmes, channel, state.playlistId)
+        epgSourceFor(playlistId) === "short-epg"
+          ? shortEpgNowNextSlot(shortEpgRowNowNext.get(channelKeyOf(channel)) ?? null, playlistId)
+          : computeNowNext(programmes, channel, playlistId)
       if (nowLine) nowLine.textContent = current?.title || ""
       if (nextLine) nextLine.textContent = next?.title || ""
       if (progressFill) progressFill.style.transform = `scaleX(${current ? current.progress : 0})`
     }
 
     function requestShortEpgRowNowNext(channel: LiveChannel): void {
-      if (!xtreamCreds) return
-      const key = String(channel.id)
+      const xtreamCreds = xtreamCredsByPlaylist.get(channelPlaylistId(channel))
+      if (!xtreamCreds || channel.isHeader || channel.unresolved) return
+      const key = channelKeyOf(channel)
       void shortEpgCache.getNowNext(xtreamCreds, channel.id).then((nowNext) => {
         if (state.destroyed || !nowNext) return
         shortEpgRowNowNext.set(key, nowNext)
@@ -229,10 +282,19 @@ const view: TvView = {
     }
 
     function buildAndPaintChannelRow(channel: LiveChannel, index: number): HTMLElement {
-      const programmes = getProgrammesSync(state.playlistId)?.programmes ?? null
-      const row = buildChannelRow(channel, index, String(channel.id) === state.playingChannelId, channelFavorite(channel))
+      if (channel.isHeader) return buildChannelHeaderRow(channel)
+      const playlistId = channelPlaylistId(channel)
+      const programmes = getProgrammesSync(playlistId)?.programmes ?? null
+      const channelKey = channelKeyOf(channel)
+      const row = buildChannelRow(
+        channel,
+        index,
+        channelKey === state.playingChannelId,
+        channelFavorite(channel),
+        channelKey
+      )
       paintChannelRow(row, channel, programmes)
-      if (epgSource === "short-epg") requestShortEpgRowNowNext(channel)
+      if (epgSourceFor(playlistId) === "short-epg") requestShortEpgRowNowNext(channel)
       return row
     }
 
@@ -250,12 +312,18 @@ const view: TvView = {
 
     function renderGroups(): void {
       if (!refs) return
-      refs.groupsTrack.replaceChildren()
-      const fragment = document.createDocumentFragment()
-      for (const group of state.groups) {
-        fragment.appendChild(buildGroupButton(group, group.key === state.activeGroupKey))
-      }
-      refs.groupsTrack.appendChild(fragment)
+      activeGroupButtonEl = null
+      groupRows?.setItems(state.groups)
+    }
+
+    // Clears only the previously-active button (if still mounted) instead of re-scanning
+    // every group row - the virtual list rebuilds any not-yet-mounted row with the right
+    // state anyway, since buildGroupButton reads state.activeGroupKey live at mount time.
+    function setActiveGroupButton(key: string): void {
+      if (activeGroupButtonEl) activeGroupButtonEl.dataset.active = "false"
+      const nextEl = groupRows?.rowForKey(key) ?? null
+      if (nextEl) nextEl.dataset.active = "true"
+      activeGroupButtonEl = nextEl
     }
 
     function selectGroup(key: string, options: { focus?: boolean } = {}): void {
@@ -265,20 +333,27 @@ const view: TvView = {
       state.activeGroupKey = key
       state.searchQuery = ""
       refs.search.value = ""
-      for (const button of refs.groupsTrack.querySelectorAll<HTMLElement>("[data-group-key]")) {
-        button.dataset.active = button.dataset.groupKey === key ? "true" : "false"
-      }
+      setActiveGroupButton(key)
       renderChannelList(group.channels)
       if (options.focus) channelRows?.focusIndex(0)
     }
 
     function onGuideReplay(channel: LiveChannel, programme: Programme, rawStart: number, rawStop: number): void {
+      if (channel.unresolved) {
+        toast({
+          title: t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }),
+          description: t("stream.error.checkConnection"),
+          variant: "error",
+        })
+        return
+      }
+      const playlistId = channelPlaylistId(channel)
       void playCatchup(
         {
-          playlistId: state.playlistId,
+          playlistId,
           channel,
-          startUtcMs: rawStart,
-          stopUtcMs: rawStop,
+          startUtcMs: displayedToUtcMs(playlistId, rawStart),
+          stopUtcMs: displayedToUtcMs(playlistId, rawStop),
           catchupId: programme.catchupId ?? null,
           title: programme.title,
           logo: channel.logo ?? null,
@@ -303,9 +378,9 @@ const view: TvView = {
       return { fromMs, toMs: fromMs + 24 * 60 * 60 * 1000 }
     }
 
-    function rememberDayProgrammes(tvgId: string, programmes: Programme[]): void {
-      dayProgrammesCache.delete(tvgId)
-      dayProgrammesCache.set(tvgId, programmes)
+    function rememberDayProgrammes(cacheKey: string, programmes: Programme[]): void {
+      dayProgrammesCache.delete(cacheKey)
+      dayProgrammesCache.set(cacheKey, programmes)
       if (dayProgrammesCache.size > GUIDE_DAY_CACHE_MAX) {
         const oldest = dayProgrammesCache.keys().next().value
         if (oldest !== undefined) dayProgrammesCache.delete(oldest)
@@ -316,12 +391,14 @@ const view: TvView = {
     // channel and repaint once it lands. The result is cached (and repaints the
     // guide) even if focus moved on meanwhile, since it's cheap to keep around.
     function requestDayProgrammes(channel: LiveChannel, tvgId: string): void {
-      if (fetchingDayProgrammes.has(tvgId)) return
-      fetchingDayProgrammes.add(tvgId)
-      void getProgrammesForChannel(state.playlistId, tvgId, todayWindow()).then((programmes) => {
-        fetchingDayProgrammes.delete(tvgId)
+      const playlistId = channelPlaylistId(channel)
+      const cacheKey = `${playlistId}:${tvgId}`
+      if (fetchingDayProgrammes.has(cacheKey)) return
+      fetchingDayProgrammes.add(cacheKey)
+      void getProgrammesForChannel(playlistId, tvgId, todayWindow()).then((programmes) => {
+        fetchingDayProgrammes.delete(cacheKey)
         if (state.destroyed) return
-        rememberDayProgrammes(tvgId, programmes)
+        rememberDayProgrammes(cacheKey, shiftChannelProgrammes(programmes, channel.tvgShift))
         if (state.guideChannel === channel) renderGuide(channel, false)
       })
     }
@@ -348,12 +425,14 @@ const view: TvView = {
     // short-epg mode has no bulk XMLTV state at all - the day timeline and the now/next
     // slot both come from the per-channel Xtream client, cached and refetched like above.
     function requestShortEpgDayProgrammes(channel: LiveChannel, key: string): void {
+      const playlistId = channelPlaylistId(channel)
+      const xtreamCreds = xtreamCredsByPlaylist.get(playlistId)
       if (fetchingDayProgrammes.has(key) || !xtreamCreds) return
       fetchingDayProgrammes.add(key)
       void shortEpgCache.getProgrammes(xtreamCreds, channel.id).then((rows) => {
         fetchingDayProgrammes.delete(key)
         if (state.destroyed) return
-        const mapped = rows ? programmesForDay(shortEpgToGuideProgrammes(rows), startOfToday()) : []
+        const mapped = rows ? programmesForDay(shortEpgToGuideProgrammes(rows, playlistId), startOfToday()) : []
         rememberDayProgrammes(key, mapped)
         if (state.guideChannel === channel) renderGuide(channel, false)
       })
@@ -363,8 +442,9 @@ const view: TvView = {
       if (!guidePanel || !channel) return
       state.guideChannel = channel
 
-      if (epgSource === "short-epg") {
-        const key = String(channel.id)
+      const playlistId = channelPlaylistId(channel)
+      if (epgSourceFor(playlistId) === "short-epg") {
+        const key = channelKeyOf(channel)
         const cachedDay = dayProgrammesCache.get(key)
         if (!cachedDay) requestShortEpgDayProgrammes(channel, key)
         const nowMs = Date.now()
@@ -373,23 +453,23 @@ const view: TvView = {
         return
       }
 
-      const epgState = getProgrammesSync(state.playlistId)
-      const tvgId = epgState ? effectiveTvgId(channel, state.playlistId) : null
+      const epgState = getProgrammesSync(playlistId)
+      const tvgId = epgState ? effectiveTvgId(channel, playlistId) : null
       const nowMs = Date.now()
       const nowNext: NowNextSlot = epgState
-        ? computeNowNext(epgState.programmes, channel, state.playlistId, nowMs)
+        ? computeNowNext(epgState.programmes, channel, playlistId, nowMs)
         : { current: null, next: null }
 
       if (epgMode === "now-next") {
-        const cachedDay = tvgId ? dayProgrammesCache.get(tvgId) : undefined
+        const cachedDay = tvgId ? dayProgrammesCache.get(`${playlistId}:${tvgId}`) : undefined
         if (!cachedDay && tvgId) requestDayProgrammes(channel, tvgId)
         paintGuide(channel, cachedDay ?? [], nowNext, nowMs, !cachedDay, animate)
         return
       }
 
-      const dayProgrammes = epgState && tvgId ? epgState.programmes.get(tvgId) : undefined
+      const dayProgrammes = epgState && tvgId ? shiftChannelProgrammes(epgState.programmes.get(tvgId), channel.tvgShift) : undefined
       const rows = programmesForDay(dayProgrammes, startOfToday())
-      paintGuide(channel, rows, nowNext, nowMs, !state.epgResolved, animate)
+      paintGuide(channel, rows, nowNext, nowMs, !state.epgResolvedIds.has(playlistId), animate)
     }
 
     const scheduleGuideUpdate = debounce((channelId: string) => {
@@ -397,10 +477,13 @@ const view: TvView = {
       if (channel) renderGuide(channel)
     }, GUIDE_DEBOUNCE_MS)
 
-    function markEpgResolved(): void {
-      if (state.destroyed || state.epgResolved) return
-      state.epgResolved = true
-      if (epgGuardTimer) {
+    function markEpgResolved(playlistId?: string): void {
+      if (state.destroyed) return
+      const targets = playlistId ? [playlistId] : state.mergedPlaylistIds
+      const pending = targets.filter((target) => !state.epgResolvedIds.has(target))
+      if (!pending.length) return
+      for (const target of pending) state.epgResolvedIds.add(target)
+      if (state.mergedPlaylistIds.every((candidate) => state.epgResolvedIds.has(candidate)) && epgGuardTimer) {
         clearTimeout(epgGuardTimer)
         epgGuardTimer = null
       }
@@ -419,19 +502,37 @@ const view: TvView = {
     }
 
     function activateChannel(channel: LiveChannel): void {
+      if (channel.unresolved) {
+        toast({
+          title: t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }),
+          description: t("stream.error.checkConnection"),
+          variant: "error",
+        })
+        return
+      }
+      const currentIndex = state.displayed.findIndex((candidate) => channelKeyOf(candidate) === channelKeyOf(channel))
+      // state.displayed may have been replaced (e.g. by a search) between the long-press
+      // and the action sheet's Play - fall back to the tuned channel plus the leading
+      // window so it's always present, at index 0.
+      const siblings =
+        currentIndex < 0
+          ? [channel, ...sliceSiblingWindow(state.displayed, currentIndex, NATIVE_SIBLING_WINDOW_RADIUS)]
+          : sliceSiblingWindow(state.displayed, currentIndex, NATIVE_SIBLING_WINDOW_RADIUS)
       void playLive(
-        { playlistId: state.playlistId, channel, siblings: state.displayed },
+        { playlistId: channelPlaylistId(channel), channel, siblings, groupKey: state.activeGroupKey },
         { onLiveChannelChanged: setPlayingChannel }
       )
     }
 
     function channelFavorite(channel: LiveChannel): boolean {
-      return state.playlistId ? isFavorite(state.playlistId, "live", channel.id) : false
+      const playlistId = channelPlaylistId(channel)
+      return playlistId ? isFavorite(playlistId, "live", channel.id) : false
     }
 
     function toggleChannelFavorite(channel: LiveChannel): void {
-      if (!state.playlistId) return
-      toggleFavorite(state.playlistId, "live", channel.id, {
+      const playlistId = channelPlaylistId(channel)
+      if (!playlistId) return
+      toggleFavorite(playlistId, "live", channel.id, {
         name: channel.name || "",
         logo: channel.logo || null,
       })
@@ -440,26 +541,125 @@ const view: TvView = {
     function applyFavoriteChange(channelId: string, favorite: boolean): void {
       const row = channelRows?.rowForKey(channelId) ?? null
       row?.querySelector<HTMLElement>('[data-role="fav"]')?.classList.toggle("hidden", !favorite)
-      if (state.guideChannel && String(state.guideChannel.id) === channelId) {
+      if (state.guideChannel && channelKeyOf(state.guideChannel) === channelId) {
         renderGuide(state.guideChannel, false)
       }
     }
 
     function onFavoritesChangedEvent(event: Event): void {
       const detail = (event as CustomEvent).detail
-      if (!detail || detail.playlistId !== state.playlistId || detail.kind !== "live") return
-      applyFavoriteChange(String(detail.id), !!detail.isFav)
+      if (!detail || !state.mergedPlaylistIds.includes(detail.playlistId) || detail.kind !== "live") return
+      const channelKey = state.isMerged ? `${detail.playlistId}:${detail.id}` : String(detail.id)
+      applyFavoriteChange(channelKey, !!detail.isFav)
+    }
+
+    // Keeps D-pad focus on the given channel (or index 0) after an edit repaints the groups + channels.
+    async function refreshCustomChannelsAndFocus(focusChannelId: string | null): Promise<void> {
+      const channels = await loadChannels()
+      if (state.destroyed || !refs) return
+      state.channels = channels
+      state.channelById = new Map(channels.map((channel) => [channelKeyOf(channel), channel]))
+      state.groups = await buildGroups()
+      if (state.destroyed || !refs) return
+      renderGroups()
+
+      const targetGroupKey =
+        (focusChannelId &&
+          state.groups.find((group) => group.channels.some((candidate) => channelKeyOf(candidate as LiveChannel) === focusChannelId))?.key) ||
+        (state.groups.some((group) => group.key === state.activeGroupKey) ? state.activeGroupKey : state.groups[0]?.key) ||
+        ""
+      if (targetGroupKey) selectGroup(targetGroupKey)
+      if (focusChannelId) focusChannelRow(focusChannelId)
+      else channelRows?.focusIndex(0)
+    }
+
+    async function moveCustomChannel(channel: LiveChannel, direction: "up" | "down"): Promise<void> {
+      const playlistId = channelPlaylistId(channel)
+      let nextDoc
+      try {
+        nextDoc = await mutateCustomDoc(playlistId, (doc) => {
+          const docChannel = doc.channels.find((candidate) => candidate.id === channel.id)
+          if (!docChannel) {
+            toast({ title: t("editor.toastSaveFailed"), variant: "error" })
+            return null
+          }
+          return moveChannelWithinGroup(doc, docChannel.key, direction)
+        })
+      } catch {
+        toast({ title: t("editor.toastSaveFailed"), variant: "error" })
+        return
+      }
+      if (!nextDoc) return
+      invalidateEntry(playlistId)
+      document.dispatchEvent(new CustomEvent("xt:entries-updated"))
+      await refreshCustomChannelsAndFocus(channelKeyOf(channel))
+    }
+
+    async function deleteCustomChannel(channel: LiveChannel): Promise<void> {
+      const confirmed = await confirmDialog({
+        title: t("editor.removeChannel"),
+        message: t("editor.removeChannelConfirm", { name: channel.name || "" }),
+        confirmLabel: t("common.delete"),
+        destructive: true,
+      })
+      if (!confirmed) return
+
+      const playlistId = channelPlaylistId(channel)
+      const currentIndex = state.displayed.findIndex((candidate) => channelKeyOf(candidate) === channelKeyOf(channel))
+      const neighbor = state.displayed[currentIndex + 1] ?? state.displayed[currentIndex - 1] ?? null
+
+      let nextDoc
+      try {
+        nextDoc = await mutateCustomDoc(playlistId, (doc) => {
+          const docChannel = doc.channels.find((candidate) => candidate.id === channel.id)
+          if (!docChannel) {
+            toast({ title: t("editor.toastSaveFailed"), variant: "error" })
+            return null
+          }
+          return removeChannels(doc, [docChannel.key])
+        })
+      } catch {
+        toast({ title: t("editor.toastSaveFailed"), variant: "error" })
+        return
+      }
+      if (!nextDoc) return
+      invalidateEntry(playlistId)
+      document.dispatchEvent(new CustomEvent("xt:entries-updated"))
+      await refreshCustomChannelsAndFocus(neighbor ? channelKeyOf(neighbor) : null)
     }
 
     function openChannelActionSheet(channel: LiveChannel): void {
       const favorite = channelFavorite(channel)
-      actionSheet.open(channel.name, [
+      const items: ActionSheetItem[] = [
         { label: t("stream.menu.play"), onSelect: () => activateChannel(channel) },
         {
           label: t(favorite ? "list.menu.favoriteRemove" : "list.menu.favoriteAdd"),
           onSelect: () => toggleChannelFavorite(channel),
         },
-      ])
+      ]
+      if (isCustomChannel(channel)) {
+        if (getViewSort(channelPlaylistId(channel), "live") === "default") {
+          // With no active search, state.displayed is the channel's own group in doc order.
+          const searchActive = !!state.searchQuery
+          const displayIndex = searchActive
+            ? -1
+            : state.displayed.findIndex((candidate) => channelKeyOf(candidate) === channelKeyOf(channel))
+          const isFirstInGroup = displayIndex === 0
+          const isLastInGroup = displayIndex >= 0 && displayIndex === state.displayed.length - 1
+          if (searchActive || !isFirstInGroup) {
+            items.push({ label: t("stream.menu.moveUp"), onSelect: () => void moveCustomChannel(channel, "up") })
+          }
+          if (searchActive || !isLastInGroup) {
+            items.push({ label: t("stream.menu.moveDown"), onSelect: () => void moveCustomChannel(channel, "down") })
+          }
+        }
+        items.push({
+          label: t("stream.menu.deleteChannel"),
+          onSelect: () => void deleteCustomChannel(channel),
+          destructive: true,
+        })
+      }
+      actionSheet.open(channel.name, items)
     }
 
     const runSearch = debounce((query: string) => {
@@ -469,7 +669,12 @@ const view: TvView = {
         renderChannelList(group?.channels ?? [])
         return
       }
-      renderChannelList(searchCastChannels(state.channels, query))
+      // Headers never match a text filter.
+      const searchableChannels = state.channels.filter((channel) => !channel.isHeader)
+      void searchCatalog(`live:${state.mergedPlaylistIds.join("+")}`, searchableChannels, query, SEARCH_RESULT_CAP).then((indexes) => {
+        if (indexes === null || state.searchQuery !== query) return
+        renderChannelList(Array.from(indexes, (index) => searchableChannels[index]))
+      })
     }, SEARCH_DEBOUNCE_MS)
 
     function onGroupsClick(event: Event): void {
@@ -482,19 +687,31 @@ const view: TvView = {
       if (row?.dataset.channelKey) scheduleGuideUpdate(row.dataset.channelKey)
     }
 
+    const CHANNEL_NAV_KEYS: ReadonlySet<string> = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown"])
+
+    function onChannelsKeyDown(event: KeyboardEvent): void {
+      if (CHANNEL_NAV_KEYS.has(event.key)) navKeyHeld = true
+    }
+
+    function onChannelsKeyUp(event: KeyboardEvent): void {
+      if (CHANNEL_NAV_KEYS.has(event.key)) navKeyHeld = false
+    }
+
     function focusChannelRow(channelId: string): void {
       if (!channelRows?.focusKey(channelId)) channelRows?.focusIndex(0)
     }
 
     function tick(): void {
       if (state.destroyed) return
-      if (epgSource === "short-epg") {
-        // The shared cache only re-fetches an entry whose TTL has actually expired.
-        channelRows?.forEachMountedRow((_rowEl, channel) => requestShortEpgRowNowNext(channel))
-      } else {
-        const programmes = getProgrammesSync(state.playlistId)?.programmes ?? null
-        channelRows?.forEachMountedRow((rowEl, channel) => paintChannelRow(rowEl, channel, programmes))
-      }
+      channelRows?.forEachMountedRow((rowEl, channel) => {
+        const playlistId = channelPlaylistId(channel)
+        if (epgSourceFor(playlistId) === "short-epg") {
+          // The shared cache only re-fetches an entry whose TTL has actually expired.
+          requestShortEpgRowNowNext(channel)
+        } else {
+          paintChannelRow(rowEl, channel, getProgrammesSync(playlistId)?.programmes ?? null)
+        }
+      })
       if (state.guideChannel) renderGuide(state.guideChannel, false)
     }
 
@@ -511,7 +728,26 @@ const view: TvView = {
       })
     }
 
-    async function loadChannels(playlistId: string): Promise<LiveChannel[]> {
+    async function loadMergedChannels(): Promise<LiveChannel[]> {
+      await hydrateMergedRows("live")
+      let result = readMergedRows("live")
+      const anyPlaylistEmpty = [...result.byPlaylist.values()].some((rows) => !rows.length)
+      if (!result.rows.length || anyPlaylistEmpty) {
+        const ensured = await ensureMergedRows("live")
+        for (const playlistId of ensured.errors.keys()) {
+          toast({
+            title: t("stream.mergedPartialError", { title: titleById.get(playlistId) || "" }),
+            variant: "error",
+          })
+        }
+        result = ensured
+      }
+      return result.rows as LiveChannel[]
+    }
+
+    async function loadChannels(): Promise<LiveChannel[]> {
+      if (state.isMerged) return loadMergedChannels()
+      const playlistId = state.playlistId
       let list = readCachedLiveChannels(playlistId) as LiveChannel[]
       if (!list.length) {
         const creds = await resolvePlaylistCreds(playlistId)
@@ -520,42 +756,79 @@ const view: TvView = {
       return Array.isArray(list) ? list : []
     }
 
-    async function buildGroups(): Promise<CastChannelGroup[]> {
-      await ensurePreferencesLoaded()
-      return buildCastChannelGroups(state.channels, {
-        favorites: getFavorites(state.playlistId, "live"),
-        hiddenCategories: getHiddenCategories(state.playlistId, "live"),
-        allowedCategories: getAllowedCategories(state.playlistId, "live"),
-        categoryMode: getCategoryMode(state.playlistId, "live"),
-        categorySort: getCategorySort(state.playlistId, "live"),
-        channelSort: getViewSort(state.playlistId, "live"),
+    function groupsForPlaylist(playlistId: string, channels: LiveChannel[]): CastChannelGroup[] {
+      const channelSort = getViewSort(state.playlistId, "live")
+      // Headers only make sense in the playlist's own order; any reorder scatters them.
+      const sourceChannels = channelSort === "default" ? channels : channels.filter((channel) => !channel.isHeader)
+      return buildCastChannelGroups(sourceChannels, {
+        favorites: getFavorites(playlistId, "live"),
+        favoritesOrder: getFavoritesOrdered(playlistId, "live"),
+        hiddenCategories: getHiddenCategories(playlistId, "live"),
+        allowedCategories: getAllowedCategories(playlistId, "live"),
+        categoryMode: getCategoryMode(playlistId, "live"),
+        categorySort: getCategorySort(playlistId, "live"),
+        channelSort,
         uncategorizedLabel: t("stream.uncategorized"),
         favoritesLabel: t("cast.remote.channelsFavorites"),
         allLabel: t("cast.remote.channelsAll"),
       })
     }
 
-    async function ensureEpgInBackground(): Promise<void> {
-      if (epgSource === "short-epg") return
-      if (getProgrammesSync(state.playlistId)) return
-      const creds = await resolvePlaylistCreds(state.playlistId)
+    async function buildGroups(): Promise<CastChannelGroup[]> {
+      await ensurePreferencesLoaded()
+      if (!state.isMerged) return groupsForPlaylist(state.playlistId, state.channels)
+      const perPlaylist = state.mergedPlaylistIds.map((playlistId) => ({
+        playlistId,
+        title: titleById.get(playlistId) || "",
+        groups: groupsForPlaylist(
+          playlistId,
+          state.channels.filter((channel) => channelPlaylistId(channel) === playlistId)
+        ),
+      }))
+      return buildMergedChannelGroups(perPlaylist, {
+        favoritesKey: GROUP_FAVORITES,
+        allKey: GROUP_ALL,
+      }) as CastChannelGroup[]
+    }
+
+    async function ensureEpgForPlaylist(playlistId: string): Promise<void> {
+      if (epgSourceFor(playlistId) === "short-epg") return
+      if (getProgrammesSync(playlistId)) return
+      const creds = await resolvePlaylistCreds(playlistId)
       if (!creds || state.destroyed) return
-      await loadProgrammes(state.playlistId, creds, { window: epgLoadWindow(), epgMode })
+      await loadProgrammes(playlistId, creds, { window: epgLoadWindow(), epgMode })
+    }
+
+    async function ensureEpgInBackground(): Promise<void> {
+      await Promise.all(
+        state.mergedPlaylistIds.map((playlistId) =>
+          ensureEpgForPlaylist(playlistId)
+            .catch(() => {})
+            .then(() => markEpgResolved(playlistId))
+        )
+      )
+    }
+
+    function anyXmltvPlaylist(): boolean {
+      return state.mergedPlaylistIds.some((playlistId) => epgSourceFor(playlistId) !== "short-epg")
     }
 
     // now-next mode bakes "now" into the parse at load time, so unlike full mode it
     // needs an active refresh to notice a programme ending - see motion.ts.
     function startEpgRefreshTimer(): void {
-      if (epgRefreshTimer || epgMode !== "now-next" || epgSource === "short-epg") return
+      if (epgRefreshTimer || epgMode !== "now-next" || !anyXmltvPlaylist()) return
       epgRefreshTimer = setInterval(() => {
-        void resolvePlaylistCreds(state.playlistId).then((creds) => {
-          if (!creds || state.destroyed) return
-          return loadProgrammes(state.playlistId, creds, { force: true, window: epgLoadWindow(), epgMode }).then(() => {
-            if (state.destroyed) return
-            dayProgrammesCache.clear()
-            tick()
+        for (const playlistId of state.mergedPlaylistIds) {
+          if (epgSourceFor(playlistId) === "short-epg") continue
+          void resolvePlaylistCreds(playlistId).then((creds) => {
+            if (!creds || state.destroyed) return
+            return loadProgrammes(playlistId, creds, { force: true, window: epgLoadWindow(), epgMode }).then(() => {
+              if (state.destroyed) return
+              dayProgrammesCache.clear()
+              tick()
+            })
           })
-        })
+        }
       }, EPG_NOW_NEXT_REFRESH_MS)
     }
 
@@ -627,15 +900,26 @@ const view: TvView = {
         fallbackRowHeightPx: remPx(CHANNEL_ROW_FALLBACK_HEIGHT_REM) + remPx(CHANNEL_ROW_GAP_REM),
         rowGapPx: remPx(CHANNEL_ROW_GAP_REM),
         overscan: CHANNEL_ROW_OVERSCAN,
-        keyOf: (channel) => String(channel.id),
+        keyOf: channelKeyOf,
         buildRow: buildAndPaintChannelRow,
         onRowUnmount: releaseCachedImages,
+        isSkippable: (channel) => !!channel.isHeader,
+      })
+
+      groupRows = createVirtualRows<CastChannelGroup>({
+        scroller: refs.groupsScroller,
+        track: refs.groupsTrack,
+        fallbackRowHeightPx: remPx(GROUP_ROW_FALLBACK_HEIGHT_REM) + remPx(GROUP_ROW_GAP_REM),
+        rowGapPx: remPx(GROUP_ROW_GAP_REM),
+        keyOf: (group) => group.key,
+        buildRow: (group) => buildGroupButton(group, group.key === state.activeGroupKey),
       })
 
       guidePanel = createGuidePanel(refs.guideTrack, {
         onToggleFavorite: toggleChannelFavorite,
         onReplay: onGuideReplay,
         onDetails: onGuideDetails,
+        isNavKeyHeld: () => navKeyHeld,
       })
 
       if (typeof ResizeObserver === "function") {
@@ -657,6 +941,8 @@ const view: TvView = {
         holdMs: LONG_PRESS_HOLD_MS,
       })
       refs.channelsScroller.addEventListener("focusin", onChannelsFocusIn)
+      refs.channelsScroller.addEventListener("keydown", onChannelsKeyDown, true)
+      refs.channelsScroller.addEventListener("keyup", onChannelsKeyUp, true)
       refs.search.addEventListener("input", () => runSearch(refs!.search.value.trim()))
       refs.search.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && refs!.search.value) {
@@ -676,8 +962,8 @@ const view: TvView = {
 
     function onEpgLoaded(event: Event): void {
       const detail = (event as CustomEvent).detail
-      if (detail?.playlistId && detail.playlistId !== state.playlistId) return
-      markEpgResolved()
+      if (detail?.playlistId && !state.mergedPlaylistIds.includes(detail.playlistId)) return
+      markEpgResolved(detail?.playlistId)
       tick()
     }
 
@@ -685,20 +971,29 @@ const view: TvView = {
     // streaming XMLTV path exactly as if it had won at boot.
     function onEpgSourceChanged(event: Event): void {
       const detail = (event as CustomEvent).detail
-      if (epgSource !== "short-epg" || !detail || detail.playlistId !== state.playlistId) return
-      epgSource = detail.source
+      if (!detail || epgSourceFor(detail.playlistId) !== "short-epg") return
+      epgSourceByPlaylist.set(detail.playlistId, detail.source)
       dayProgrammesCache.clear()
-      void ensureEpgInBackground()
+      void ensureEpgForPlaylist(detail.playlistId).then(() => markEpgResolved(detail.playlistId))
       startEpgRefreshTimer()
     }
 
     function onEpgOffsetChanged(event: Event): void {
-      if (epgSource === "short-epg") return
       const detail = (event as CustomEvent).detail
-      if (!detail || detail.playlistId !== state.playlistId) return
-      void resolvePlaylistCreds(state.playlistId).then((creds) => {
+      if (!detail || !state.mergedPlaylistIds.includes(detail.playlistId)) return
+      const offsetPlaylistId: string = detail.playlistId
+
+      if (epgSourceFor(offsetPlaylistId) === "short-epg") {
+        // Cached rows are raw provider UTC; a repaint re-maps them through the new offset.
+        dayProgrammesCache.clear()
+        channelRows?.forEachMountedRow((rowEl, channel) => paintChannelRow(rowEl, channel, null))
+        if (state.guideChannel) renderGuide(state.guideChannel, false)
+        return
+      }
+
+      void resolvePlaylistCreds(offsetPlaylistId).then((creds) => {
         if (!creds || state.destroyed) return
-        return loadProgrammes(state.playlistId, creds, { force: true, window: epgLoadWindow(), epgMode }).then(() => {
+        return loadProgrammes(offsetPlaylistId, creds, { force: true, window: epgLoadWindow(), epgMode }).then(() => {
           if (state.destroyed) return
           // Cached day arrays carry the old offset baked into start/stop - drop them.
           dayProgrammesCache.clear()
@@ -708,26 +1003,34 @@ const view: TvView = {
     }
 
     async function boot(): Promise<void> {
-      const activeEntry = await getActiveEntry()
+      const [activeEntry, mergedEntries] = await Promise.all([getActiveEntry(), getMergedEntries()])
       if (state.destroyed) return
       if (!activeEntry) {
         renderCentered(t("list.noPlaylistSelected"), "/tv/login", t("playlist.addCta"))
         return
       }
       state.playlistId = activeEntry._id
+      state.mergedPlaylistIds = mergedEntries.length ? mergedEntries.map((entry: any) => entry._id) : [activeEntry._id]
+      state.isMerged = state.mergedPlaylistIds.length >= 2
+      for (const entry of mergedEntries) titleById.set(entry._id, entry.title || "")
       try {
         state.playingChannelId = sessionStorage.getItem(lastChannelStorageKey(state.playlistId))
       } catch {}
-      const creds = await resolvePlaylistCreds(state.playlistId)
+      const credsList = await Promise.all(state.mergedPlaylistIds.map((playlistId) => resolvePlaylistCreds(playlistId)))
       if (state.destroyed) return
-      xtreamCreds = creds ? toXtreamCreds(state.playlistId, creds) : null
-      epgSource = tvEpgSource(xtreamCreds)
+      state.mergedPlaylistIds.forEach((playlistId, index) => {
+        const creds = credsList[index]
+        if (isCustomHost(creds?.host)) state.customPlaylistIds.add(playlistId)
+        const xtreamCreds = creds ? toXtreamCreds(playlistId, creds) : null
+        xtreamCredsByPlaylist.set(playlistId, xtreamCreds)
+        epgSourceByPlaylist.set(playlistId, tvEpgSource(xtreamCreds))
+      })
       renderShell()
 
-      const channels = await loadChannels(state.playlistId)
+      const channels = await loadChannels()
       if (state.destroyed) return
       state.channels = channels
-      state.channelById = new Map(channels.map((channel) => [String(channel.id), channel]))
+      state.channelById = new Map(channels.map((channel) => [channelKeyOf(channel), channel]))
 
       if (!channels.length) {
         renderCentered(t("cast.remote.channelsEmpty"))
@@ -742,23 +1045,36 @@ const view: TvView = {
       renderGroups()
 
       const requestedChannelId = ctx.url.searchParams.get("channel")
-      const requestedChannel = requestedChannelId ? state.channelById.get(requestedChannelId) : null
+      const requestedChannel = !requestedChannelId
+        ? null
+        : state.isMerged
+          ? resolveDeepLinkChannel(
+              state.channels as Array<LiveChannel & { playlistId: string }>,
+              requestedChannelId,
+              ctx.url.searchParams.get("pl"),
+              state.playlistId
+            )
+          : (state.channelById.get(requestedChannelId) ?? null)
+      const requestedKey = requestedChannel ? channelKeyOf(requestedChannel) : null
       const initialGroupKey =
-        (requestedChannel &&
-          state.groups.find((group) => group.channels.some((candidate) => candidate.id === requestedChannel.id))?.key) ||
+        (requestedKey &&
+          state.groups.find((group) =>
+            group.channels.some((candidate) => channelKeyOf(candidate as LiveChannel) === requestedKey)
+          )?.key) ||
         state.groups[0]?.key ||
         ""
       selectGroup(initialGroupKey)
 
-      if (requestedChannel) focusChannelRow(String(requestedChannel.id))
+      if (requestedKey) focusChannelRow(requestedKey)
       else channelRows?.focusIndex(0)
 
-      epgGuardTimer = setTimeout(markEpgResolved, EPG_GUARD_TIMEOUT_MS)
-      void ensureEpgInBackground().then(markEpgResolved)
+      epgGuardTimer = setTimeout(() => markEpgResolved(), EPG_GUARD_TIMEOUT_MS)
+      void ensureEpgInBackground()
       startEpgRefreshTimer()
     }
 
     void boot()
+    unsubs.push(remountOnMergedChange())
 
     return () => {
       state.destroyed = true
@@ -770,6 +1086,7 @@ const view: TvView = {
       shortEpgRowNowNext.clear()
       longPress?.destroy()
       channelRows?.destroy()
+      groupRows?.destroy()
       guidePanel?.destroy()
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)

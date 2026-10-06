@@ -38,6 +38,7 @@ import {
   isAbsoluteHttpUrl,
   pickSampleLiveStreamId,
 } from "@/scripts/lib/diagnostic-targets.ts"
+import type { DnsServer } from "@/scripts/lib/dns-config.ts"
 
 export type StepStatus = "pass" | "warn" | "fail" | "skip"
 
@@ -176,8 +177,44 @@ export interface DiagnosticRunOptions {
     disableProviderEpg?: boolean
     liveContainer?: string
     type?: string
+    dns?: string
   }
   sampleStreamUrl?: string
+}
+
+// Resolves the entry's dns override (or the global default) once per run.
+async function resolveDiagnosisDns(entryDns: string | undefined): Promise<DnsServer | null> {
+  const { getGlobalDns } = await import("@/scripts/lib/app-settings.js")
+  const { resolveDnsOverride } = await import("@/scripts/lib/dns-config.ts")
+  return resolveDnsOverride(entryDns || null, getGlobalDns())
+}
+
+// DNS reachability probe; null (no step) when there's no override or outside Tauri.
+async function probeDnsStep(dnsServer: DnsServer | null, host: string | null): Promise<DiagnosticStep | null> {
+  if (!isTauri || !host || !dnsServer) return null
+  const { dnsProxyAvailable } = await import("@/scripts/lib/dns-proxy.ts")
+  if (!dnsProxyAvailable()) return null
+  const { runDnsCheck, describeDnsError, formatDnsOutcome, dnsShortLabel } = await import(
+    "@/scripts/lib/dns-test.ts"
+  )
+  const serverLabel = dnsShortLabel(dnsServer.raw) ?? dnsServer.raw
+  const started = Date.now()
+  try {
+    const outcome = await runDnsCheck(dnsServer, host)
+    return {
+      labelKey: "diagnostic.step.dns",
+      status: "pass",
+      latencyMs: outcome.elapsedMs,
+      detail: `${serverLabel} - ${formatDnsOutcome(outcome)}`,
+    }
+  } catch (error) {
+    return {
+      labelKey: "diagnostic.step.dns",
+      status: "warn",
+      latencyMs: Date.now() - started,
+      detail: `${serverLabel} - ${describeDnsError(error)}`,
+    }
+  }
 }
 
 /** EPG target for the Xtream runner: same resolution `buildEpgUrlsFromEntry` uses elsewhere, so there's one implementation of the URL shape. */
@@ -195,14 +232,14 @@ async function resolveXtreamEpgTargetUrl(
 }
 
 /** Shared EPG reachability probe for both runners. Never fails - a dead guide doesn't stop playback. */
-async function probeEpgStep(targetUrl: string | null): Promise<DiagnosticStep> {
+async function probeEpgStep(targetUrl: string | null, dns: DnsServer | null): Promise<DiagnosticStep> {
   if (!targetUrl) {
     return { labelKey: "diagnostic.step.epg", status: "skip", detail: t("diagnostic.detail.epgNone") }
   }
   try {
     const { probeStreamHead } = await import("@/scripts/lib/stream-diagnostic.js")
     const started = Date.now()
-    const result = await probeStreamHead(targetUrl, undefined, "epg")
+    const result = await probeStreamHead(targetUrl, undefined, "epg", { dns })
     return {
       labelKey: "diagnostic.step.epg",
       status: result.ok ? "pass" : "warn",
@@ -230,7 +267,7 @@ async function probeUpdaterStep(): Promise<DiagnosticStep> {
       const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
       const feedUrl = await resolveUpdateFeedUrl()
       const response = await withTimeout(
-        providerFetch(feedUrl, { method: "GET", headers: { Range: "bytes=0-0" }, logKind: "update" }),
+        providerFetch(feedUrl, { method: "GET", headers: { Range: "bytes=0-0" }, logKind: "update", dns: "global" }),
         STEP_TIMEOUT_MS
       )
       const latency = Date.now() - started
@@ -267,6 +304,7 @@ interface SampleStreamProbeInput {
   entryType?: string
   targetUrl: string | null
   busy: boolean
+  dns: DnsServer | null
 }
 
 /** Shared "can we actually watch a channel" probe. Runs last so it never delays the rest of the report. */
@@ -285,7 +323,7 @@ async function probeSampleStreamStep(input: SampleStreamProbeInput): Promise<Dia
     const started = Date.now()
     try {
       const result = await withTimeout(
-        probeStreamHead(input.targetUrl, undefined, "media"),
+        probeStreamHead(input.targetUrl, undefined, "media", { dns: input.dns }),
         STREAM_PROBE_TIMEOUT_MS
       )
       const latency = Date.now() - started
@@ -364,6 +402,20 @@ export async function runXtreamDiagnostic(
     pass: creds.password,
   }
 
+  const authHost = (() => {
+    try {
+      return new URL(base).hostname
+    } catch {
+      return null
+    }
+  })()
+  // Resolved once so every fetch below probes through the same server being diagnosed.
+  const dnsServer = await resolveDiagnosisDns(options.entry?.dns)
+
+  // Ahead of auth: a bad DNS server fails the auth step, and its own step is what explains why.
+  const dnsStep = await probeDnsStep(dnsServer, authHost)
+  if (dnsStep) pushStep(dnsStep)
+
   // Connection slot is at capacity - probing the sample stream would steal it
   // from the user's own playback (some providers cap max_connections at 1).
   let connectionsAtLimit: boolean
@@ -375,7 +427,7 @@ export async function runXtreamDiagnostic(
   const authStart = Date.now()
   try {
     const url = buildApiUrl(apiCreds, "get_account_info")
-    const response = await withTimeout(providerFetch(url), STEP_TIMEOUT_MS)
+    const response = await withTimeout(providerFetch(url, { dns: dnsServer }), STEP_TIMEOUT_MS)
     const latency = Date.now() - authStart
     if (!response.ok) {
       const classified = classifyError({ response })
@@ -473,7 +525,7 @@ export async function runXtreamDiagnostic(
     const started = Date.now()
     try {
       const response = await withTimeout(
-        providerFetch(buildApiUrl(apiCreds, action)),
+        providerFetch(buildApiUrl(apiCreds, action), { dns: dnsServer }),
         STEP_TIMEOUT_MS
       )
       const latency = Date.now() - started
@@ -529,7 +581,7 @@ export async function runXtreamDiagnostic(
     probeStep("diagnostic.step.series", "get_series", ["series", "results"]).catch(() => {}),
     resolveXtreamEpgTargetUrl(options.entry, apiCreds)
       .then(async (targetUrl) => {
-        pushStep(await probeEpgStep(targetUrl))
+        pushStep(await probeEpgStep(targetUrl, dnsServer))
       })
       .catch(() => {
         pushStep({ labelKey: "diagnostic.step.epg", status: "skip", detail: t("diagnostic.detail.epgNone") })
@@ -551,6 +603,7 @@ export async function runXtreamDiagnostic(
       entryType: options.entry?.type,
       targetUrl: options.sampleStreamUrl || derivedStreamUrl,
       busy: connectionsAtLimit,
+      dns: dnsServer,
     })
   )
 
@@ -580,10 +633,24 @@ export async function runM3UDiagnostic(
 
   const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
 
+  const fetchHost = (() => {
+    try {
+      return new URL(trimmed).hostname
+    } catch {
+      return null
+    }
+  })()
+  // Resolved once so every fetch below probes through the same server being diagnosed.
+  const dnsServer = await resolveDiagnosisDns(options.entry?.dns)
+
+  // Ahead of the fetch: a bad DNS server fails it, and its own step is what explains why.
+  const dnsStep = await probeDnsStep(dnsServer, fetchHost)
+  if (dnsStep) pushStep(dnsStep)
+
   const fetchStart = Date.now()
   let text = ""
   try {
-    const response = await withTimeout(providerFetch(trimmed), STEP_TIMEOUT_MS)
+    const response = await withTimeout(providerFetch(trimmed, { dns: dnsServer }), STEP_TIMEOUT_MS)
     const latency = Date.now() - fetchStart
     if (!response.ok) {
       const classified = classifyError({ response })
@@ -640,7 +707,7 @@ export async function runM3UDiagnostic(
   })
 
   await Promise.all([
-    probeEpgStep(extractM3UHeaderEpgUrl(text))
+    probeEpgStep(extractM3UHeaderEpgUrl(text), dnsServer)
       .then((step) => pushStep(step))
       .catch(() => {
         pushStep({ labelKey: "diagnostic.step.epg", status: "skip", detail: t("diagnostic.detail.epgNone") })
@@ -659,6 +726,7 @@ export async function runM3UDiagnostic(
       entryType: options.entry?.type,
       targetUrl: isAbsoluteHttpUrl(sampleStreamCandidate) ? sampleStreamCandidate : null,
       busy: false,
+      dns: dnsServer,
     })
   )
 

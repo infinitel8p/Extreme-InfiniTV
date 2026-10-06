@@ -1,0 +1,237 @@
+---
+// Annotated screenshot: boxes come from the `.boxes.json` manifest so a redesign moves the arrows.
+import { Image } from "astro:assets"
+
+interface Marker {
+  // Element id from the manifest ("#card-network"), or a literal 0-1 box.
+  at: string | { x: number; y: number; w: number; h: number }
+  note?: string
+}
+
+interface Props {
+  src: string
+  alt: string
+  caption?: string
+  // Crop the frame to this element (plus padding), or to an explicit 0-1 region.
+  zoom?: string | { x: number; y: number; w: number; h: number }
+  zoomPad?: number
+  markers?: Marker[]
+}
+
+const { src, alt, caption, zoom, zoomPad = 0.18, markers = [] } = Astro.props
+
+const images = import.meta.glob<{ default: ImageMetadata }>(
+  "../assets/screenshots/**/*.png",
+  { eager: true }
+)
+const manifests = import.meta.glob<{ default: Manifest }>(
+  "../assets/screenshots/**/*.boxes.json",
+  { eager: true }
+)
+
+interface Box {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+interface Manifest {
+  viewport: { width: number; height: number }
+  boxes: Record<string, Box>
+}
+
+const imageKey = `../assets/screenshots/${src}.png`
+const image = images[imageKey]?.default
+if (!image) {
+  throw new Error(
+    `<Shot src="${src}"> - no image at src/assets/screenshots/${src}.png. ` +
+      `Capture it with: pnpm screenshots --device=<Device> --route=<route> --slug=<name>`
+  )
+}
+
+const manifest = manifests[`../assets/screenshots/${src}.boxes.json`]?.default ?? null
+
+function resolve(at: Marker["at"], label: string): Box {
+  if (typeof at !== "string") return at
+  if (!manifest) {
+    throw new Error(
+      `<Shot src="${src}"> - ${label} "${at}" needs src/assets/screenshots/${src}.boxes.json, ` +
+        `which doesn't exist. Re-capture the shot to generate it.`
+    )
+  }
+  const box = manifest.boxes[at]
+  if (!box) {
+    const ids = Object.keys(manifest.boxes)
+    throw new Error(
+      `<Shot src="${src}"> - ${label} "${at}" isn't in the manifest, so it was renamed or ` +
+        `scrolled out of frame. ${ids.length} ids available, e.g. ${ids.slice(0, 6).join(", ")}`
+    )
+  }
+  return box
+}
+
+const crop = (() => {
+  if (!zoom) return { x: 0, y: 0, w: 1, h: 1 }
+  // An explicit region is already the frame the author wants; only a selector needs padding.
+  if (typeof zoom !== "string") return zoom
+  const box = resolve(zoom, "zoom")
+  const padX = box.w * zoomPad
+  const padY = box.h * zoomPad
+  const x = Math.max(0, box.x - padX)
+  const y = Math.max(0, box.y - padY)
+  return {
+    x,
+    y,
+    w: Math.min(1 - x, box.w + padX * 2),
+    h: Math.min(1 - y, box.h + padY * 2),
+  }
+})()
+
+const resolved = markers.map((marker, index) => {
+  const box = resolve(marker.at, `marker ${index + 1}`)
+  // A legend entry whose badge is cropped out of frame points at nothing.
+  const outside =
+    box.x + box.w < crop.x || box.x > crop.x + crop.w ||
+    box.y + box.h < crop.y || box.y > crop.y + crop.h
+  if (outside) {
+    throw new Error(
+      `<Shot src="${src}"> - marker ${index + 1} sits outside the ${zoom ? `zoom="${zoom}"` : "frame"} crop, ` +
+        `so its badge would be clipped. Widen the crop or drop the marker.`
+    )
+  }
+  return { box, note: marker.note }
+})
+
+let counter = 0
+const pins = resolved.map((entry) => ({
+  ...entry,
+  n: entry.note ? ++counter : null,
+}))
+
+// Frame aspect follows the cropped region so the image never distorts.
+const frameRatio = (image.width * crop.w) / (image.height * crop.h)
+
+const toFrame = (box: Box) => ({
+  left: ((box.x - crop.x) / crop.w) * 100,
+  top: ((box.y - crop.y) / crop.h) * 100,
+  width: (box.w / crop.w) * 100,
+  height: (box.h / crop.h) * 100,
+})
+
+const legend = pins.filter((pin) => pin.n !== null)
+---
+
+<figure class="shot my-6">
+  <div
+    class="shot-frame relative overflow-hidden rounded-[10px] border border-line bg-surface"
+    style={`--crop-x:${crop.x};--crop-y:${crop.y};--crop-w:${crop.w};--crop-h:${crop.h};aspect-ratio:${frameRatio};`}
+  >
+    <Image
+      src={image}
+      alt={alt}
+      widths={[640, 1024, image.width]}
+      sizes="(min-width: 64em) 46rem, 100vw"
+      class="shot-img"
+    />
+    {
+      pins.map((pin) => {
+        const rect = toFrame(pin.box)
+        return (
+          <span
+            class="shot-mark"
+            style={`left:${rect.left}%;top:${rect.top}%;width:${rect.width}%;height:${rect.height}%;`}
+            aria-hidden="true"
+          >
+            {pin.n !== null && <span class="shot-badge">{pin.n}</span>}
+          </span>
+        )
+      })
+    }
+  </div>
+
+  {caption && <figcaption class="shot-caption">{caption}</figcaption>}
+
+  {
+    legend.length > 0 && (
+      <ol class="shot-legend">
+        {legend.map((pin) => (
+          <li>
+            <span class="shot-badge shot-badge--inline">{pin.n}</span>
+            <span>{pin.note}</span>
+          </li>
+        ))}
+      </ol>
+    )
+  }
+</figure>
+
+<style>
+  .shot-img {
+    position: absolute;
+    max-width: none;
+    width: calc(100% / var(--crop-w));
+    height: calc(100% / var(--crop-h));
+    left: calc(-100% * var(--crop-x) / var(--crop-w));
+    top: calc(-100% * var(--crop-y) / var(--crop-h));
+  }
+
+  .shot-mark {
+    position: absolute;
+    border: 2px solid var(--color-accent);
+    border-radius: 6px;
+    box-shadow: 0 0 0 4px var(--color-accent-ring);
+  }
+
+  .shot-badge {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform: translate(-45%, -45%);
+    display: grid;
+    place-items: center;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    padding: 0 0.35rem;
+    border-radius: 999px;
+    background: var(--color-accent);
+    color: var(--color-bg);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .shot-badge--inline {
+    position: static;
+    transform: none;
+    flex: none;
+  }
+
+  .shot-legend {
+    list-style: none;
+    margin: 0.875rem 0 0;
+    padding-top: 0.625rem;
+    padding-inline: 0;
+    padding-bottom: 0;
+    border-top: 1px solid var(--color-line);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .shot-legend li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    color: var(--color-fg-2);
+  }
+
+  .shot-caption {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--color-fg-3);
+  }
+</style>

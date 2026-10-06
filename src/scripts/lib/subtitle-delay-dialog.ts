@@ -63,18 +63,18 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
   // The video element (and its textTracks list) is swapped per playback session.
   function bindTrackList(): void {
     const list = getMediaElement?.()?.textTracks ?? null
+    if (!list) {
+      // No textTracks to observe (e.g. mpv-embedded) - resync from currentOffset() on each poll.
+      unbindTrackList()
+      syncButton()
+      return
+    }
     if (list === boundTrackList) return
-    if (boundTrackList) {
-      boundTrackList.removeEventListener("change", onTrackListEvent)
-      boundTrackList.removeEventListener("addtrack", onTrackListEvent)
-      boundTrackList.removeEventListener("removetrack", onTrackListEvent)
-    }
+    unbindTrackList()
     boundTrackList = list
-    if (boundTrackList) {
-      boundTrackList.addEventListener("change", onTrackListEvent)
-      boundTrackList.addEventListener("addtrack", onTrackListEvent)
-      boundTrackList.addEventListener("removetrack", onTrackListEvent)
-    }
+    boundTrackList.addEventListener("change", onTrackListEvent)
+    boundTrackList.addEventListener("addtrack", onTrackListEvent)
+    boundTrackList.addEventListener("removetrack", onTrackListEvent)
     syncButton()
   }
 

@@ -1,0 +1,236 @@
+name: mpv Runtime
+
+# Triggers:
+#  - run "mpv Runtime" from the Actions tab -> re-hosts and republishes the
+#      sidecar binaries
+#  - push to main or release/** touching this file -> same build, for iterating
+#      on the workflow itself
+#
+# Re-hosts a trusted upstream mpv Windows build for the embedded mpv sidecar
+# (see mpv_embed.rs). Building mpv from source pulls in a large toolchain for
+# little benefit over a well-established community Windows build, so this
+# workflow downloads and re-packages one instead. This runs rarely - only when
+# the pinned upstream build needs to change - and publishes the result to a
+# rolling prerelease tag `mpv-runtime-v1`. `release.yml` and `beta.yml` just
+# download the matching asset from that tag, so a normal app release never
+# re-fetches mpv.
+#
+# Assets keep the mpv-<triple> names (checksum pins are keyed by them);
+# release.yml / beta.yml / ensure-mpv-runtime.mjs rename on placement to the
+# externalBin name consumed by tauri.windows.conf.json:
+#   src-tauri/binaries/infinitv-mpv-x86_64-pc-windows-msvc.exe
+#   src-tauri/binaries/infinitv-mpv-aarch64-pc-windows-msvc.exe
+#
+# Licensing: mpv is GPLv2-or-later and the pinned upstream bundles an ffmpeg
+# configured --enable-gpl --enable-version3 with no --enable-nonfree / fdk-aac,
+# so the binaries are GPLv3-compatible and this GPL-3.0-or-later app can ship
+# them. Unlike ffmpeg-sidecar.yml this workflow does NOT gate on an LGPL-only
+# build - that check doesn't apply here and must not be copied. mpv's Copyright
+# and the mpv / FFmpeg licence texts are staged as release assets instead.
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+    paths:
+      - ".github/workflows/mpv-runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Upstream re-hosted here: shinchiro/mpv-winbuild-cmake, the canonical MinGW-w64
+  # cross-build of mpv, chosen over zhongfly/mpv-winbuild because it publishes both
+  # x86_64 and aarch64 players and keeps old releases (zhongfly prunes to ~30 days,
+  # so a pinned tag there stops resolving).
+  MPV_WINBUILD_REPO: "shinchiro/mpv-winbuild-cmake"
+  # Pin an exact release tag and asset names from
+  # https://github.com/shinchiro/mpv-winbuild-cmake/releases before running this
+  # workflow, so a rebuild can't silently pick up a new, unreviewed upstream build.
+  MPV_WINBUILD_TAG: "20260902"
+  MPV_ASSET_X86_64: "mpv-x86_64-20260902-git-174b638f29.7z"
+  MPV_ASSET_AARCH64: "mpv-aarch64-20260902-git-174b638f29.7z"
+  # Source commits the pinned release was built from, used to stage licence text.
+  MPV_SOURCE_COMMIT: "174b638f29"
+  FFMPEG_SOURCE_COMMIT: "905ef92f0"
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Download upstream release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p download
+          gh release download "$MPV_WINBUILD_TAG" \
+            --repo "$MPV_WINBUILD_REPO" \
+            --pattern "$MPV_ASSET_X86_64" \
+            --dir download
+
+      - name: Extract and stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          7z x "download\$env:MPV_ASSET_X86_64" -oextracted -y
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+          Copy-Item extracted\mpv.exe stage\mpv-x86_64-pc-windows-msvc.exe
+
+      # The upstream archives ship no licence text, so fetch it from the exact
+      # mpv / FFmpeg commits the pinned build came from.
+      - name: Stage licence text
+        shell: bash
+        run: |
+          set -euo pipefail
+          MPV_RAW="https://raw.githubusercontent.com/mpv-player/mpv/${MPV_SOURCE_COMMIT}"
+          FFMPEG_RAW="https://raw.githubusercontent.com/FFmpeg/FFmpeg/${FFMPEG_SOURCE_COMMIT}"
+          curl -fsSL "$MPV_RAW/Copyright" -o stage/Copyright
+          curl -fsSL "$MPV_RAW/LICENSE.GPL" -o stage/LICENSE.GPL
+          curl -fsSL "$FFMPEG_RAW/LICENSE.md" -o stage/FFmpeg-LICENSE.txt
+          curl -fsSL "$FFMPEG_RAW/COPYING.GPLv3" -o stage/FFmpeg-COPYING.GPLv3.txt
+
+      - name: Verify standalone binary
+        shell: pwsh
+        run: |
+          # GUI-subsystem exe: pwsh won't wait for it and leaves $LASTEXITCODE null.
+          $mpv = Start-Process -FilePath "$PWD\stage\mpv-x86_64-pc-windows-msvc.exe" -ArgumentList "--version" -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\mpv-version.txt"
+          Get-Content "$env:RUNNER_TEMP\mpv-version.txt"
+          if ($mpv.ExitCode -ne 0) {
+            Write-Host "::error::mpv.exe --version failed with exit code $($mpv.ExitCode)"
+            exit 1
+          }
+
+      - name: Write build info
+        shell: bash
+        run: |
+          set -euo pipefail
+          MPV_VERSION="$(head -n1 "$RUNNER_TEMP/mpv-version.txt")"
+          {
+            echo "mpv version: ${MPV_VERSION}"
+            echo "source: https://github.com/${MPV_WINBUILD_REPO}/releases/tag/${MPV_WINBUILD_TAG}"
+            echo "rehosted: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "workflow commit: ${GITHUB_SHA}"
+          } > stage/BUILD-INFO-windows.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpv-windows-x64
+          path: stage/*
+
+  build-windows-arm64:
+    runs-on: windows-11-arm
+    steps:
+      - name: Download upstream release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p download
+          gh release download "$MPV_WINBUILD_TAG" \
+            --repo "$MPV_WINBUILD_REPO" \
+            --pattern "$MPV_ASSET_AARCH64" \
+            --dir download
+
+      - name: Extract and stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          7z x "download\$env:MPV_ASSET_AARCH64" -oextracted -y
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+          Copy-Item extracted\mpv.exe stage\mpv-aarch64-pc-windows-msvc.exe
+
+      - name: Verify standalone binary
+        shell: pwsh
+        run: |
+          # GUI-subsystem exe: pwsh won't wait for it and leaves $LASTEXITCODE null.
+          $mpv = Start-Process -FilePath "$PWD\stage\mpv-aarch64-pc-windows-msvc.exe" -ArgumentList "--version" -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\mpv-version.txt"
+          Get-Content "$env:RUNNER_TEMP\mpv-version.txt"
+          if ($mpv.ExitCode -ne 0) {
+            Write-Host "::error::mpv.exe --version failed with exit code $($mpv.ExitCode)"
+            exit 1
+          }
+
+      - name: Write build info
+        shell: bash
+        run: |
+          set -euo pipefail
+          MPV_VERSION="$(head -n1 "$RUNNER_TEMP/mpv-version.txt")"
+          {
+            echo "mpv version: ${MPV_VERSION}"
+            echo "source: https://github.com/${MPV_WINBUILD_REPO}/releases/tag/${MPV_WINBUILD_TAG}"
+            echo "rehosted: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "workflow commit: ${GITHUB_SHA}"
+          } > stage/BUILD-INFO-windows-arm64.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpv-windows-arm64
+          path: stage/*
+
+  publish:
+    needs: [build-windows-x64, build-windows-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp artifacts/mpv-windows-x64/* release-assets/
+          cp artifacts/mpv-windows-arm64/* release-assets/
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          ls -la
+
+      # The app and pipelines verify against the committed pins; SHA256SUMS.txt is informational.
+      - name: Surface checksums for the committed pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### mpv runtime checksums"
+            echo
+            echo "Pin these in \`src/scripts/mpv-runtime-checksums.json\` (\`node src/scripts/ensure-mpv-runtime.mjs --update-pins\`, then review and commit) or release.yml and beta.yml will reject the new binaries."
+            echo
+            echo '```'
+            cat release-assets/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat release-assets/SHA256SUMS.txt
+
+      - name: Create or update rolling prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="mpv-runtime-v1"
+          BODY_FILE="$RUNNER_TEMP/body.md"
+          {
+            echo "mpv sidecar binaries consumed by the desktop release and beta build pipelines, re-hosted from $MPV_WINBUILD_REPO."
+            echo
+            echo "This is a rolling prerelease: pushing a new build to the \"mpv Runtime\" workflow replaces the assets in place, it does not create a new tag."
+            echo
+            echo "Re-hosted from: https://github.com/${MPV_WINBUILD_REPO}/releases/tag/${MPV_WINBUILD_TAG} (see BUILD-INFO-windows.txt / BUILD-INFO-windows-arm64.txt attached below)."
+            echo
+            echo "mpv is GPLv2-or-later; this app is GPL-3.0-or-later. Copyright, LICENSE.GPL, FFmpeg-LICENSE.txt and FFmpeg-COPYING.GPLv3.txt cover the bundled binaries."
+          } > "$BODY_FILE"
+
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "${{ github.repository }}" --prerelease --notes-file "$BODY_FILE"
+          else
+            gh release create "$TAG" --repo "${{ github.repository }}" --prerelease --title "mpv runtime v1" --notes-file "$BODY_FILE"
+          fi
+
+          gh release upload "$TAG" release-assets/* --repo "${{ github.repository }}" --clobber

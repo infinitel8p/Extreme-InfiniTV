@@ -27,6 +27,19 @@ describe("sortChannelsForView", () => {
     expect(out.map((channel) => channel.id)).toEqual([2, 4, 1, 3])
   })
 
+  it("ranks by a composite key when keyOf is given", () => {
+    const rows = [
+      { id: 1, name: "A", playlistId: "x" },
+      { id: 1, name: "B", playlistId: "y" },
+    ]
+    const scores = new Map<number | string, number>([
+      ["x:1", 1],
+      ["y:1", 9],
+    ])
+    const out = sortChannelsForView(rows, "default", scores, (row) => `${row.playlistId}:${row.id}`)
+    expect(out.map((row) => row.name)).toEqual(["B", "A"])
+  })
+
   it("sorts by channel number, unnumbered channels last in source order", () => {
     const unnumberedFirst = [
       { id: 10, name: "No number A" },
@@ -65,6 +78,16 @@ describe("sortChannelsForView", () => {
       "beta News",
       "Alpha Sports",
     ])
+  })
+
+  it("ignores internal punctuation when sorting by name", () => {
+    const punctuated = [
+      { id: 30, name: "PPV: Boxing" },
+      { id: 31, name: "PPV Boxing" },
+    ]
+    const out = sortChannelsForView(punctuated, "az")
+    // Collating equal under ignorePunctuation, the stable sort keeps source order.
+    expect(out.map((channel) => channel.id)).toEqual([30, 31])
   })
 
   it("groups by category then name in cataz mode", () => {

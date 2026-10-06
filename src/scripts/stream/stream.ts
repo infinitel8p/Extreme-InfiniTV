@@ -10,17 +10,54 @@ import {
   isLocalM3UHost,
   isCustomHost,
   readLocalM3UContent,
+  getPlaylistDnsOverride,
+  getMergedEntries,
+  getEntryById,
+  selectEntry,
+  entryToCreds,
+  xtreamCandidatesFor,
+  MERGED_CHANGED_EVENT,
 } from "@/scripts/lib/creds.js"
-import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
+import {
+  rowKey,
+  stampRowsWithPlaylist,
+  parseMergedCategoryKey,
+  mergeOrderedFavorites,
+  mergeRecents,
+  resolveDeepLinkChannel,
+} from "@/scripts/lib/merged-catalog-core.ts"
+import {
+  getMergedSources,
+  hydrateMergedRows,
+  readMergedRows,
+  ensureMergedRows,
+} from "@/scripts/lib/merged-catalog.ts"
+import {
+  channelMatchesCategory,
+  channelPassesCategoryFilter,
+  nativeChannelId,
+  resolveNativeChannel,
+  liveContextIdsForPlaylist,
+} from "@/scripts/lib/merged-live.ts"
+import { xtreamApiFetch, resolveStreamUrl, advanceMirror } from "@/scripts/lib/xtream-api.js"
+import {
+  isProviderRejection,
+  isProviderPageDetail,
+  shouldRepinMirror,
+  isTransientRejection,
+} from "@/scripts/lib/stream-reject.ts"
+import { normalize, parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.js"
+import { mapXtreamLiveRows } from "@/scripts/lib/catalog-mappers.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
-import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+import { cachedFetch, getCached, hydrate as hydrateCache, invalidateEntry } from "@/scripts/lib/cache.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
   toggleFavorite,
-  getFavorites,
+  getFavoritesOrdered,
+  moveFavorite,
   pushRecent,
   getRecents,
   getViewSort,
@@ -94,7 +131,11 @@ import {
   isTauri,
   stopExternalPlayback,
   subscribeExternalPlayerExit,
+  isNativeVideoBackend,
+  canSwapToMpvEmbedded,
+  shouldOfferMpvEmbeddedFix,
 } from "@/scripts/lib/player-runtime.ts"
+import { mpvEmbeddedAvailable, parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 import {
   getPlayerBackend,
   getPlayerPath,
@@ -112,6 +153,7 @@ import {
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
+import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 import {
   setupExternalPlayerButton,
   surfaceLaunchError,
@@ -120,10 +162,11 @@ import {
 } from "@/scripts/lib/external-player-button.js"
 import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_DOTS, ICON_CHECK } from "@/scripts/lib/icons.js"
 import { openAddToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
+import { confirmDialog } from "@/scripts/lib/confirm-dialog.ts"
 import {
   loadProgrammes,
   getProgrammesSync,
-  getNowNext,
+  mergeProgrammeMaps,
   getNowNextForChannel,
   shiftChannelProgrammes,
   effectiveTvgId,
@@ -168,19 +211,20 @@ const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
 const EPG_SIDE_PANEL_PAST_WINDOW_MS = 24 * 60 * 60 * 1000
 const EPG_SIDE_PANEL_MAX_PAST_DAYS = 7
+const EPG_SIDE_PANEL_UPCOMING_PAGE_SIZE = 10
 
 let currentlyPlayingId = null
 // Tracks the channel that was playing before the current one, so `\` can flip back to it.
 let previousPlayingId = null
 
-function setNowPlaying(id) {
-  if (id !== currentlyPlayingId) previousPlayingId = currentlyPlayingId
-  currentlyPlayingId = id
+function setNowPlaying(key) {
+  if (key !== currentlyPlayingId) previousPlayingId = currentlyPlayingId
+  currentlyPlayingId = key
   if (!viewport) return
   for (const row of viewport.querySelectorAll(".channel-row")) {
     const idx = Number(row.dataset.idx)
     const ch = filtered[idx]
-    if (ch && ch.id === id) row.dataset.nowPlaying = "true"
+    if (ch && channelKey(ch) === key) row.dataset.nowPlaying = "true"
     else delete row.dataset.nowPlaying
   }
 }
@@ -188,9 +232,29 @@ function setNowPlaying(id) {
 /** @type {{host:string,port:string,user:string,pass:string}} */
 let creds = { host: "", port: "", user: "", pass: "" }
 
-function buildDirectLiveUrl(id, c = creds) {
-  const container = isM3u8ContainerFallbackChannel(id) ? "m3u8" : c?.liveContainer
-  return buildLiveStreamUrl(c, id, container)
+let credsByPlaylistId = new Map()
+let entryById = new Map()
+let mergedPlaylistIds = []
+let mergedMode = false
+let channelsByKey = new Map()
+let loadGeneration = 0
+
+const credsFor = (playlistId) => credsByPlaylistId.get(playlistId) || creds
+const isM3UFor = (playlistId) => {
+  const source = credsFor(playlistId)
+  return isLikelyM3USource(source.host, source.user, source.pass)
+}
+const isCustomFor = (playlistId) => isCustomHost(credsFor(playlistId).host)
+const channelKey = (channel) =>
+  rowKey({ playlistId: channel.playlistId || activePlaylistId, id: channel.id })
+const findChannel = (key) => channelsByKey.get(key) || null
+const inMergedSet = (playlistId) =>
+  !!playlistId && (mergedMode ? mergedPlaylistIds.includes(playlistId) : playlistId === activePlaylistId)
+
+function buildDirectLiveUrl(channel, c = credsFor(channel.playlistId)) {
+  const fromSource = channel.sourceEntryId && channel.sourceStreamId != null
+  const container = isM3u8ContainerFallbackChannel(channel.playlistId, channel.id) ? "m3u8" : c?.liveContainer
+  return buildLiveStreamUrl(c, fromSource ? channel.sourceStreamId : channel.id, container)
 }
 
 // ----------------------------
@@ -224,7 +288,7 @@ function parseM3U(text) {
       tvgId: entry.tvgId || undefined,
       chno: entry.chno ?? undefined,
       tvgShift: entry.tvgShift ?? null,
-      norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
+      norm: normalize(entry.name),
       url,
       userAgent: entry.userAgent,
       referer: entry.referer,
@@ -240,20 +304,22 @@ function parseM3U(text) {
   return out
 }
 
-const indexDirectUrls = (items) => {
+const indexDirectUrls = (items, fallbackPlaylistId = activePlaylistId) => {
   directUrlById = new Map()
   streamHeadersById = new Map()
   streamDrmById = new Map()
-  for (const channel of items) {
-    if (channel.url) directUrlById.set(channel.id, channel.url)
+  for (const item of items) {
+    const channel = item.playlistId ? item : { ...item, playlistId: fallbackPlaylistId }
+    const key = channelKey(channel)
+    if (channel.url) directUrlById.set(key, channel.url)
     if (channel.userAgent || channel.referer) {
-      streamHeadersById.set(channel.id, {
+      streamHeadersById.set(key, {
         userAgent: channel.userAgent || null,
         referer: channel.referer || null,
       })
     }
     if (channel.manifestType || channel.licenseKey) {
-      streamDrmById.set(channel.id, {
+      streamDrmById.set(key, {
         manifestType: channel.manifestType || null,
         drmScheme: channel.drmScheme || null,
         licenseKey: channel.licenseKey || null,
@@ -261,8 +327,8 @@ const indexDirectUrls = (items) => {
     }
   }
 }
-const hasDirectUrl = (id) => directUrlById.has(id)
-const getDirectUrl = (id) => directUrlById.get(id) || ""
+const hasDirectUrl = (key) => directUrlById.has(key)
+const getDirectUrl = (key) => directUrlById.get(key) || ""
 
 // ----------------------------
 // UI refs
@@ -285,6 +351,7 @@ let activeTuningTransition: any = null
 let externalPlaybackActive = false
 // Which player holds it, so a handoff can ask that one to let the stream go.
 let externalPlaybackKind = null
+let nativeLiveHandoffActive = false
 
 // The inline script in livetv.astro sets data-first-run optimistically from
 // localStorage["xt_playlists"]. On Tauri builds the real entry list lives in
@@ -309,15 +376,20 @@ document.addEventListener("xt:entries-updated", () => {
 
 document.addEventListener("xt:active-changed", () => {
   clearRichPresence().catch(() => {})
+  resetDiscordPresenceTracking()
   externalPlaybackActive = false
   externalPlaybackKind = null
   reconcileFirstRun()
   loadChannels()
 })
 
+document.addEventListener(MERGED_CHANGED_EVENT, () => {
+  loadChannels()
+})
+
 document.addEventListener("xt:cache-revalidated", (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
-  if (!detail || detail.entryId !== activePlaylistId) return
+  if (!detail || !inMergedSet(detail.entryId)) return
   if (detail.kind !== "live" && detail.kind !== "m3u") return
   loadChannels()
 })
@@ -330,13 +402,14 @@ subscribeExternalPlayerExit(() => {
 
 document.addEventListener("xt:channel-epg-changed", (e) => {
   const detail = /** @type {CustomEvent} */ (e as any).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !inMergedSet(detail.playlistId)) return
   ensureEpgLoaded()
   refreshNowSlots()
+  refreshDiscordPresenceProgramme()
   if (
     currentlyPlayingId &&
     detail.channelId != null &&
-    detail.channelId === currentlyPlayingId &&
+    rowKey({ playlistId: detail.playlistId, id: detail.channelId }) === currentlyPlayingId &&
     hasDirectUrl(currentlyPlayingId)
   ) {
     paintSidePanelFromXmltv(currentlyPlayingId)
@@ -346,27 +419,35 @@ document.addEventListener("xt:channel-epg-changed", (e) => {
 
 document.addEventListener(EPG_LOADED_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !inMergedSet(detail.playlistId)) return
   refreshNowSlots()
-  // For M3U sources the side panel can't use get_short_epg; it pulls from
-  // the just-loaded XMLTV state. Refresh it now that data is available.
-  if (currentlyPlayingId && hasDirectUrl(currentlyPlayingId)) {
-    paintSidePanelFromXmltv(currentlyPlayingId)
-  }
+  refreshDiscordPresenceProgramme()
+  // Offset is only known once this fires; repaint so the panel picks up the shift.
+  if (currentlyPlayingId) paintEpgSidePanel(currentlyPlayingId)
   if (radioModeChannelId != null) paintRadioNowPlaying(radioModeChannelId)
 })
 
 document.addEventListener(EPG_OFFSET_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
-  ensureEpgLoaded()
+  if (!detail || !inMergedSet(detail.playlistId)) return
+  // The offset change already dropped the EPG memCache; repaint only once the reload settles.
+  const repaint = () => {
+    refreshNowSlots()
+    refreshDiscordPresenceProgramme()
+    if (currentlyPlayingId) paintEpgSidePanel(currentlyPlayingId)
+    if (radioModeChannelId != null) paintRadioNowPlaying(radioModeChannelId)
+  }
+  const reload = ensureEpgLoaded()
+  if (reload) reload.finally(repaint)
+  else repaint()
 })
 
-const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
 
 function resolveVideoScaleMode() {
-  if (activePlaylistId && currentlyPlayingId != null) {
-    const override = getVideoScaleOverride(activePlaylistId, "live", currentlyPlayingId)
+  const playing = currentlyPlayingId != null ? findChannel(currentlyPlayingId) : null
+  if (playing?.playlistId) {
+    const override = getVideoScaleOverride(playing.playlistId, "live", playing.id)
     if (override) return override
   }
   return getVideoScale()
@@ -382,10 +463,15 @@ document.addEventListener(VIDEO_SCALE_EVENT, () => {
 
 document.addEventListener(CHANNEL_VIDEO_SCALE_CHANGED_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
-  if (!detail || detail.playlistId !== activePlaylistId || detail.kind !== "live") return
+  if (!detail || !inMergedSet(detail.playlistId) || detail.kind !== "live") return
   if (currentlyPlayingId == null) return
   // itemId is null for a bulk clear (e.g. "apply to all channels").
-  if (detail.itemId === null || detail.itemId === currentlyPlayingId) applyVideoScale()
+  if (
+    detail.itemId === null ||
+    rowKey({ playlistId: detail.playlistId, id: detail.itemId }) === currentlyPlayingId
+  ) {
+    applyVideoScale()
+  }
 })
 
 const CAT_FAVORITES = "__favorites__"
@@ -393,16 +479,23 @@ const CAT_RECENTS = "__recents__"
 
 document.addEventListener("xt:favorites-changed", (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !inMergedSet(detail.playlistId)) return
   if (detail.kind !== "live") return
   if (picker.getActiveCat() === CAT_FAVORITES) scheduleApplyFilter()
   else renderVirtual()
   picker.refreshPseudoRows()
 })
 
+document.addEventListener("xt:favorites-order-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || !inMergedSet(detail.playlistId)) return
+  if (detail.kind !== "live") return
+  if (picker.getActiveCat() === CAT_FAVORITES) scheduleApplyFilter()
+})
+
 document.addEventListener("xt:recents-changed", (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !inMergedSet(detail.playlistId)) return
   if (detail.kind !== "live") return
   if (picker.getActiveCat() === CAT_RECENTS) scheduleApplyFilter()
   picker.refreshPseudoRows()
@@ -410,7 +503,7 @@ document.addEventListener("xt:recents-changed", (e) => {
 
 const onPickerFilterChange = (e: Event) => {
   const detail = /** @type {CustomEvent} */ (e as any).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !inMergedSet(detail.playlistId)) return
   if (detail.kind !== "live") return
   scheduleApplyFilter()
 }
@@ -434,11 +527,11 @@ let lastPaintMeta = { fromCache: false, age: 0 }
 /** @type {Array<typeof all[number]>} */
 let filtered = []
 
-/** Ordered-channel-list cast context for the given channel, from the currently rendered list. */
-function liveContextForChannelId(channelId) {
-  if (!activePlaylistId) return undefined
-  const channelIds = filtered.map((channel) => String(channel.id))
-  return buildLiveCastContext(activePlaylistId, channelIds, String(channelId))
+/** Cast prev/next context, scoped to the channel's own playlist. */
+function liveContextForChannel(channel) {
+  if (!channel?.playlistId) return undefined
+  const channelIds = liveContextIdsForPlaylist(filtered, channel.playlistId)
+  return buildLiveCastContext(channel.playlistId, channelIds, String(channel.id))
 }
 
 const picker = mountCategoryPicker({
@@ -447,6 +540,7 @@ const picker = mountCategoryPicker({
   activeCatStorageKey: "xt_active_cat",
   activeCatChangedEvent: "xt:cat-changed",
   getActivePlaylistId: () => activePlaylistId,
+  getSources: () => getMergedSources(),
   getItems: () => all,
 })
 document.addEventListener("xt:cat-changed", () => scheduleApplyFilter())
@@ -530,9 +624,9 @@ function mountVirtualList(items) {
 function paintNowSlot(slot, playBtn, ch) {
   if (!slot) return
   slot.replaceChildren()
-  const state = activePlaylistId ? getProgrammesSync(activePlaylistId) : null
+  const state = ch.playlistId ? getProgrammesSync(ch.playlistId) : null
   if (!state) return
-  const { current, next } = computeNowNext(state.programmes, ch, activePlaylistId)
+  const { current, next } = computeNowNext(state.programmes, ch, ch.playlistId)
   if (!current && !next) return
 
   if (current) {
@@ -594,6 +688,43 @@ function buildHevcBadge() {
   return badge
 }
 
+function buildStarButton(ch) {
+  const fav = ch.playlistId
+    ? isFavorite(ch.playlistId, "live", ch.id)
+    : false
+  const starBtn = document.createElement("button")
+  starBtn.type = "button"
+  starBtn.dataset.role = "star"
+  starBtn.className =
+    "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent " +
+    (fav
+      ? "text-accent hover:bg-surface-2 focus:bg-surface-2"
+      : "text-fg-3 hover:text-fg hover:bg-surface-2 focus:text-fg focus:bg-surface-2")
+  starBtn.setAttribute(
+    "aria-label",
+    fav
+      ? `Remove ${ch.name || "channel"} from favorites`
+      : `Add ${ch.name || "channel"} to favorites`
+  )
+  starBtn.setAttribute("aria-pressed", String(fav))
+  starBtn.innerHTML = fav ? STAR_FILLED : STAR_OUTLINE
+  starBtn.addEventListener("click", (e) => {
+    e.stopPropagation()
+    if (!ch.playlistId) return
+    toggleFavorite(ch.playlistId, "live", ch.id, {
+      name: ch.name || "",
+      logo: ch.logo || null,
+    })
+    starBtn.classList.remove("star-pulse")
+    void starBtn.offsetWidth
+    starBtn.classList.add("star-pulse")
+  })
+  starBtn.addEventListener("animationend", () => {
+    starBtn.classList.remove("star-pulse")
+  })
+  return starBtn
+}
+
 function renderVirtual() {
   if (!listEl || !viewport) return
   const scrollTop = listEl.scrollTop
@@ -613,11 +744,36 @@ function renderVirtual() {
   for (let i = startIdx; i < endIdx; i++) {
     const ch = filtered[i]
 
+    if (ch.isHeader) {
+      const headerRow = document.createElement("div")
+      headerRow.dataset.idx = String(i)
+      headerRow.style.height = `${ROW_H}px`
+      headerRow.className = "channel-row channel-row--header flex w-full items-center gap-1"
+      headerRow.dataset.header = "true"
+
+      const headerBtn = document.createElement("button")
+      headerBtn.type = "button"
+      headerBtn.dataset.role = "play"
+      headerBtn.className =
+        "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent"
+      headerBtn.setAttribute("aria-label", ch.name || "")
+      const label = document.createElement("div")
+      label.className = "channel-row-header-label truncate"
+      label.textContent = ch.name || ""
+      headerBtn.appendChild(label)
+
+      attachChannelContextMenu(headerRow, ch)
+
+      headerRow.append(headerBtn, buildStarButton(ch))
+      frag.appendChild(headerRow)
+      continue
+    }
+
     const row = document.createElement("div")
     row.dataset.idx = String(i)
     row.style.height = `${ROW_H}px`
     row.className = "channel-row flex w-full items-center gap-1"
-    if (ch.id === currentlyPlayingId) row.dataset.nowPlaying = "true"
+    if (channelKey(ch) === currentlyPlayingId) row.dataset.nowPlaying = "true"
     if (ch.unresolved) {
       row.dataset.unresolved = "true"
     }
@@ -633,7 +789,7 @@ function renderVirtual() {
     if (ch.unresolved) {
       playBtn.setAttribute("aria-disabled", "true")
     }
-    playBtn.onclick = () => play(ch.id, ch.name)
+    playBtn.onclick = () => play(ch)
 
     const logo = document.createElement("div")
     logo.className =
@@ -696,39 +852,7 @@ function renderVirtual() {
     paintNowSlot(nowSlot, playBtn, ch)
     playBtn.appendChild(wrap)
 
-    const fav = activePlaylistId
-      ? isFavorite(activePlaylistId, "live", ch.id)
-      : false
-    const starBtn = document.createElement("button")
-    starBtn.type = "button"
-    starBtn.dataset.role = "star"
-    starBtn.className =
-      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent " +
-      (fav
-        ? "text-accent hover:bg-surface-2 focus:bg-surface-2"
-        : "text-fg-3 hover:text-fg hover:bg-surface-2 focus:text-fg focus:bg-surface-2")
-    starBtn.setAttribute(
-      "aria-label",
-      fav
-        ? `Remove ${ch.name || "channel"} from favorites`
-        : `Add ${ch.name || "channel"} to favorites`
-    )
-    starBtn.setAttribute("aria-pressed", String(fav))
-    starBtn.innerHTML = fav ? STAR_FILLED : STAR_OUTLINE
-    starBtn.addEventListener("click", (e) => {
-      e.stopPropagation()
-      if (!activePlaylistId) return
-      toggleFavorite(activePlaylistId, "live", ch.id, {
-        name: ch.name || "",
-        logo: ch.logo || null,
-      })
-      starBtn.classList.remove("star-pulse")
-      void starBtn.offsetWidth
-      starBtn.classList.add("star-pulse")
-    })
-    starBtn.addEventListener("animationend", () => {
-      starBtn.classList.remove("star-pulse")
-    })
+    const starBtn = buildStarButton(ch)
 
     attachChannelContextMenu(row, ch)
 
@@ -774,18 +898,20 @@ listEl?.addEventListener(
 // ---------------------------------------------------------------------------
 function buildChannelStreamUrl(channel) {
   if (!channel) return ""
-  if (hasDirectUrl(channel.id)) return getDirectUrl(channel.id)
-  return buildDirectLiveUrl(channel.id)
+  const key = channelKey(channel)
+  if (hasDirectUrl(key)) return getDirectUrl(key)
+  return buildDirectLiveUrl(channel)
 }
 
 /** CustomSource for "Add to custom playlist"; null when the active entry is itself custom or the channel has no usable URL. */
 function buildCustomSourceForChannel(channel) {
-  if (!activePlaylistId || isCustomHost(creds.host)) return null
-  if (isLikelyM3USource(creds.host, creds.user, creds.pass)) {
+  const playlistId = channel.playlistId
+  if (!playlistId || isCustomFor(playlistId)) return null
+  if (isM3UFor(playlistId)) {
     if (!channel.url) return null
-    return { kind: "m3u", entryId: activePlaylistId, url: channel.url, name: channel.name || "" }
+    return { kind: "m3u", entryId: playlistId, url: channel.url, name: channel.name || "" }
   }
-  return { kind: "xtream", entryId: activePlaylistId, streamId: channel.id }
+  return { kind: "xtream", entryId: playlistId, streamId: channel.id }
 }
 
 function openChannelDiagnostic(channel) {
@@ -796,6 +922,52 @@ function openChannelDiagnostic(channel) {
     ({ openStreamDiagnostic }) => {
       openStreamDiagnostic({ url, title: channel.name || `Channel ${channel.id}` })
     }
+  )
+}
+
+/** Re-fetches a custom playlist's resolved channels and repaints, keeping playback untouched. */
+async function refreshCustomChannels(focusKey) {
+  try {
+    if (mergedMode) {
+      await loadChannels()
+    } else {
+      const { ensureLive } = await import("@/scripts/lib/catalog.js")
+      const data = await ensureLive(creds, activePlaylistId)
+      indexDirectUrls(data)
+      categoryMap = null
+      paintChannels(data, false, 0, true)
+    }
+  } catch (err) {
+    log.warn("[xt:livetv] custom playlist refresh failed:", err)
+    return
+  }
+  if (focusKey == null) return
+  const idx = filtered.findIndex((row) => channelKey(row) === focusKey)
+  if (idx >= 0) focusByIdx(idx)
+}
+
+/** Finds the channel by id inside the queued doc mutation, hands it to `mutate`, then saves + refreshes on a real change. */
+async function mutateCustomChannel(playlistId, channelId, mutate, focusKey) {
+  const { mutateCustomDoc } = await import("@/scripts/lib/custom-playlist.ts")
+  let nextDoc
+  try {
+    nextDoc = await mutateCustomDoc(playlistId, (doc) => {
+      const docChannel = doc.channels.find((item) => item.id === channelId)
+      if (!docChannel) {
+        toastError(t("editor.toastSaveFailed"))
+        return null
+      }
+      return mutate(doc, docChannel)
+    })
+  } catch {
+    toastError(t("editor.toastSaveFailed"))
+    return
+  }
+  if (!nextDoc) return
+  invalidateEntry(playlistId)
+  document.dispatchEvent(new CustomEvent("xt:entries-updated"))
+  await refreshCustomChannels(
+    focusKey !== undefined ? focusKey : rowKey({ playlistId, id: channelId })
   )
 }
 
@@ -841,70 +1013,94 @@ function openChannelMenu(channel, anchor, point) {
   menu.setAttribute("role", "menu")
   menu.setAttribute("aria-label", `Actions for ${channel.name || "channel"}`)
 
-  const playItem = document.createElement("button")
-  playItem.type = "button"
-  playItem.setAttribute("role", "menuitem")
-  playItem.className =
-    MENU_ITEM_CLASS
-  playItem.textContent = t("stream.menu.play")
-  playItem.addEventListener("click", () => {
-    closeChannelMenu()
-    play(channel.id, channel.name)
-  })
-
-  const testItem = document.createElement("button")
-  testItem.type = "button"
-  testItem.setAttribute("role", "menuitem")
-  testItem.className =
-    MENU_ITEM_CLASS
-  testItem.textContent = t("stream.menu.test")
-  testItem.addEventListener("click", () => {
-    closeChannelMenu()
-    openChannelDiagnostic(channel)
-  })
-
-  const copyItem = document.createElement("button")
-  copyItem.type = "button"
-  copyItem.setAttribute("role", "menuitem")
-  copyItem.className =
-    MENU_ITEM_CLASS
-  copyItem.textContent = t("stream.menu.copy")
-  copyItem.addEventListener("click", async () => {
-    const url = buildChannelStreamUrl(channel)
-    closeChannelMenu()
-    if (!url) return
-    try {
-      const { writeClipboardText } = await import("@/scripts/lib/clipboard")
-      await writeClipboardText(url)
-      toast({ title: t("stream.toast.copied"), duration: 2200 })
-    } catch (error) {
-      log.warn("[xt:livetv] copy stream URL failed:", error)
-    }
-  })
-
+  let playItem = null
+  let testItem = null
+  let copyItem = null
   let playOnTvItem = null
-  if (isTauri) {
-    playOnTvItem = document.createElement("button")
-    playOnTvItem.type = "button"
-    playOnTvItem.setAttribute("role", "menuitem")
-    playOnTvItem.className =
+  if (!channel.isHeader) {
+    playItem = document.createElement("button")
+    playItem.type = "button"
+    playItem.setAttribute("role", "menuitem")
+    playItem.className =
       MENU_ITEM_CLASS
-    playOnTvItem.textContent = t("cast.menu.playOnTv")
-    playOnTvItem.addEventListener("click", () => {
+    playItem.textContent = t("stream.menu.play")
+    playItem.addEventListener("click", () => {
       closeChannelMenu()
-      import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv }) => {
-        castLiveChannelToTv({
-          contentTitle: channel.name || null,
-          title: channel.name || "",
-          logo: channel.logo || undefined,
-          buildSrc: () => buildChannelStreamUrl(channel),
-          drm: streamDrmById.get(channel.id) || undefined,
-          headers: streamHeadersById.get(channel.id) || undefined,
-          preferNativeHls: isNativeHlsFallbackChannel(channel.id),
-          stopLocal: releaseLocalPlaybackForHandoff,
-          restoreLocal: () => { void play(channel.id, channel.name, "user") },
-          liveContext: liveContextForChannelId(channel.id),
-        })()
+      play(channel)
+    })
+
+    testItem = document.createElement("button")
+    testItem.type = "button"
+    testItem.setAttribute("role", "menuitem")
+    testItem.className =
+      MENU_ITEM_CLASS
+    testItem.textContent = t("stream.menu.test")
+    testItem.addEventListener("click", () => {
+      closeChannelMenu()
+      openChannelDiagnostic(channel)
+    })
+
+    copyItem = document.createElement("button")
+    copyItem.type = "button"
+    copyItem.setAttribute("role", "menuitem")
+    copyItem.className =
+      MENU_ITEM_CLASS
+    copyItem.textContent = t("stream.menu.copy")
+    copyItem.addEventListener("click", async () => {
+      const url = buildChannelStreamUrl(channel)
+      closeChannelMenu()
+      if (!url) return
+      try {
+        const { writeClipboardText } = await import("@/scripts/lib/clipboard")
+        await writeClipboardText(url)
+        toast({ title: t("stream.toast.copied"), duration: 2200 })
+      } catch (error) {
+        log.warn("[xt:livetv] copy stream URL failed:", error)
+      }
+    })
+
+    if (isTauri) {
+      playOnTvItem = document.createElement("button")
+      playOnTvItem.type = "button"
+      playOnTvItem.setAttribute("role", "menuitem")
+      playOnTvItem.className =
+        MENU_ITEM_CLASS
+      playOnTvItem.textContent = t("cast.menu.playOnTv")
+      playOnTvItem.addEventListener("click", () => {
+        closeChannelMenu()
+        import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv }) => {
+          castLiveChannelToTv({
+            contentTitle: channel.name || null,
+            title: channel.name || "",
+            logo: channel.logo || undefined,
+            buildSrc: () => buildChannelStreamUrl(channel),
+            drm: streamDrmById.get(channelKey(channel)) || undefined,
+            headers: streamHeadersById.get(channelKey(channel)) || undefined,
+            preferNativeHls: isNativeHlsFallbackChannel(channel.playlistId, channel.id),
+            stopLocal: releaseLocalPlaybackForHandoff,
+            restoreLocal: () => { void play(channel, "user") },
+            liveContext: liveContextForChannel(channel),
+          })()
+        })
+      })
+    }
+  }
+
+  let favoriteItem = null
+  if (channel.isHeader && channel.playlistId) {
+    const isFav = isFavorite(channel.playlistId, "live", channel.id)
+    favoriteItem = document.createElement("button")
+    favoriteItem.type = "button"
+    favoriteItem.setAttribute("role", "menuitem")
+    favoriteItem.className = MENU_ITEM_CLASS
+    favoriteItem.textContent = isFav
+      ? t("list.menu.favoriteRemove")
+      : t("list.menu.favoriteAdd")
+    favoriteItem.addEventListener("click", () => {
+      closeChannelMenu()
+      toggleFavorite(channel.playlistId, "live", channel.id, {
+        name: channel.name || "",
+        logo: channel.logo || null,
       })
     })
   }
@@ -912,7 +1108,9 @@ function openChannelMenu(channel, anchor, point) {
   // Custom playlists curate their own names/logos in the editor - one source of truth.
   // No derivable key means an override could not be stored, so don't offer the action.
   const editable =
-    !isCustomHost(creds.host) && !channel.unresolved && !!resolveOverrideKey(channel, channelsAreM3U)
+    !isCustomFor(channel.playlistId) &&
+    !channel.unresolved &&
+    !!resolveOverrideKey(channel, isM3UFor(channel.playlistId))
   let editItem = null
   let hideItem = null
   if (editable) {
@@ -927,11 +1125,11 @@ function openChannelMenu(channel, anchor, point) {
       const { openChannelEditDialog } = await import("@/scripts/lib/channel-edit-dialog.ts")
       // The row carries the overlay, so the provider's own values come from the
       // untouched list - otherwise the dialog would show an edit as the original.
-      const provider = providerChannels.find((row) => row.id === channel.id) || channel
+      const provider = providerRowFor(channel)
       await openChannelEditDialog({
-        playlistId: activePlaylistId,
+        playlistId: channel.playlistId,
         channel,
-        isM3U: channelsAreM3U,
+        isM3U: isM3UFor(channel.playlistId),
         providerName: provider.name || "",
         providerLogo: provider.logo || null,
       })
@@ -976,15 +1174,156 @@ function openChannelMenu(channel, anchor, point) {
     separator.className = "my-1 h-px bg-line"
   }
 
+  // Move reorders favorites order, custom-doc order, or (Recents) nothing.
+  let moveUpItem = null
+  let moveDownItem = null
+  let editCustomItem = null
+  let deleteCustomItem = null
+  let customSeparator = null
+
+  const activeCat = picker.getActiveCat()
+  const sortMode = activePlaylistId ? getViewSort(activePlaylistId, "live") : "default"
+  const searchActive = !!(searchEl?.value || "").trim()
+
+  const buildMoveItem = (label, onMove) => {
+    const item = document.createElement("button")
+    item.type = "button"
+    item.setAttribute("role", "menuitem")
+    item.className = MENU_ITEM_CLASS
+    item.textContent = label
+    item.addEventListener("click", () => {
+      closeChannelMenu()
+      onMove()
+    })
+    return item
+  }
+
+  if (activeCat === CAT_FAVORITES && channel.playlistId) {
+    if (sortMode === "default" && !searchActive) {
+      const orderedFavIds = getFavoritesOrdered(channel.playlistId, "live")
+      const favPosition = orderedFavIds.indexOf(channel.id)
+      if (favPosition > 0) {
+        moveUpItem = buildMoveItem(t("stream.menu.moveUp"), () =>
+          moveFavorite(channel.playlistId, "live", channel.id, -1)
+        )
+      }
+      if (favPosition >= 0 && favPosition < orderedFavIds.length - 1) {
+        moveDownItem = buildMoveItem(t("stream.menu.moveDown"), () =>
+          moveFavorite(channel.playlistId, "live", channel.id, 1)
+        )
+      }
+    }
+  } else if (activeCat !== CAT_RECENTS && isCustomFor(channel.playlistId) && sortMode === "default") {
+    // Displayed order only matches doc order with no search filter narrowing the list.
+    const groupChannelIds = searchActive
+      ? []
+      : filtered
+          .filter((row) => row.playlistId === channel.playlistId && row.category === channel.category)
+          .map((row) => row.id)
+    const groupPosition = groupChannelIds.indexOf(channel.id)
+    const isFirstInGroup = groupPosition === 0
+    const isLastInGroup = groupPosition >= 0 && groupPosition === groupChannelIds.length - 1
+
+    if (searchActive || !isFirstInGroup) {
+      moveUpItem = buildMoveItem(t("stream.menu.moveUp"), () =>
+        void mutateCustomChannel(channel.playlistId, channel.id, async (doc, docChannel) => {
+          const { moveChannelWithinGroup } = await import("@/scripts/lib/custom-playlist.ts")
+          return moveChannelWithinGroup(doc, docChannel.key, "up")
+        })
+      )
+    }
+
+    if (searchActive || !isLastInGroup) {
+      moveDownItem = buildMoveItem(t("stream.menu.moveDown"), () =>
+        void mutateCustomChannel(channel.playlistId, channel.id, async (doc, docChannel) => {
+          const { moveChannelWithinGroup } = await import("@/scripts/lib/custom-playlist.ts")
+          return moveChannelWithinGroup(doc, docChannel.key, "down")
+        })
+      )
+    }
+  }
+
+  if (isCustomFor(channel.playlistId)) {
+    editCustomItem = document.createElement("button")
+    editCustomItem.type = "button"
+    editCustomItem.setAttribute("role", "menuitem")
+    editCustomItem.className = MENU_ITEM_CLASS
+    editCustomItem.textContent = t("stream.menu.editChannel")
+    editCustomItem.addEventListener("click", () => {
+      closeChannelMenu()
+      void (async () => {
+        const { loadCustomDoc } = await import("@/scripts/lib/custom-playlist.ts")
+        const doc = await loadCustomDoc(channel.playlistId)
+        const docChannel = doc.channels.find((item) => item.id === channel.id)
+        if (!docChannel) {
+          toastError(t("editor.toastSaveFailed"))
+          return
+        }
+        const { openCustomChannelEditDialog } = await import("@/scripts/lib/custom-channel-edit-dialog.ts")
+        const result = await openCustomChannelEditDialog({
+          channel: docChannel,
+          resolvedName: channel.name || "",
+          resolvedLogo: channel.logo ?? null,
+        })
+        if (!result) return
+        await mutateCustomChannel(channel.playlistId, channel.id, async (freshDoc, freshDocChannel) => {
+          const { setOverrides } = await import("@/scripts/lib/custom-playlist.ts")
+          return setOverrides(freshDoc, freshDocChannel.key, result.overrides)
+        })
+      })()
+    })
+
+    deleteCustomItem = document.createElement("button")
+    deleteCustomItem.type = "button"
+    deleteCustomItem.setAttribute("role", "menuitem")
+    deleteCustomItem.className = MENU_ITEM_CLASS
+    deleteCustomItem.textContent = t("stream.menu.deleteChannel")
+    deleteCustomItem.addEventListener("click", () => {
+      closeChannelMenu()
+      void (async () => {
+        const ok = await confirmDialog({
+          title: t("editor.removeChannel"),
+          message: t("editor.removeChannelConfirm", { name: channel.name || "" }),
+          confirmLabel: t("common.delete"),
+          destructive: true,
+        })
+        if (!ok) return
+        const currentIndex = filtered.findIndex((row) => channelKey(row) === channelKey(channel))
+        const neighbor = filtered[currentIndex + 1] ?? filtered[currentIndex - 1] ?? null
+        await mutateCustomChannel(
+          channel.playlistId,
+          channel.id,
+          async (doc, docChannel) => {
+            const { removeChannels } = await import("@/scripts/lib/custom-playlist.ts")
+            return removeChannels(doc, [docChannel.key])
+          },
+          neighbor ? channelKey(neighbor) : null
+        )
+      })()
+    })
+  }
+
+  if (moveUpItem || moveDownItem || editCustomItem || deleteCustomItem) {
+    customSeparator = document.createElement("div")
+    customSeparator.setAttribute("role", "separator")
+    customSeparator.className = "my-1 h-px bg-line"
+  }
+
   menu.append(
-    playItem,
-    testItem,
-    copyItem,
+    ...(playItem ? [playItem] : []),
+    ...(testItem ? [testItem] : []),
+    ...(copyItem ? [copyItem] : []),
     ...(playOnTvItem ? [playOnTvItem] : []),
     ...(addToCustomItem ? [addToCustomItem] : []),
+    ...(favoriteItem ? [favoriteItem] : []),
     ...(separator ? [separator] : []),
     ...(editItem ? [editItem] : []),
-    ...(hideItem ? [hideItem] : [])
+    ...(hideItem ? [hideItem] : []),
+    ...(customSeparator ? [customSeparator] : []),
+    ...(moveUpItem ? [moveUpItem] : []),
+    ...(moveDownItem ? [moveDownItem] : []),
+    ...(editCustomItem ? [editCustomItem] : []),
+    ...(deleteCustomItem ? [deleteCustomItem] : [])
   )
   document.body.appendChild(menu)
 
@@ -1014,7 +1353,8 @@ function openChannelMenu(channel, anchor, point) {
   window.addEventListener("resize", closeChannelMenu)
   listEl?.addEventListener("scroll", closeChannelMenu, { passive: true })
 
-  testItem.focus({ preventScroll: true })
+  const initialFocus = testItem || menu.querySelector('[role="menuitem"]')
+  initialFocus?.focus({ preventScroll: true })
 }
 
 // Covers every write path: the dialog, the quick hide, and both undo toasts.
@@ -1022,15 +1362,27 @@ document.addEventListener(CHANNEL_OVERRIDES_CHANGED_EVENT, () => repaintAfterOve
 
 /** Re-runs the overlay over the last painted provider list; no refetch. */
 function repaintAfterOverrideChange() {
+  if (mergedMode) {
+    paintMergedRows(readMergedRows("live").rows, lastPaintMeta.fromCache, lastPaintMeta.age)
+    return
+  }
   if (!providerChannels.length) return
   paintChannels(providerChannels, lastPaintMeta.fromCache, lastPaintMeta.age, channelsAreM3U)
 }
 
+function providerRowFor(channel) {
+  if (!mergedMode) return providerChannels.find((row) => row.id === channel.id) || channel
+  const hit = getCached(channel.playlistId, "live") || getCached(channel.playlistId, "m3u")
+  const rows = Array.isArray(hit?.data) ? hit.data : []
+  return rows.find((row) => row.id === channel.id) || channel
+}
+
 function hideChannelWithUndo(channel) {
-  const key = resolveOverrideKey(channel, channelsAreM3U)
-  if (!key || !activePlaylistId) return
+  const playlistId = channel.playlistId
+  const key = resolveOverrideKey(channel, isM3UFor(playlistId))
+  if (!key || !playlistId) return
   const identity = overrideIdentity(channel)
-  setChannelOverride(activePlaylistId, key, {
+  setChannelOverride(playlistId, key, {
     hidden: true,
     srcName: identity.srcName,
     srcTvgId: identity.srcTvgId,
@@ -1040,7 +1392,7 @@ function hideChannelWithUndo(channel) {
     duration: 6000,
     action: {
       label: t("common.undo"),
-      onClick: () => setChannelOverride(activePlaylistId, key, { hidden: false }),
+      onClick: () => setChannelOverride(playlistId, key, { hidden: false }),
     },
   })
 }
@@ -1137,15 +1489,19 @@ listEl?.addEventListener(
       Math.floor((listEl?.clientHeight || ROW_H) / ROW_H) - 1
     )
     let next = idx
+    let skipDirection = 1
     switch (e.key) {
-      case "ArrowDown": next = idx + 1; break
-      case "ArrowUp":   next = idx - 1; break
-      case "PageDown":  next = idx + pageSize; break
-      case "PageUp":    next = idx - pageSize; break
-      case "Home":      next = 0; break
-      case "End":       next = filtered.length - 1; break
+      case "ArrowDown": next = idx + 1; skipDirection = 1; break
+      case "ArrowUp":   next = idx - 1; skipDirection = -1; break
+      case "PageDown":  next = idx + pageSize; skipDirection = 1; break
+      case "PageUp":    next = idx - pageSize; skipDirection = -1; break
+      case "Home":      next = 0; skipDirection = 1; break
+      case "End":       next = filtered.length - 1; skipDirection = -1; break
     }
     next = Math.max(0, Math.min(filtered.length - 1, next))
+    // Header rows are non-focusable: keep stepping in the same direction past them.
+    while (next >= 0 && next < filtered.length && filtered[next]?.isHeader) next += skipDirection
+    if (next < 0 || next >= filtered.length) return
     if (next === idx) return
     e.preventDefault()
     e.stopPropagation()
@@ -1192,9 +1548,9 @@ function commitDigitBuffer() {
   const idx = num - 1
   if (idx >= filtered.length) return
   const ch = filtered[idx]
-  if (!ch) return
+  if (!ch || ch.isHeader) return
   focusByIdx(idx)
-  play(ch.id, ch.name)
+  play(ch)
 }
 
 function isTypingTarget(target) {
@@ -1210,15 +1566,24 @@ function isTypingTarget(target) {
 function tuneRelativeChannel(e, delta, reason) {
   if (!filtered.length) return
   const currentIdx = currentlyPlayingId != null
-    ? filtered.findIndex((channel) => channel.id === currentlyPlayingId)
+    ? filtered.findIndex((channel) => channelKey(channel) === currentlyPlayingId)
     : -1
-  const nextIdx = stepChannelIndex(currentIdx, filtered.length, delta)
-  if (nextIdx == null) return
-  const channel = filtered[nextIdx]
+  let nextIdx = currentIdx
+  let channel = null
+  // Header rows are non-playable: keep stepping past them, up to one full lap.
+  for (let attempt = 0; attempt < filtered.length; attempt++) {
+    nextIdx = stepChannelIndex(nextIdx, filtered.length, delta)
+    if (nextIdx == null) return
+    const candidate = filtered[nextIdx]
+    if (candidate && !candidate.isHeader) {
+      channel = candidate
+      break
+    }
+  }
   if (!channel) return
   e.preventDefault()
   focusByIdx(nextIdx)
-  play(channel.id, channel.name, reason)
+  play(channel, reason)
 }
 
 document.addEventListener("keydown", (e) => {
@@ -1264,12 +1629,12 @@ document.addEventListener("keydown", (e) => {
 
   if (e.key === "\\") {
     if (!filtered.length || previousPlayingId == null) return
-    const lastIdx = filtered.findIndex((channel) => channel.id === previousPlayingId)
+    const lastIdx = filtered.findIndex((channel) => channelKey(channel) === previousPlayingId)
     if (lastIdx === -1) return
     const channel = filtered[lastIdx]
     e.preventDefault()
     focusByIdx(lastIdx)
-    play(channel.id, channel.name)
+    play(channel)
     return
   }
 
@@ -1305,7 +1670,7 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault()
       const isRewind = lower === "j" || lower === "MediaRewind"
       const deltaMs = isRewind ? -10_000 : 10_000
-      const channel = all.find((entry) => entry.id === currentlyPlayingId)
+      const channel = findChannel(currentlyPlayingId)
       const isArchiveChannel = channel ? channelSupportsCatchup(channel) : false
       if (catchupSession || isArchiveChannel) {
         if (isCastRoutingActive() || externalPlaybackActive) return
@@ -1360,7 +1725,8 @@ function scheduleApplyFilter() {
 function renderListStatus(shownCount) {
   if (!listStatus) return
   // Only the overlay removes rows, so the difference is exactly the hidden count.
-  const hiddenCount = Math.max(0, providerChannels.length - all.length)
+  const providerTotal = mergedMode ? mergedTotalCount : providerChannels.length
+  const hiddenCount = Math.max(0, providerTotal - all.length)
   const head =
     shownCount === all.length
       ? `${all.length.toLocaleString()} channels`
@@ -1373,8 +1739,7 @@ function renderListStatus(shownCount) {
 
 const applyFilter = () => {
   if (!searchEl || !listStatus) return
-  const qnorm = normalize(searchEl.value || "")
-  const tokens = qnorm.length ? qnorm.split(" ") : []
+  const tokens = parseSearchQuery(searchEl.value)
   // Rows print "Ch 27329 (#1467807)", so digits-only queries also match chno and id.
   const numericQuery = /^\d+$/.test((searchEl.value || "").trim())
     ? (searchEl.value || "").trim()
@@ -1383,32 +1748,31 @@ const applyFilter = () => {
   const activeCat = picker.getActiveCat()
   /** @type {typeof all} */
   let out
+  const uncategorized = t("stream.uncategorized") || "Uncategorized"
+  const listedPlaylistIds = mergedMode ? mergedPlaylistIds : [activePlaylistId]
   if (activeCat === CAT_FAVORITES && activePlaylistId) {
-    const favs = getFavorites(activePlaylistId, "live")
-    out = all.filter((ch) => favs.has(ch.id))
+    out = mergeOrderedFavorites(
+      listedPlaylistIds,
+      (playlistId) => getFavoritesOrdered(playlistId, "live"),
+      channelsByKey
+    )
   } else if (activeCat === CAT_RECENTS && activePlaylistId) {
-    const byId = new Map(all.map((ch) => [ch.id, ch]))
-    const recs = getRecents(activePlaylistId, "live")
-    out = []
-    for (const r of recs) {
-      const ch = byId.get(r.id)
-      if (ch) out.push(ch)
-    }
+    out = mergeRecents(listedPlaylistIds, (playlistId) => getRecents(playlistId, "live"), channelsByKey)
   } else {
+    const selection = parseMergedCategoryKey(activeCat, activePlaylistId)
     out = all.filter((ch) => {
-      const categories = Array.isArray(ch.categories) && ch.categories.length ? ch.categories : [ch.category || ""]
-      if (activeCat && !categories.includes(activeCat)) return false
-      return categories.some((category) => picker.categoryPassesFilter(category))
+      if (selection && !channelMatchesCategory(ch, selection, uncategorized)) return false
+      return channelPassesCategoryFilter(ch, (key) => picker.categoryPassesFilter(key), uncategorized)
     })
   }
 
-  /** @type {Map<number, number> | null} */
+  /** @type {Map<string, number> | null} */
   let scoreById = null
   if (tokens.length) {
     scoreById = new Map()
     const scored = []
     for (const channel of out) {
-      let score = scoreNormMatch(channel.norm, tokens)
+      let score = scoreNormMatch(channel.norm, tokens, channel.name)
       if (numericQuery) {
         const idText = String(channel.id)
         const chnoText = channel.chno != null ? String(channel.chno) : ""
@@ -1424,7 +1788,7 @@ const applyFilter = () => {
       }
       if (score > 0) {
         scored.push(channel)
-        scoreById.set(channel.id, score)
+        scoreById.set(channelKey(channel), score)
       }
     }
     out = scored
@@ -1433,7 +1797,9 @@ const applyFilter = () => {
   const sortMode = activePlaylistId
     ? getViewSort(activePlaylistId, "live")
     : "default"
-  out = sortChannelsForView(out, sortMode, scoreById)
+  // Headers only make sense in the playlist's own order with no active search; any reorder scatters them.
+  if (sortMode !== "default" || tokens.length) out = out.filter((ch) => !ch.isHeader)
+  out = sortChannelsForView(out, sortMode, scoreById, channelKey)
 
   renderListStatus(out.length)
   mountVirtualList(out)
@@ -1491,12 +1857,36 @@ function fmtAge(ms) {
   return `${d}d ago`
 }
 
+let mergedTotalCount = 0
+
+function rebuildChannelIndex() {
+  channelsByKey = new Map()
+  for (const channel of all) channelsByKey.set(channelKey(channel), channel)
+}
+
 function paintChannels(data, fromCache, age, isM3U = false) {
   channelsAreM3U = isM3U
   // Kept unoverridden so an edit can be re-overlaid without refetching.
-  providerChannels = Array.isArray(data) ? data : []
+  providerChannels = stampRowsWithPlaylist(Array.isArray(data) ? data : [], activePlaylistId)
   lastPaintMeta = { fromCache, age }
   all = applyChannelOverrides(providerChannels, getChannelOverrides(activePlaylistId), { isM3U })
+  rebuildChannelIndex()
+  renderListStatus(all.length)
+  picker.rerender()
+  applyFilter()
+  maybeAutoplayFromUrl()
+  ensureEpgLoaded()
+}
+
+/** Rows already carry playlistId and their overrides (merged-catalog facade). */
+function paintMergedRows(rows, fromCache, age) {
+  channelsAreM3U = false
+  providerChannels = []
+  lastPaintMeta = { fromCache, age }
+  all = rows
+  mergedTotalCount = readMergedRows("live", { includeHidden: true }).rows.length
+  indexDirectUrls(all)
+  rebuildChannelIndex()
   renderListStatus(all.length)
   picker.rerender()
   applyFilter()
@@ -1505,14 +1895,23 @@ function paintChannels(data, fromCache, age, isM3U = false) {
 }
 
 function ensureEpgLoaded() {
-  if (!activePlaylistId || !creds.host) return
-  loadProgrammes(activePlaylistId, creds).catch(() => {})
+  if (mergedMode) {
+    return Promise.allSettled(
+      mergedPlaylistIds.map((playlistId) => {
+        const source = credsFor(playlistId)
+        return source.host ? loadProgrammes(playlistId, source) : null
+      })
+    )
+  }
+  if (!activePlaylistId || !creds.host) return null
+  return loadProgrammes(activePlaylistId, creds).catch(() => {})
 }
 
 let autoplayConsumed = false
 function maybeAutoplayFromUrl() {
   if (autoplayConsumed) return
   let id = null
+  let deepLinkPlaylistId = null
   let catchupStartUtcMs = null
   let catchupStopUtcMs = null
   let catchupTitle = ""
@@ -1521,6 +1920,7 @@ function maybeAutoplayFromUrl() {
     const params = new URLSearchParams(window.location.search)
     const raw = params.get("channel")
     if (raw) id = Number(raw)
+    deepLinkPlaylistId = mergedMode ? params.get("pl") : null
     const rawStart = params.get("cstart")
     const rawStop = params.get("cstop")
     if (rawStart && rawStop) {
@@ -1536,8 +1936,8 @@ function maybeAutoplayFromUrl() {
   } catch {}
   if (!Number.isFinite(id) || id == null) return
   autoplayConsumed = true
-  const ch = all.find((c) => c.id === id)
-  if (!ch) {
+  const ch = resolveDeepLinkChannel(all, id, deepLinkPlaylistId, activePlaylistId)
+  if (!ch || ch.isHeader) {
     toast({ title: t("stream.toast.channelUnavailable") })
     return
   }
@@ -1545,6 +1945,7 @@ function maybeAutoplayFromUrl() {
   try {
     const url = new URL(window.location.href)
     url.searchParams.delete("channel")
+    url.searchParams.delete("pl")
     url.searchParams.delete("cstart")
     url.searchParams.delete("cstop")
     url.searchParams.delete("ctitle")
@@ -1552,7 +1953,8 @@ function maybeAutoplayFromUrl() {
     window.history.replaceState({}, "", url.toString())
   } catch {}
 
-  if (!filtered.some((channel) => channel.id === id)) {
+  const wantedKey = channelKey(ch)
+  if (!filtered.some((channel) => channelKey(channel) === wantedKey)) {
     picker.setActiveCat("", { silent: true })
     if (searchEl && searchEl.value) searchEl.value = ""
     applyFilter()
@@ -1570,10 +1972,10 @@ function maybeAutoplayFromUrl() {
       catchupId,
     })
   } else {
-    play(ch.id, ch.name)
+    play(ch)
   }
   requestAnimationFrame(() => {
-    const idx = filtered.findIndex((channel) => channel.id === id)
+    const idx = filtered.findIndex((channel) => channelKey(channel) === wantedKey)
     if (idx >= 0) scrollIntoViewByIdx(idx)
   })
 }
@@ -1587,14 +1989,96 @@ async function loadChannels() {
     })
     return
   }
+  const generation = ++loadGeneration
+  const entries = await getMergedEntries()
+  if (generation !== loadGeneration) return
+  if (await switchToDeepLinkPlaylist(entries)) return
+  if (entries.length >= 2) {
+    await loadMergedChannels(entries, generation)
+    return
+  }
   const active = await getActiveEntry()
   log.log("[xt:livetv] loadChannels active=", active?._id || null)
   if (!active) {
+    mergedMode = false
+    mergedPlaylistIds = []
     activePlaylistId = ""
     activePlaylistTitle = ""
     showEmptyState()
     return
   }
+  if (generation !== loadGeneration) return
+  await loadActiveChannels(active, generation)
+}
+
+async function switchToDeepLinkPlaylist(mergedEntries) {
+  let wantedPlaylistId = null
+  try {
+    wantedPlaylistId = new URLSearchParams(window.location.search).get("pl")
+  } catch {}
+  if (!wantedPlaylistId || mergedEntries.some((entry) => entry._id === wantedPlaylistId)) return false
+  const wantedEntry = await getEntryById(wantedPlaylistId)
+  try {
+    const url = new URL(window.location.href)
+    url.searchParams.delete("pl")
+    window.history.replaceState({}, "", url.toString())
+  } catch {}
+  if (!wantedEntry) return false
+  await selectEntry(wantedPlaylistId)
+  return true
+}
+
+async function loadMergedChannels(entries, generation) {
+  const active = await getActiveEntry()
+  if (generation !== loadGeneration) return
+  mergedMode = true
+  mergedPlaylistIds = entries.map((entry) => entry._id)
+  entryById = new Map(entries.map((entry) => [entry._id, entry]))
+  credsByPlaylistId = new Map(entries.map((entry) => [entry._id, entryToCreds(entry)]))
+  activePlaylistId = active?._id || mergedPlaylistIds[0]
+  activePlaylistTitle = entryById.get(activePlaylistId)?.title || ""
+  creds = credsByPlaylistId.get(activePlaylistId) || creds
+  log.log("[xt:livetv] loadMergedChannels playlists=", mergedPlaylistIds.length)
+
+  const prefsReady = ensurePrefsLoaded()
+  await hydrateMergedRows("live")
+  await prefsReady
+  if (generation !== loadGeneration) return
+  syncSortControl()
+
+  const cached = readMergedRows("live")
+  const hasCache = cached.rows.length > 0
+  if (hasCache) {
+    paintMergedRows(cached.rows, true, cached.newestFetchedAt ? Date.now() - cached.newestFetchedAt : 0)
+  } else {
+    listStatus.textContent = t("stream.loading")
+    if (!viewport?.querySelector("[data-skeleton]")) renderChannelSkeletons()
+  }
+  if (cached.sources.every((source) => hasCachedLiveChannels(source.playlistId))) return
+
+  const result = await ensureMergedRows("live")
+  if (generation !== loadGeneration) return
+  for (const [playlistId, error] of result.errors) {
+    log.warn("[xt:livetv] merged playlist failed:", playlistId, error)
+    toastError(t("stream.mergedPartialError", { title: entryById.get(playlistId)?.title || playlistId }))
+  }
+  if (!result.rows.length && result.errors.size) {
+    mountVirtualList([])
+    renderProviderError(listStatus, {
+      providerName: activePlaylistTitle,
+      kind: "channels",
+      onRetry: loadChannels,
+    })
+    return
+  }
+  paintMergedRows(result.rows, false, 0)
+}
+
+async function loadActiveChannels(active, generation) {
+  mergedMode = false
+  mergedPlaylistIds = [active._id]
+  entryById = new Map([[active._id, active]])
+  credsByPlaylistId = new Map()
   activePlaylistId = active._id
   activePlaylistTitle = active.title || ""
 
@@ -1607,6 +2091,7 @@ async function loadChannels() {
   const paintFromCacheOnceReady = async (hydratePromise, kind) => {
     await hydratePromise
     await prefsReady
+    if (generation !== loadGeneration) return
     if (painted) return
     const hit = getCached(active._id, kind)
     if (!hit) return
@@ -1621,6 +2106,7 @@ async function loadChannels() {
   ])
 
   await prefsReady
+  if (generation !== loadGeneration) return
   syncSortControl()
 
   const liveHit = getCached(active._id, "live")
@@ -1631,7 +2117,10 @@ async function loadChannels() {
     if (!viewport?.querySelector("[data-skeleton]")) renderChannelSkeletons()
   }
 
-  creds = await loadCreds()
+  const loadedCreds = await loadCreds()
+  if (generation !== loadGeneration) return
+  creds = loadedCreds
+  credsByPlaylistId = new Map([[active._id, creds]])
   if (!creds.host) {
     if (!hit) showEmptyState()
     return
@@ -1650,6 +2139,7 @@ async function loadChannels() {
       if (isCustomHost(creds.host)) {
         const { ensureLive } = await import("@/scripts/lib/catalog.js")
         const data = await ensureLive(creds, active._id)
+        if (generation !== loadGeneration) return
         indexDirectUrls(data)
         categoryMap = null
         paintChannels(data, false, 0, true)
@@ -1671,6 +2161,7 @@ async function loadChannels() {
           return parseM3U(text).filter((x) => x.url && x.name)
         }
       )
+      if (generation !== loadGeneration) return
       indexDirectUrls(data)
       categoryMap = null
       if (m3uEpgUrls.length) {
@@ -1701,44 +2192,16 @@ async function loadChannels() {
         const arr = Array.isArray(parsed)
           ? parsed
           : parsed?.streams || parsed?.results || []
-        return (arr || [])
-          .map((ch) => {
-            const name = String(ch.name || "")
-            const ids =
-              (Array.isArray(ch.category_ids) &&
-                ch.category_ids.length &&
-                ch.category_ids) ||
-              (ch.category_id != null ? [ch.category_id] : [])
-            let category = String(ch.category_name || "").trim()
-            if (!category && ids.length && catMap?.size) {
-              for (const id of ids) {
-                const n = catMap.get(String(id))
-                if (n) {
-                  category = n
-                  break
-                }
-              }
-            }
-            return {
-              id: Number(ch.stream_id),
-              name,
-              category,
-              logo: ch.stream_icon || null,
-              tvgId: String(ch.epg_channel_id || "") || undefined,
-              chno: Number(ch.num) || undefined,
-              norm: normalize(name + " " + category),
-              tvArchive: Number(ch.tv_archive) || 0,
-              tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
-            }
-          })
-          .filter((x) => x.id && x.name)
+        return mapXtreamLiveRows(arr, catMap, t("stream.uncategorized") || "Uncategorized")
       }
     )
+    if (generation !== loadGeneration) return
     directUrlById = new Map()
     log.log("[xt:livetv] cachedFetch returned len=", data?.length ?? 0, "fromCache=", fromCache)
     paintChannels(data, fromCache, age, false)
     log.log("[xt:livetv] paintChannels done")
   } catch (e) {
+    if (generation !== loadGeneration) return
     log.error("[xt:livetv] loadChannels threw:", e)
     mountVirtualList([])
     renderProviderError(listStatus, {
@@ -1759,6 +2222,18 @@ let lastPlayContext = null
 let playerInsights = null
 // Detach for the auto-hiding quality chip overlaid on the player edge - rebuilt every tune.
 let qualityChipDetach = null
+
+// Live TV has no persistent subtitle-delay button (it lives in the "more" menu instead) - this
+// detached element is only ever clicked programmatically to reuse the shared dialog controller.
+const subtitleDelayProxyBtn = document.createElement("button")
+const subtitleDelayController = createSubtitleDelayController({
+  dialogId: "stream-subtitle-delay-dialog",
+  button: subtitleDelayProxyBtn,
+  nudge: (deltaSeconds) => vjs?.subtitleDelay?.(deltaSeconds),
+  getMediaElement: () => mediaElementOf(vjs),
+})
+subtitleDelayController.setup()
+document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))
 
 function getPlayerInsights() {
   if (!playerInsights) {
@@ -1781,6 +2256,47 @@ const audioProxyBypassSet = new Set()
 // Streams already auto-attempted through the proxy on a start failure this session - a start failure is a one-shot try, not a retry loop.
 const audioProxyAutoAttemptedSet = new Set()
 
+// Embedded mpv backend availability - desktop only, cached at boot like audioProxyAvailable above.
+let mpvEmbeddedFixAvailable = false
+const mpvEmbeddedProbe = mpvEmbeddedAvailable()
+  .then((available) => {
+    mpvEmbeddedFixAvailable = available
+    return available
+  })
+  .catch(() => false)
+
+// Per-channel memory: a channel that once needed mpv to decode retunes there directly next time.
+const MPV_EMBEDDED_FIX_KEY_PREFIX = "xt_mpv_embedded_fix:"
+
+function readMpvEmbeddedFixChannels(playlistId) {
+  if (!playlistId) return []
+  try {
+    const raw = localStorage.getItem(MPV_EMBEDDED_FIX_KEY_PREFIX + playlistId)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+function rememberMpvEmbeddedFixChannel(playlistId, channelKey) {
+  if (!playlistId || !channelKey) return
+  const current = readMpvEmbeddedFixChannels(playlistId)
+  if (current.includes(channelKey)) return
+  try {
+    localStorage.setItem(
+      MPV_EMBEDDED_FIX_KEY_PREFIX + playlistId,
+      JSON.stringify([...current, channelKey])
+    )
+  } catch {}
+}
+
+function isMpvEmbeddedFixChannel(playlistId, channelKey) {
+  if (!playlistId || !channelKey) return false
+  return readMpvEmbeddedFixChannels(playlistId).includes(channelKey)
+}
+
 // Per-channel budget for black-screen native re-tunes (macOS GDR latch retries).
 const nativeRelatchAttempts = new Map()
 
@@ -1791,31 +2307,31 @@ const NATIVE_HLS_FALLBACK_KEY = "xt_native_hls_fallback"
 const LEGACY_NATIVE_AUDIO_FALLBACK_KEY = "xt_native_audio_fallback"
 let nativeHlsFallbackCache = null
 
-function loadNativeHlsFallbackSet() {
-  if (nativeHlsFallbackCache && nativeHlsFallbackCache.playlistId === activePlaylistId) {
+function loadNativeHlsFallbackSet(playlistId) {
+  if (nativeHlsFallbackCache && nativeHlsFallbackCache.playlistId === playlistId) {
     return nativeHlsFallbackCache.ids
   }
   let ids = new Set()
   try {
     const raw =
-      localStorage.getItem(`${NATIVE_HLS_FALLBACK_KEY}:${activePlaylistId}`) ??
-      localStorage.getItem(`${LEGACY_NATIVE_AUDIO_FALLBACK_KEY}:${activePlaylistId}`)
+      localStorage.getItem(`${NATIVE_HLS_FALLBACK_KEY}:${playlistId}`) ??
+      localStorage.getItem(`${LEGACY_NATIVE_AUDIO_FALLBACK_KEY}:${playlistId}`)
     if (raw) ids = new Set(JSON.parse(raw))
   } catch {}
-  nativeHlsFallbackCache = { playlistId: activePlaylistId, ids }
+  nativeHlsFallbackCache = { playlistId, ids }
   return ids
 }
 
-function isNativeHlsFallbackChannel(id) {
-  return loadNativeHlsFallbackSet().has(id)
+function isNativeHlsFallbackChannel(playlistId, id) {
+  return loadNativeHlsFallbackSet(playlistId).has(id)
 }
 
-function rememberNativeHlsFallbackChannel(id) {
-  const ids = loadNativeHlsFallbackSet()
+function rememberNativeHlsFallbackChannel(playlistId, id) {
+  const ids = loadNativeHlsFallbackSet(playlistId)
   if (ids.has(id)) return
   ids.add(id)
   try {
-    localStorage.setItem(`${NATIVE_HLS_FALLBACK_KEY}:${activePlaylistId}`, JSON.stringify([...ids]))
+    localStorage.setItem(`${NATIVE_HLS_FALLBACK_KEY}:${playlistId}`, JSON.stringify([...ids]))
   } catch {}
 }
 
@@ -1823,29 +2339,29 @@ function rememberNativeHlsFallbackChannel(id) {
 // HLS audio fallbacks apply); persisted per playlist like the native-HLS-fallback set above.
 let m3u8ContainerFallbackCache = null
 
-function loadM3u8ContainerFallbackSet() {
-  if (m3u8ContainerFallbackCache && m3u8ContainerFallbackCache.playlistId === activePlaylistId) {
+function loadM3u8ContainerFallbackSet(playlistId) {
+  if (m3u8ContainerFallbackCache && m3u8ContainerFallbackCache.playlistId === playlistId) {
     return m3u8ContainerFallbackCache.ids
   }
   let ids = new Set()
   try {
-    const raw = localStorage.getItem(`xt_m3u8_container_fallback:${activePlaylistId}`)
+    const raw = localStorage.getItem(`xt_m3u8_container_fallback:${playlistId}`)
     if (raw) ids = new Set(JSON.parse(raw))
   } catch {}
-  m3u8ContainerFallbackCache = { playlistId: activePlaylistId, ids }
+  m3u8ContainerFallbackCache = { playlistId, ids }
   return ids
 }
 
-function isM3u8ContainerFallbackChannel(id) {
-  return loadM3u8ContainerFallbackSet().has(id)
+function isM3u8ContainerFallbackChannel(playlistId, id) {
+  return loadM3u8ContainerFallbackSet(playlistId).has(id)
 }
 
-function rememberM3u8ContainerFallbackChannel(id) {
-  const ids = loadM3u8ContainerFallbackSet()
+function rememberM3u8ContainerFallbackChannel(playlistId, id) {
+  const ids = loadM3u8ContainerFallbackSet(playlistId)
   if (ids.has(id)) return
   ids.add(id)
   try {
-    localStorage.setItem(`xt_m3u8_container_fallback:${activePlaylistId}`, JSON.stringify([...ids]))
+    localStorage.setItem(`xt_m3u8_container_fallback:${playlistId}`, JSON.stringify([...ids]))
   } catch {}
 }
 // Capped so a channel that keeps stalling right after retune bypasses the proxy instead of retuning forever.
@@ -1882,7 +2398,7 @@ let focusKeeperCleanup: (() => void) | null = null
 /** Active catch-up/timeshift (replay) session, or null when tuned to live. */
 let catchupSession: {
   kind: "programme" | "timeshift"
-  channelId: number
+  channelId: string
   channelName: string
   title: string
   startUtcMs: number
@@ -1946,6 +2462,7 @@ const CATCHUP_TUNING_MAX_MS = 22_000
 const STALL_AUTO_TUNE_MS = 30_000
 const BUFFERING_GRACE_MS = 350
 const ERROR_AUTO_RETRY_MS = 1500
+const REJECTION_RETRY_DELAYS_MS = [2000, 4000, 8000]
 const TIMESHIFT_CHIP_UPDATE_MS = 1000
 const TIMESHIFT_CHIP_LIVE_THRESHOLD_MS = 15_000
 const TIMESHIFT_CHIP_IDLE_MS = 3000
@@ -1965,9 +2482,9 @@ async function runAutoDiagnostic(ctx, dismissGenericToast) {
   }
 
   const now = Date.now()
-  const last = lastAutoDiagnosticAt.get(ctx.streamId) || 0
+  const last = lastAutoDiagnosticAt.get(ctx.channelKey) || 0
   if (now - last < AUTO_DIAGNOSTIC_COOLDOWN_MS) return
-  lastAutoDiagnosticAt.set(ctx.streamId, now)
+  lastAutoDiagnosticAt.set(ctx.channelKey, now)
 
   log.log("[xt:livetv] auto-diagnostic starting for", ctx.streamId)
   const seqAtStart = ctx.seq
@@ -2046,6 +2563,114 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
   }
 }
 
+/** Re-srcs the current mount from ctx; shared by the same-src retry, the mirror hop, and the stall retune. */
+function remountFromContext(ctx) {
+  if (ctx.rejectionRetryTimer) {
+    clearTimeout(ctx.rejectionRetryTimer)
+    ctx.rejectionRetryTimer = null
+  }
+  try {
+    vjs.reset?.()
+    vjs.src({
+      src: ctx.src,
+      type: ctx.mime || "application/x-mpegURL",
+      isLive: ctx.isLive ?? true,
+      drm: ctx.drm ?? null,
+      preferNativeHls: isNativeHlsFallbackChannel(ctx.playlistId, ctx.streamId),
+      title: ctx.name,
+    })
+    vjs.play().catch((err) => {
+      log.info("[xt:livetv] remount play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
+    })
+  } catch {}
+}
+
+/** Same-src retry (or give-up) path; transient rejections get a backoff budget first. */
+function scheduleSameSrcRetry(ctx, rejection = null) {
+  const errorDetail = rejection?.errorDetail ?? vjs?.codecInfo?.()?.errorDetail ?? null
+  if (ctx.isLive && !ctx.audioProxied && isTransientRejection(rejection ?? { errorDetail })) {
+    const attempt = ctx.rejectionRetries ?? 0
+    if (attempt < REJECTION_RETRY_DELAYS_MS.length) {
+      // shaka/mpv can fire more than one error per rejection.
+      if (ctx.rejectionRetryTimer) return
+      ctx.rejectionRetries = attempt + 1
+      const seqAtRetry = ctx.seq
+      toast({ title: t("stream.error.providerBusyRetrying"), duration: REJECTION_RETRY_DELAYS_MS[attempt] })
+      ctx.rejectionRetryTimer = setTimeout(() => {
+        ctx.rejectionRetryTimer = null
+        if (seqAtRetry !== playSeq) return
+        if (isCastRoutingActive() || externalPlaybackActive) return
+        remountFromContext(ctx)
+      }, REJECTION_RETRY_DELAYS_MS[attempt])
+      return
+    }
+  }
+  if (!ctx.retried) {
+    ctx.retried = true
+    const seqAtRetry = ctx.seq
+    setTimeout(() => {
+      if (seqAtRetry !== playSeq) return
+      if (isCastRoutingActive() || externalPlaybackActive) return
+      if (retryCatchupSession(ctx, { automatic: true })) return
+      if (!ctx.isLive) {
+        // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+        giveUpOnPlayback(ctx)
+        return
+      }
+      if (ctx.audioProxied) {
+        retuneProxiedAudioMount(ctx)
+        return
+      }
+      // The same demuxer on the same container fails the same way; escalate to the verdict instead.
+      if (isParseFailureDetail(vjs?.codecInfo?.()?.errorDetail)) {
+        giveUpOnPlayback(ctx)
+        return
+      }
+      remountFromContext(ctx)
+    }, ERROR_AUTO_RETRY_MS)
+    return
+  }
+  giveUpOnPlayback(ctx)
+}
+
+/**
+ * A live Xtream tune got a provider rejection (401/403/407/429/connection-limit).
+ * Hops to the next configured mirror instead of retrying the same dead source, up
+ * to one hop per configured candidate. Falls back to the same-src retry when no
+ * hop is possible or none of the remaining mirrors answer. Memoized on ctx so a
+ * second "error" event for the same rejection (shaka/mpv can emit more than one)
+ * shares this attempt instead of racing a second hop.
+ */
+function tryMirrorHopOnLiveError(ctx, rejection) {
+  if (ctx.mirrorHopPromise) return ctx.mirrorHopPromise
+  ctx.mirrorHopPromise = (async () => {
+    const seqAtRejection = ctx.seq
+    const repin = shouldRepinMirror(rejection)
+    const nextUrl = await advanceMirror(
+      (candidate) => buildDirectLiveUrl(ctx.channel, candidate),
+      { hopsUsed: ctx.mirrorHops ?? 0, repin, entryId: ctx.mirrorEntryId || ctx.playlistId }
+    )
+    // A cast/external handoff doesn't bump playSeq, so re-check both right before the remount.
+    if (seqAtRejection !== playSeq || isCastRoutingActive() || externalPlaybackActive) return
+    if (!nextUrl) {
+      scheduleSameSrcRetry(ctx, rejection)
+      return
+    }
+    ctx.mirrorHops = (ctx.mirrorHops ?? 0) + 1
+    ctx.src = nextUrl
+    log.warn("[xt:livetv] provider rejection - hopping to next mirror", {
+      streamId: ctx.streamId,
+      hop: ctx.mirrorHops,
+    })
+    log.debug("[xt:livetv] mirror hop", `channel=${ctx.streamId} hop=${ctx.mirrorHops} reason=${rejection?.errorDetail || rejection?.httpStatus || "unknown"}`)
+    remountFromContext(ctx)
+  })().finally(() => {
+    // Release the guard so a rejection from the hopped mirror can hop again.
+    ctx.mirrorHopPromise = null
+  })
+  return ctx.mirrorHopPromise
+}
+
 /** Shared "nothing left to try" path for a play attempt: native handoff, failure panel, or a generic toast, depending on how far playback got. */
 function giveUpOnPlayback(ctx) {
   hideTuningOverlay()
@@ -2059,14 +2684,14 @@ function giveUpOnPlayback(ctx) {
   const failure = classifyStartFailure({
     videoCodec: info.videoCodec,
     audioCodec: info.audioCodec,
-    errorDetail: info.errorDetail,
+    errorDetail: info.errorDetail || vjs?.error?.()?.message || null,
     nameHint: hasHevcNameHint(ctx.name),
     deviceHevc: deviceSupportsHevc(),
     audioClockWedge: !!ctx.audioClockWedge,
   })
   log.info("[xt:livetv] start-failure verdict", { kind: failure.kind, codec: failure.codec, streamId: ctx.streamId })
   getPlayerInsights().record("giveup", failure.kind)
-  // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
+  // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery even when opted out.
   if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
     ctx.nativeFallbackTried = true
     if (
@@ -2076,7 +2701,7 @@ function giveUpOnPlayback(ctx) {
       failure.kind === "parse"
     ) {
       toast({ title: t("stream.failure.nativeFallback") })
-      launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
+      launchNativeLiveSession(findChannel(ctx.channelKey) || ctx.channel).then((launched) => {
         if (launched) return
         showPlaybackFailurePanel(ctx)
         runAutoDiagnostic(ctx, null)
@@ -2089,16 +2714,16 @@ function giveUpOnPlayback(ctx) {
   if (
     failure.kind === "audio" &&
     ctx.isLive &&
-    creds?.liveContainer === "ts" &&
+    credsFor(ctx.playlistId)?.liveContainer === "ts" &&
     /\.ts(\?|$)/i.test(String(ctx.src || "")) &&
-    !isM3u8ContainerFallbackChannel(ctx.streamId)
+    !isM3u8ContainerFallbackChannel(ctx.playlistId, ctx.streamId)
   ) {
-    rememberM3u8ContainerFallbackChannel(ctx.streamId)
+    rememberM3u8ContainerFallbackChannel(ctx.playlistId, ctx.streamId)
     log.warn("[xt:livetv] raw-TS stream failed with undecodable audio - retuning with the m3u8 container", {
       streamId: ctx.streamId,
       codec: failure.codec,
     })
-    void play(ctx.streamId, ctx.name, "auto:m3u8-container-fallback")
+    void replayContext(ctx, "auto:m3u8-container-fallback")
     return
   }
   // WKWebView MSE has no AC-3 decoder and its demuxer gives up on mid-stream container
@@ -2110,16 +2735,16 @@ function giveUpOnPlayback(ctx) {
     isTauri &&
     ctx.isLive &&
     !ctx.audioProxied &&
-    !isNativeHlsFallbackChannel(ctx.streamId)
+    !isNativeHlsFallbackChannel(ctx.playlistId, ctx.streamId)
   ) {
-    rememberNativeHlsFallbackChannel(ctx.streamId)
+    rememberNativeHlsFallbackChannel(ctx.playlistId, ctx.streamId)
     log.warn(
       failure.kind === "parse"
         ? "[xt:livetv] hls.js cannot demux this stream - remounting on native AVFoundation"
         : "[xt:livetv] AC-3 audio cannot decode in this WebView's MSE - remounting on native AVFoundation",
       { streamId: ctx.streamId, codec: failure.codec }
     )
-    void play(ctx.streamId, ctx.name, "auto:native-hls-fallback")
+    void replayContext(ctx, "auto:native-hls-fallback")
     return
   }
   // Independent of getAudioTranscodeAuto(), which only gates the mid-play watchdog.
@@ -2127,16 +2752,16 @@ function giveUpOnPlayback(ctx) {
     failure.kind === "audio" &&
     canUseAudioProxy(ctx) &&
     !ctx.audioProxied &&
-    !audioProxyAutoAttemptedSet.has(ctx.streamId)
+    !audioProxyAutoAttemptedSet.has(ctx.channelKey)
   ) {
-    audioProxyAutoAttemptedSet.add(ctx.streamId)
+    audioProxyAutoAttemptedSet.add(ctx.channelKey)
     toast({ title: t("stream.audioFix.fixing"), duration: 4000 })
     fixAudioNow(ctx)
     return
   }
   // Proxied mount itself failed - bypass it so the panel/diagnostic doesn't offer Fix audio again.
   if (failure.kind === "audio" && ctx.audioProxied) {
-    audioProxyBypassSet.add(ctx.streamId)
+    audioProxyBypassSet.add(ctx.channelKey)
   }
   if (!ctx.started) {
     showPlaybackFailurePanel(ctx)
@@ -2179,13 +2804,16 @@ async function mountEmbeddedPlayer(backend, opts) {
       playbackRateMenuButton: !wantLiveUi,
       fullscreenToggle: true,
     },
+    userAgent: opts.userAgent ?? null,
+    referer: opts.referer ?? null,
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
   embeddedPlayerBackend = mounted.backend
   embeddedPlayerLiveUi = wantLiveUi
 
-  if (mounted.backend === "videojs") {
+  // videojs's own DOM plus mpv's control bar both need the D-pad focus kept inside the player.
+  if (mounted.backend === "videojs" || (mounted.backend === "mpv-embedded" && typeof vjs.userActive === "function")) {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
@@ -2193,7 +2821,7 @@ async function mountEmbeddedPlayer(backend, opts) {
 
   vjs.on("playing", () => {
     {
-      const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      const mediaEl = mediaElementOf(vjs)
       log.info("[xt:livetv] playing", {
         streamId: lastPlayContext?.streamId ?? null,
         t: Math.round((mediaEl?.currentTime || 0) * 10) / 10,
@@ -2205,18 +2833,29 @@ async function mountEmbeddedPlayer(backend, opts) {
     }
     ensureProgressWatch()
     if (lastPlayContext) {
+      if (!lastPlayContext.started && lastPlayContext.startedAtMs != null) {
+        log.debug("[xt:livetv] first frame", `channel=${lastPlayContext.streamId} elapsedMs=${Math.round(performance.now() - lastPlayContext.startedAtMs)}`)
+      }
       lastPlayContext.started = true
       if (lastPlayContext.audioProxied) {
-        rememberAudioTranscodeChannel(activePlaylistId, String(lastPlayContext.streamId))
+        rememberAudioTranscodeChannel(lastPlayContext.playlistId, String(lastPlayContext.streamId))
+      }
+      if (lastPlayContext.rejectionRetryTimer) {
+        clearTimeout(lastPlayContext.rejectionRetryTimer)
+        lastPlayContext.rejectionRetryTimer = null
       }
     }
     if (catchupRetryResetTimer) clearTimeout(catchupRetryResetTimer)
-    const streamIdAtPlaying = lastPlayContext?.streamId
+    const keyAtPlaying = lastPlayContext?.channelKey
     catchupRetryResetTimer = setTimeout(() => {
       catchupAutoRetryCount = 0
       catchupSeekRemountCount = 0
-      if (streamIdAtPlaying != null) audioProxyStallRetuneCounts.delete(streamIdAtPlaying)
-      if (streamIdAtPlaying != null) liveStallRetuneCounts.delete(streamIdAtPlaying)
+      if (keyAtPlaying != null) audioProxyStallRetuneCounts.delete(keyAtPlaying)
+      if (keyAtPlaying != null) liveStallRetuneCounts.delete(keyAtPlaying)
+      if (lastPlayContext?.channelKey === keyAtPlaying) {
+        lastPlayContext.rejectionRetries = 0
+        lastPlayContext.retried = false
+      }
     }, CATCHUP_RETRY_RESET_AFTER_MS)
     hideTuningOverlay()
     hideBufferingChip()
@@ -2243,10 +2882,16 @@ async function mountEmbeddedPlayer(backend, opts) {
     showBufferingChip()
     armStallSentinel()
   })
+  vjs.on("ended", () => {
+    if (catchupSession || !lastPlayContext?.isLive || !lastPlayContext?.started) return
+    log.warn("[xt:livetv] stream ended by server - re-tuning", { streamId: lastPlayContext.streamId })
+    showBufferingChip()
+    performStallRetune("ended")
+  })
   vjs.on("pause", () => {
     if (Date.now() < suppressPauseTrackingUntilMs) return
     if (!lastPlayContext?.started) return
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     // The browser fires pause right before ended - don't record that as a user pause.
     if (mediaEl?.ended) return
     pausedWasLive = !catchupSession
@@ -2259,9 +2904,9 @@ async function mountEmbeddedPlayer(backend, opts) {
     if (pausedAtAbsUtcMs == null) return
     const pausedAbsUtcMs = pausedAtAbsUtcMs
     pausedAtAbsUtcMs = null
-    const channel = all.find((entry) => entry.id === (catchupSession?.channelId ?? currentlyPlayingId))
+    const channel = findChannel(catchupSession?.channelId ?? currentlyPlayingId)
     if (!channel) return
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     const currentTimeSeconds = vjs.currentTime?.() || 0
     let bufferedAheadMs = 0
     const buffered = mediaEl?.buffered
@@ -2272,6 +2917,10 @@ async function mountEmbeddedPlayer(backend, opts) {
           break
         }
       }
+    } else if (typeof vjs.engineStats === "function") {
+      // No <video> element to read .buffered from (e.g. mpv-embedded) - engine stats carry the same figure.
+      const bufferedAheadSeconds = vjs.engineStats()?.bufferedAheadSeconds
+      if (typeof bufferedAheadSeconds === "number") bufferedAheadMs = Math.max(0, bufferedAheadSeconds * 1000)
     }
     const action = resumeAction({
       pausedAbsUtcMs,
@@ -2284,7 +2933,7 @@ async function mountEmbeddedPlayer(backend, opts) {
     if (action === "reseek") {
       void seekToAbsolute(pausedAbsUtcMs, { forceRemount: true })
     } else if (action === "live") {
-      void play(channel.id, channel.name)
+      void play(channel)
     }
   })
   vjs.on("error", () => {
@@ -2295,62 +2944,48 @@ async function mountEmbeddedPlayer(backend, opts) {
       catchupRetryResetTimer = null
     }
     const err = vjs.error?.()
+    const errorDetail = vjs?.codecInfo?.()?.errorDetail ?? null
     log.error("[xt:livetv] player error", {
       code: err?.code,
       message: err?.message,
       streamId: ctx.streamId,
+      errorDetail,
     })
     getPlayerInsights().record("error", `${err?.code ?? "?"} ${err?.message ?? ""}`.trim())
     // Stops a timer armed by an earlier "playing" from firing against the mount we're replacing.
     clearDeadVideoWatchdog()
     clearDeadAudioWatchdog()
-    if (!ctx.retried) {
-      ctx.retried = true
-      const seqAtRetry = ctx.seq
-      setTimeout(() => {
-        if (seqAtRetry !== playSeq) return
-        if (isCastRoutingActive() || externalPlaybackActive) return
-        if (retryCatchupSession(ctx, { automatic: true })) return
-        if (!ctx.isLive) {
-          // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
-          giveUpOnPlayback(ctx)
-          return
-        }
-        if (ctx.audioProxied) {
-          retuneProxiedAudioMount(ctx)
-          return
-        }
-        // The same demuxer on the same container fails the same way; escalate to the verdict instead.
-        if (isParseFailureDetail(vjs?.codecInfo?.()?.errorDetail)) {
-          giveUpOnPlayback(ctx)
-          return
-        }
-        try {
-          vjs.reset?.()
-          vjs.src({
-            src: ctx.src,
-            type: ctx.mime || "application/x-mpegURL",
-            isLive: ctx.isLive ?? true,
-            preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
-          })
-          vjs.play().catch(() => {})
-        } catch {}
-      }, ERROR_AUTO_RETRY_MS)
+
+    const httpStatus = parseHttpStatusPrefix(errorDetail)
+    const canTryMirrorHop =
+      ctx.isLive &&
+      !ctx.audioProxied &&
+      !isCastRoutingActive() &&
+      !externalPlaybackActive &&
+      isProviderRejection({ errorDetail, httpStatus })
+    if (canTryMirrorHop) {
+      void tryMirrorHopOnLiveError(ctx, { errorDetail, httpStatus })
       return
     }
-    giveUpOnPlayback(ctx)
+    scheduleSameSrcRetry(ctx, { errorDetail, httpStatus })
   })
 
   return vjs
 }
 
-/** Channel ID currently rendered in radio mode (-1 = none). */
-let radioModeChannelId: number | null = null
+/** Channel key currently rendered in radio mode (null = none). */
+let radioModeChannelId: string | null = null
 let radioElapsedTimer: ReturnType<typeof setInterval> | null = null
 let radioIcyAbort: AbortController | null = null
 
 function getPlayerWrap(): HTMLElement | null {
   return document.getElementById("player-wrap")
+}
+
+// getMediaElement() is authoritative even when null (mpv-embedded has no real <video>).
+function mediaElementOf(handle) {
+  if (handle && typeof handle.getMediaElement === "function") return handle.getMediaElement()
+  return getPlayerWrap()?.querySelector("video") ?? null
 }
 
 function fmtElapsed(totalSeconds: number): string {
@@ -2400,7 +3035,7 @@ function startRadioElapsed(wrap: HTMLElement) {
 }
 
 // ICY response headers carry the real station metadata; browser fetch hides them, tauri-plugin-http does not.
-async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, genreFallback: string | null) {
+async function fetchRadioIcy(wrap: HTMLElement, channelId: string, url: string, genreFallback: string | null) {
   if (!/^https?:\/\//i.test(url)) return
   radioIcyAbort?.abort()
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null
@@ -2446,7 +3081,7 @@ async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, 
 
 /** opts.probeIcy fetches ICY station tags; only genuine radio entries pay that stream GET. */
 function setRadioMode(
-  channel: { id: number; name?: string; logo?: string | null; category?: string | null; url?: string | null },
+  channel: { id: number; playlistId?: string; name?: string; logo?: string | null; category?: string | null; url?: string | null },
   opts: { probeIcy?: boolean } = {}
 ) {
   const wrap = getPlayerWrap()
@@ -2466,15 +3101,16 @@ function setRadioMode(
       cover.removeAttribute("src")
     }
   }
-  radioModeChannelId = channel.id
-  paintRadioNowPlaying(channel.id)
+  const radioKey = channelKey(channel)
+  radioModeChannelId = radioKey
+  paintRadioNowPlaying(radioKey)
 
   const genre = channel.category && channel.category !== t("stream.uncategorized") ? channel.category : null
   const descEl = wrap.querySelector<HTMLElement>("[data-radio-desc]")
   if (descEl) { descEl.textContent = ""; descEl.hidden = true }
   renderRadioTags(wrap, genre, channel.url ? radioCodecFromUrl(channel.url) : null)
   startRadioElapsed(wrap)
-  if (channel.url && opts.probeIcy) fetchRadioIcy(wrap, channel.id, channel.url, genre)
+  if (channel.url && opts.probeIcy) fetchRadioIcy(wrap, radioKey, channel.url, genre)
 
   wrap.setAttribute("aria-label", t("livetv.radioAriaLabel", { name: channel.name || "" }) || `Radio: ${channel.name || ""}`)
 }
@@ -2504,52 +3140,52 @@ function clearRadioMode() {
 // Keyed by playlist so an override on one provider can't suppress auto-promotion on another.
 const manualAudioOnlyOff = new Set<string>()
 
-function manualAudioOnlyOffKey(streamId: number): string {
-  return `${activePlaylistId}:${streamId}`
+function manualAudioOnlyOffKey(playlistId: string, streamId: number): string {
+  return `${playlistId}:${streamId}`
 }
 
 let audioOnlySetCache: { playlistId: string; ids: Set<number> } | null = null
 
-function loadAudioOnlySet(): Set<number> {
-  if (audioOnlySetCache && audioOnlySetCache.playlistId === activePlaylistId) {
+function loadAudioOnlySet(playlistId: string): Set<number> {
+  if (audioOnlySetCache && audioOnlySetCache.playlistId === playlistId) {
     return audioOnlySetCache.ids
   }
   let ids = new Set<number>()
   try {
-    const raw = localStorage.getItem(`xt_audio_only:${activePlaylistId}`)
+    const raw = localStorage.getItem(`xt_audio_only:${playlistId}`)
     if (raw) ids = new Set(JSON.parse(raw))
   } catch {}
-  audioOnlySetCache = { playlistId: activePlaylistId, ids }
+  audioOnlySetCache = { playlistId, ids }
   return ids
 }
 
-function saveAudioOnlySet(ids: Set<number>) {
-  audioOnlySetCache = { playlistId: activePlaylistId, ids }
+function saveAudioOnlySet(playlistId: string, ids: Set<number>) {
+  audioOnlySetCache = { playlistId, ids }
   try {
-    localStorage.setItem(`xt_audio_only:${activePlaylistId}`, JSON.stringify([...ids]))
+    localStorage.setItem(`xt_audio_only:${playlistId}`, JSON.stringify([...ids]))
   } catch {}
 }
 
-function isAudioOnlyChannel(id: number): boolean {
-  return loadAudioOnlySet().has(id)
+function isAudioOnlyChannel(playlistId: string, id: number): boolean {
+  return loadAudioOnlySet(playlistId).has(id)
 }
 
 const CURRENT_ROW_ICON_BTN_CLASS =
   "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-base text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
 
-function paintRadioNowPlaying(channelId: number) {
+function paintRadioNowPlaying(channelKeyValue: string) {
   const wrap = getPlayerWrap()
   if (!wrap) return
   const nowEl = wrap.querySelector<HTMLElement>("[data-radio-nowplaying]")
   if (!nowEl) return
-  const channel = all.find((entry) => entry.id === channelId)
-  if (!channel || !activePlaylistId) {
+  const channel = findChannel(channelKeyValue)
+  if (!channel?.playlistId) {
     nowEl.textContent = ""
     nowEl.hidden = true
     return
   }
-  const state = getProgrammesSync(activePlaylistId)
-  const { current } = getNowNextForChannel(state?.programmes, channel, activePlaylistId)
+  const state = getProgrammesSync(channel.playlistId)
+  const { current } = getNowNextForChannel(state?.programmes, channel, channel.playlistId)
   if (!current?.title) {
     nowEl.textContent = ""
     nowEl.hidden = true
@@ -2573,8 +3209,8 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
     return { ctx, wrap, videoEl }
   }
   const promote = (ctx: NonNullable<typeof lastPlayContext>, videoEl?: HTMLVideoElement) => {
-    if (manualAudioOnlyOff.has(manualAudioOnlyOffKey(ctx.streamId))) return
-    const channel = all.find((entry) => entry.id === ctx.streamId)
+    if (manualAudioOnlyOff.has(manualAudioOnlyOffKey(ctx.playlistId, ctx.streamId))) return
+    const channel = findChannel(ctx.channelKey)
     if (!channel) return
     // Radio mode hides the video element, so a wrong promotion looks like "audio only". Leave a trace.
     log.warn("[xt:livetv] auto-promoting channel to audio-only (radio) mode", {
@@ -2708,7 +3344,7 @@ function setMoreMenuItemChecked(item: HTMLButtonElement, checked: boolean) {
   }
 }
 
-function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElement[] {
+function buildCurrentMoreMenuItems(channel, src, name): HTMLButtonElement[] {
   const items: HTMLButtonElement[] = []
 
   const pipSupported = !!window.AndroidPip || document.pictureInPictureEnabled === true
@@ -2724,24 +3360,25 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
   const scaleItem = makeMoreMenuItem(t("stream.scale.button"))
   scaleItem.addEventListener("click", () => {
     closeCurrentMoreMenu()
-    openDisplayModeDialog(streamId)
+    openDisplayModeDialog(channel)
   })
   items.push(scaleItem)
 
   if (!channel?.isRadio) {
-    const audioOnlyEffective = isAudioOnlyChannel(streamId) || radioModeChannelId === streamId
+    const audioOnlyEffective =
+      isAudioOnlyChannel(channel.playlistId, channel.id) || radioModeChannelId === channelKey(channel)
     const audioItem = makeMoreMenuItem(t("livetv.audioOnly"), audioOnlyEffective)
     audioItem.addEventListener("click", () => {
       closeCurrentMoreMenu()
       const nowOn = !audioOnlyEffective
-      const ids = new Set(loadAudioOnlySet())
-      if (nowOn) ids.add(streamId)
-      else ids.delete(streamId)
-      saveAudioOnlySet(ids)
+      const ids = new Set(loadAudioOnlySet(channel.playlistId))
+      if (nowOn) ids.add(channel.id)
+      else ids.delete(channel.id)
+      saveAudioOnlySet(channel.playlistId, ids)
       if (nowOn) {
-        manualAudioOnlyOff.delete(manualAudioOnlyOffKey(streamId))
+        manualAudioOnlyOff.delete(manualAudioOnlyOffKey(channel.playlistId, channel.id))
         setRadioMode(
-          { id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
+          { id: channel.id, playlistId: channel.playlistId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
           { probeIcy: !!channel?.isRadio }
         )
         // Audio-only hides the video preview - the quality chip has nothing to report.
@@ -2750,7 +3387,7 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
           qualityChipDetach = null
         }
       } else {
-        manualAudioOnlyOff.add(manualAudioOnlyOffKey(streamId))
+        manualAudioOnlyOff.add(manualAudioOnlyOffKey(channel.playlistId, channel.id))
         clearRadioMode()
         // Same mount, just un-hidden - re-attach the overlay chip to the player edge.
         const playerWrap = document.getElementById("player")?.parentElement
@@ -2784,6 +3421,16 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
   })
   items.push(healthItem)
 
+  // Mirrors the detail pages' subtitle-delay button: only offered while a subtitle track is showing.
+  if (vjs?.subtitleDelay?.(0) != null) {
+    const subtitleDelayItem = makeMoreMenuItem(t("detail.subtitleDelay"))
+    subtitleDelayItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      subtitleDelayProxyBtn.click()
+    })
+    items.push(subtitleDelayItem)
+  }
+
   if (isTauri) {
     const playOnTvItem = makeMoreMenuItem(t("cast.menu.playOnTv"))
     playOnTvItem.addEventListener("click", () => {
@@ -2794,12 +3441,12 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
           title: name || "",
           logo: channel?.logo || undefined,
           buildSrc: () => (channel ? buildChannelStreamUrl(channel) : null),
-          drm: streamDrmById.get(streamId) || undefined,
-          headers: streamHeadersById.get(streamId) || undefined,
-          preferNativeHls: isNativeHlsFallbackChannel(streamId),
+          drm: streamDrmById.get(channelKey(channel)) || undefined,
+          headers: streamHeadersById.get(channelKey(channel)) || undefined,
+          preferNativeHls: isNativeHlsFallbackChannel(channel.playlistId, channel.id),
           stopLocal: releaseLocalPlaybackForHandoff,
-          restoreLocal: () => { void play(streamId, name, "user") },
-          liveContext: liveContextForChannelId(streamId),
+          restoreLocal: () => { void play(channel, "user") },
+          liveContext: liveContextForChannel(channel),
         })()
       })
     })
@@ -2809,7 +3456,7 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
   return items
 }
 
-function openCurrentMoreMenu(trigger: HTMLButtonElement, streamId, channel, src, name) {
+function openCurrentMoreMenu(trigger: HTMLButtonElement, channel, src, name) {
   closeCurrentMoreMenu(false)
 
   const menu = document.createElement("div")
@@ -2818,7 +3465,7 @@ function openCurrentMoreMenu(trigger: HTMLButtonElement, streamId, channel, src,
     "fixed z-50 min-w-[12rem] rounded-xl border border-line bg-surface text-fg shadow-2xl p-1 flex flex-col gap-0.5 poster-menu-enter"
   menu.setAttribute("role", "menu")
   menu.setAttribute("aria-label", t("livetv.moreActions"))
-  menu.append(...buildCurrentMoreMenuItems(streamId, channel, src, name))
+  menu.append(...buildCurrentMoreMenuItems(channel, src, name))
   document.body.appendChild(menu)
 
   const margin = 8
@@ -3018,8 +3665,8 @@ function performStallRetune(trigger) {
     retuneProxiedAudioMount(ctx)
     return
   }
-  const stallAttempts = (liveStallRetuneCounts.get(ctx.streamId) || 0) + 1
-  liveStallRetuneCounts.set(ctx.streamId, stallAttempts)
+  const stallAttempts = (liveStallRetuneCounts.get(ctx.channelKey) || 0) + 1
+  liveStallRetuneCounts.set(ctx.channelKey, stallAttempts)
   if (stallAttempts > LIVE_STALL_RETUNE_MAX) {
     log.warn("[xt:livetv] still no data after repeated re-tunes - the feed appears to be down", {
       streamId: ctx.streamId,
@@ -3028,18 +3675,22 @@ function performStallRetune(trigger) {
     giveUpOnPlayback(ctx)
     return
   }
-  try {
-    vjs.reset?.()
-    vjs.src({
-      src: ctx.src,
-      type: ctx.mime || "application/x-mpegURL",
-      isLive: ctx.isLive ?? true,
-      preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
+  if (
+    trigger === "ended" &&
+    stallAttempts >= 2 &&
+    ctx.isLive &&
+    !ctx.audioProxied &&
+    !isCastRoutingActive() &&
+    !externalPlaybackActive
+  ) {
+    log.warn("[xt:livetv] stream ended again after re-tune - trying the next mirror", {
+      streamId: ctx.streamId,
+      attempt: stallAttempts,
     })
-    vjs.play().catch((err) => {
-      log.info("[xt:livetv] stall-retune play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
-    })
-  } catch {}
+    void tryMirrorHopOnLiveError(ctx, { failureKind: "ended" })
+    return
+  }
+  remountFromContext(ctx)
 }
 
 function armStallSentinel() {
@@ -3070,10 +3721,19 @@ let progressLastTime = -1
 let progressLastSeq = -1
 let progressFrozenTicks = 0
 let progressTickCount = 0
+let progressIdleReason = null
 
 function progressWatchTick() {
   const ctx = lastPlayContext
-  if (!ctx || !ctx.isLive || catchupSession || !vjs) {
+  if (!ctx) {
+    progressFrozenTicks = 0
+    if (nativeLiveHandoffActive && progressIdleReason !== "native-handoff") {
+      progressIdleReason = "native-handoff"
+      log.info("[xt:livetv] heartbeat idle", { reason: "native-handoff" })
+    }
+    return
+  }
+  if (!ctx.isLive || catchupSession || !vjs) {
     progressFrozenTicks = 0
     return
   }
@@ -3082,11 +3742,17 @@ function progressWatchTick() {
     progressFrozenTicks = 0
     return
   }
-  const mediaEl = vjs.getMediaElement?.() ?? wrap.querySelector("video")
+  const mediaEl = mediaElementOf(vjs)
   if (!mediaEl || mediaEl.paused || mediaEl.ended || mediaEl.readyState < 2) {
     progressFrozenTicks = 0
+    const reason = !mediaEl ? "no-media" : mediaEl.ended ? "ended" : mediaEl.paused ? "paused" : "readyState<2"
+    if (reason !== progressIdleReason) {
+      progressIdleReason = reason
+      log.info("[xt:livetv] heartbeat idle", { streamId: ctx.streamId, reason, readyState: mediaEl?.readyState ?? null })
+    }
     return
   }
+  progressIdleReason = null
   const currentTime = mediaEl.currentTime || 0
   progressTickCount++
   if (progressTickCount % PROGRESS_HEARTBEAT_EVERY_TICKS === 0) {
@@ -3108,8 +3774,8 @@ function progressWatchTick() {
   progressLastTime = currentTime
   if (progressFrozenTicks < PROGRESS_FROZEN_TICKS) return
   progressFrozenTicks = 0
-  const attempts = (freezeRetuneCounts.get(ctx.streamId) || 0) + 1
-  freezeRetuneCounts.set(ctx.streamId, attempts)
+  const attempts = (freezeRetuneCounts.get(ctx.channelKey) || 0) + 1
+  freezeRetuneCounts.set(ctx.channelKey, attempts)
   log.warn("[xt:livetv] playback frozen (currentTime stuck, no stall event fired)", {
     streamId: ctx.streamId,
     t: Math.round(currentTime * 10) / 10,
@@ -3171,6 +3837,8 @@ function clearStartWedgeWatch() {
 
 function armStartWedgeWatch() {
   clearStartWedgeWatch()
+  // The wedge is a Chromium MSE bug; mpv has its own demuxer and never hits it.
+  if (isNativeVideoBackend(embeddedPlayerBackend)) return
   const ctx = lastPlayContext
   if (!ctx || !ctx.isLive || ctx.audioProxied) return
   const seqAtArm = ctx.seq
@@ -3187,7 +3855,7 @@ function armStartWedgeWatch() {
       clearStartWedgeWatch()
       return
     }
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     if (!mediaEl || mediaEl.paused || mediaEl.ended) return
     const audioCodec = vjs?.codecInfo?.()?.audioCodec
     // A flagged engine wedges MPEG audio deterministically - codec alone convicts.
@@ -3274,7 +3942,7 @@ function armDeadVideoWatchdog() {
         return
       }
       // Conclusively healthy: restore this channel's re-latch budget.
-      nativeRelatchAttempts.delete(ctx.streamId)
+      nativeRelatchAttempts.delete(ctx.channelKey)
       return
     }
     if (video.videoWidth === 0 && video.videoHeight === 0) return
@@ -3298,29 +3966,29 @@ function armDeadVideoWatchdog() {
       }
     )
     if (everyFrameDropped) {
-      const relatchAttempts = nativeRelatchAttempts.get(ctx.streamId) || 0
+      const relatchAttempts = nativeRelatchAttempts.get(ctx.channelKey) || 0
       const recovery = chooseBlackFrameRecovery({
         // Native mounts re-tune (a fresh chance to latch); see chooseBlackFrameRecovery.
         isMacOSNativeHls:
-          isMacOS && !ctx.audioProxied && (!isTauri || isNativeHlsFallbackChannel(ctx.streamId)),
+          isMacOS && !ctx.audioProxied && (!isTauri || isNativeHlsFallbackChannel(ctx.playlistId, ctx.streamId)),
         relatchAttempts,
         proxyUsable:
           canUseAudioProxy(ctx) &&
           !ctx.audioProxied &&
-          !audioProxyAutoAttemptedSet.has(ctx.streamId),
+          !audioProxyAutoAttemptedSet.has(ctx.channelKey),
       })
       if (recovery === "native-retune") {
-        nativeRelatchAttempts.set(ctx.streamId, relatchAttempts + 1)
+        nativeRelatchAttempts.set(ctx.channelKey, relatchAttempts + 1)
         log.warn("[xt:livetv] re-tuning the native mount to re-attempt GDR latch", {
           streamId: ctx.streamId,
           attempt: relatchAttempts + 1,
         })
         toast({ title: t("stream.videoFix.retuning"), duration: 4000 })
-        void play(ctx.streamId, ctx.name, "auto:gdr-relatch")
+        void replayContext(ctx, "auto:gdr-relatch")
         return
       }
       if (recovery === "proxy") {
-        audioProxyAutoAttemptedSet.add(ctx.streamId)
+        audioProxyAutoAttemptedSet.add(ctx.channelKey)
         log.warn("[xt:livetv] retrying through the ffmpeg remux proxy", {
           streamId: ctx.streamId,
         })
@@ -3383,28 +4051,30 @@ function canUseAudioProxy(ctx) {
     audioProxyAvailable &&
     !!ctx?.isLive &&
     !catchupSession &&
-    !audioProxyBypassSet.has(ctx.streamId) &&
+    !audioProxyBypassSet.has(ctx.channelKey) &&
     // The proxy pipes the fetched body into ffmpeg's mpegts demuxer; an HLS
     // playlist URL feeds it playlist text and dies instantly. Raw TS only.
-    !isHlsSource(ctx?.src)
+    !isHlsSource(ctx?.src) &&
+    // mpv decodes AC-3/E-AC-3/MP2/DTS natively - the ffmpeg proxy is pointless there.
+    !isNativeVideoBackend(embeddedPlayerBackend)
   )
 }
 
 function fixAudioNow(ctx) {
-  audioProxyOneShotFixSet.add(ctx.streamId)
-  void play(ctx.streamId, ctx.name, "auto:audio-fix")
+  audioProxyOneShotFixSet.add(ctx.channelKey)
+  void replayContext(ctx, "auto:audio-fix")
 }
 
 // A proxied mount's local URL is single-consumer: a same-src reconnect 409s and leaves a dead player.
 function retuneProxiedAudioMount(ctx) {
-  const attempts = (audioProxyStallRetuneCounts.get(ctx.streamId) || 0) + 1
-  audioProxyStallRetuneCounts.set(ctx.streamId, attempts)
+  const attempts = (audioProxyStallRetuneCounts.get(ctx.channelKey) || 0) + 1
+  audioProxyStallRetuneCounts.set(ctx.channelKey, attempts)
   if (attempts > AUDIO_PROXY_MAX_STALL_RETUNES) {
-    audioProxyBypassSet.add(ctx.streamId)
-  } else if (!isAudioTranscodeChannel(activePlaylistId, String(ctx.streamId))) {
-    audioProxyOneShotFixSet.add(ctx.streamId)
+    audioProxyBypassSet.add(ctx.channelKey)
+  } else if (!isAudioTranscodeChannel(ctx.playlistId, String(ctx.streamId))) {
+    audioProxyOneShotFixSet.add(ctx.channelKey)
   }
-  void play(ctx.streamId, ctx.name, "auto:proxy-stall-retune")
+  void replayContext(ctx, "auto:proxy-stall-retune")
 }
 
 // The Rust side has already torn the session down by the time this fires.
@@ -3412,18 +4082,20 @@ function handleAudioProxyError(payload) {
   const ctx = lastPlayContext
   if (!ctx || !ctx.audioProxied) return
   if (!payload || payload.sessionId !== ctx.audioProxySessionId) return
-  audioProxyBypassSet.add(ctx.streamId)
+  audioProxyBypassSet.add(ctx.channelKey)
   // Never reached playing state - this channel's proxy path is broken, not a transient blip. Don't keep re-attempting it every session.
   if (!ctx.started) {
-    forgetAudioTranscodeChannel(activePlaylistId, String(ctx.streamId))
+    forgetAudioTranscodeChannel(ctx.playlistId, String(ctx.streamId))
   }
   log.warn("[xt:livetv] audio transcode proxy failed mid-play, falling back to direct:", payload.detail)
   toast({ title: t("stream.audioFix.fallback"), duration: 7000 })
-  void play(ctx.streamId, ctx.name, "auto:proxy-error-fallback")
+  void replayContext(ctx, "auto:proxy-error-fallback")
 }
 
 function armDeadAudioWatchdog() {
   clearDeadAudioWatchdog()
+  // mpv decodes AC-3/E-AC-3/MP2/DTS natively; there's no MSE audio track to go silent.
+  if (isNativeVideoBackend(embeddedPlayerBackend)) return
   const ctx = lastPlayContext
   if (!ctx) return
   if (ctx.audioProxied) return
@@ -3485,14 +4157,14 @@ function armDeadAudioWatchdog() {
       ctx.isLive &&
       isHlsSource(ctx.src) &&
       !ctx.audioProxied &&
-      !isNativeHlsFallbackChannel(ctx.streamId)
+      !isNativeHlsFallbackChannel(ctx.playlistId, ctx.streamId)
     ) {
-      rememberNativeHlsFallbackChannel(ctx.streamId)
+      rememberNativeHlsFallbackChannel(ctx.playlistId, ctx.streamId)
       log.warn("[xt:livetv] silent audio in MSE - remounting on native AVFoundation", {
         streamId: ctx.streamId,
         audioCodec: info.audioCodec,
       })
-      void play(ctx.streamId, ctx.name, "auto:native-hls-fallback")
+      void replayContext(ctx, "auto:native-hls-fallback")
       return
     }
     if (canUseAudioProxy(ctx)) {
@@ -3571,21 +4243,45 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   if (!playerWrap) return
 
   const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
-  const failure = classifyStartFailure({
-    videoCodec: info.videoCodec,
-    audioCodec: info.audioCodec,
-    errorDetail:
-      info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
-    nameHint: hasHevcNameHint(ctx.name),
-    deviceHevc: deviceSupportsHevc(),
-    audioClockWedge: !!ctx.audioClockWedge,
-  })
+  // mpv-embedded prefixes tell us more than a codec guess ever could - skip the heuristics for them.
+  const mpvErrorDetail = typeof info.errorDetail === "string" ? info.errorDetail : ""
+  const isOfflinePlaceholder = mpvErrorDetail.startsWith("OFFLINE_PLACEHOLDER")
+  const httpStatus = parseHttpStatusPrefix(mpvErrorDetail)
+  const failure = isOfflinePlaceholder
+    ? { kind: "offline-placeholder", codec: null }
+    : ctx.isLive && isProviderPageDetail(mpvErrorDetail)
+      ? { kind: "provider-page", codec: null }
+      : classifyStartFailure({
+          videoCodec: info.videoCodec,
+          audioCodec: info.audioCodec,
+          errorDetail:
+            info.errorDetail ||
+            vjs?.error?.()?.message ||
+            (opts.decodeFailure ? "videoDecodeFailure" : null),
+          nameHint: hasHevcNameHint(ctx.name),
+          deviceHevc: deviceSupportsHevc(),
+          audioClockWedge: !!ctx.audioClockWedge,
+        })
   log.log("[xt:livetv] start failure classified:", failure.kind, {
     videoCodec: info.videoCodec,
     errorDetail: info.errorDetail,
   })
   let reason
-  if (failure.kind === "hevc") {
+  if (failure.kind === "offline-placeholder") {
+    reason = t("stream.failure.offlinePlaceholder")
+  } else if (failure.kind === "provider-page") {
+    reason = t("stream.failure.providerPage")
+  } else if (httpStatus === 401) {
+    reason = t("player.error.http401")
+  } else if (httpStatus === 403) {
+    reason = t("player.error.http403")
+  } else if (httpStatus === 407) {
+    reason = t("player.error.http403")
+  } else if (httpStatus === 404) {
+    reason = t("player.error.http404")
+  } else if (httpStatus != null && httpStatus >= 500 && httpStatus <= 599) {
+    reason = t("player.error.http5xx")
+  } else if (failure.kind === "hevc") {
     reason = failure.codec
       ? t("stream.failure.hevcConfirmed")
       : t("stream.error.hevcHint")
@@ -3649,12 +4345,17 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   // a decode failure needs the external player, a network blip needs retry.
   const builtinCantDecode =
     failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio"
-  const hevcInstall = failure.kind === "hevc" && isWindowsDesktop()
+  // WebView2's HEVC extension is irrelevant to mpv, which decodes HEVC on its own.
+  const hevcInstall =
+    failure.kind === "hevc" && isWindowsDesktop() && !isNativeVideoBackend(embeddedPlayerBackend)
   const audioProxyEligible = failure.kind === "audio" && canUseAudioProxy(ctx)
+  const mpvFixEligible =
+    !!ctx.isLive && shouldOfferMpvEmbeddedFix(failure.kind, embeddedPlayerBackend, mpvEmbeddedFixAvailable)
   const externalAvailable = externalPlayersAvailable || androidExternalAvailable
   let primaryKind = "retry"
   if (hevcInstall) primaryKind = "hevc"
   else if (audioProxyEligible) primaryKind = "audioFix"
+  else if (mpvFixEligible) primaryKind = "mpvFix"
   else if (builtinCantDecode && externalAvailable) primaryKind = "external"
 
   const primaryClass =
@@ -3669,7 +4370,7 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   retryBtn.addEventListener("click", () => {
     hidePlaybackFailurePanel()
     if (retryCatchupSession(ctx)) return
-    play(ctx.streamId, ctx.name)
+    replayContext(ctx)
   })
 
   let hevcBtn = null
@@ -3681,8 +4382,21 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
     hevcBtn.addEventListener("click", async () => {
       if (await ensureHevcDecodable()) {
         hidePlaybackFailurePanel()
-        play(ctx.streamId, ctx.name)
+        replayContext(ctx)
       }
+    })
+  }
+
+  let mpvFixBtn = null
+  if (mpvFixEligible) {
+    mpvFixBtn = document.createElement("button")
+    mpvFixBtn.type = "button"
+    mpvFixBtn.className = primaryKind === "mpvFix" ? primaryClass : secondaryClass
+    mpvFixBtn.textContent = t("stream.mpvFix.action")
+    mpvFixBtn.addEventListener("click", () => {
+      hidePlaybackFailurePanel()
+      rememberMpvEmbeddedFixChannel(ctx.playlistId, String(ctx.streamId))
+      void replayContext(ctx, "auto:mpv-fix")
     })
   }
 
@@ -3714,7 +4428,7 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
     failurePanelExternalHandle = setupExternalPlayerButton(extBtn, {
       getSrc: () => ctx.src,
       getHeaders: () => {
-        const channelHeaders = streamHeadersById.get(ctx.streamId) || null
+        const channelHeaders = streamHeadersById.get(ctx.channelKey) || null
         return {
           userAgent: channelHeaders?.userAgent || getUserAgent() || null,
           referer: channelHeaders?.referer || null,
@@ -3728,11 +4442,10 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         releaseLocalPlaybackForHandoff()
       },
       restoreLocal: () => {
-        play(ctx.streamId, ctx.name)
+        replayContext(ctx)
       },
       afterLaunch: (kind) => {
-        const channel = all.find((entry) => entry.id === ctx.streamId)
-        pushDiscordPresence(channel || { id: ctx.streamId, name: ctx.name }, "live")
+        pushDiscordPresence(findChannel(ctx.channelKey) || ctx.channel, "live")
         externalPlaybackActive = true
         externalPlaybackKind = kind
       },
@@ -3742,10 +4455,11 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   // Primary leads; retry is always offered as the fallback.
   const orderedButtons = []
   if (primaryKind === "hevc" && hevcBtn) orderedButtons.push(hevcBtn)
+  else if (primaryKind === "mpvFix" && mpvFixBtn) orderedButtons.push(mpvFixBtn)
   else if (primaryKind === "audioFix" && audioFixBtn) orderedButtons.push(audioFixBtn)
   else if (primaryKind === "external" && extBtn) orderedButtons.push(extBtn)
   else orderedButtons.push(retryBtn)
-  for (const btn of [hevcBtn, audioFixBtn, extBtn, retryBtn]) {
+  for (const btn of [hevcBtn, mpvFixBtn, audioFixBtn, extBtn, retryBtn]) {
     if (btn && !orderedButtons.includes(btn)) orderedButtons.push(btn)
   }
   for (const btn of orderedButtons) actions.appendChild(btn)
@@ -3753,6 +4467,15 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   panel.appendChild(actions)
   playerWrap.appendChild(panel)
 }
+
+// The mpv control bar's own inline error row dispatches this on the player container.
+document.getElementById("player-wrap")?.addEventListener("xt:mpv-retry", () => {
+  const ctx = lastPlayContext
+  if (!ctx) return
+  hidePlaybackFailurePanel()
+  if (retryCatchupSession(ctx)) return
+  replayContext(ctx)
+})
 
 function runScanLineSweep() {
   const playerWrap = document.getElementById("player")?.parentElement
@@ -3765,20 +4488,33 @@ function runScanLineSweep() {
 
 window.addEventListener("pagehide", () => {
   clearRichPresence().catch(() => {})
+  resetDiscordPresenceTracking()
   externalPlaybackActive = false
   externalPlaybackKind = null
   void stopAudioTranscode()
 })
 
+let presenceChannelId = null
+let presenceStartedAtMs = 0
+let presenceProgrammeTitle = ""
+
+function currentProgrammeTitle(channel) {
+  if (!channel?.playlistId) return ""
+  const state = getProgrammesSync(channel.playlistId)
+  if (!state) return ""
+  const { current } = getNowNextForChannel(state.programmes, channel, channel.playlistId)
+  return current?.title || ""
+}
+
 function pushDiscordPresence(channel, kind) {
   if (!activePlaylistId || !channel) return
   const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
-  let stateLine = ""
-  const state = getProgrammesSync(activePlaylistId)
-  if (state) {
-    const { current } = getNowNextForChannel(state.programmes, channel, activePlaylistId)
-    if (current?.title) stateLine = current.title
-  }
+  const stateLine = currentProgrammeTitle(channel)
+  // Same channel keeps its tune-time stamp so a programme rollover doesn't reset Discord's elapsed timer.
+  const presenceKey = channelKey(channel)
+  if (presenceChannelId !== presenceKey) presenceStartedAtMs = Date.now()
+  presenceChannelId = presenceKey
+  presenceProgrammeTitle = stateLine
   setRichPresence({
     playlistId: activePlaylistId,
     details: `Watching ${channel.name || `Channel ${channel.id}`}`,
@@ -3787,8 +4523,23 @@ function pushDiscordPresence(channel, kind) {
     largeText: activePlaylistTitle || "Extreme InfiniTV",
     smallImage: "live",
     smallText: "Live",
-    startTimestamp: Date.now(),
+    startTimestamp: presenceStartedAtMs,
   })
+}
+
+function resetDiscordPresenceTracking() {
+  presenceChannelId = null
+  presenceStartedAtMs = 0
+  presenceProgrammeTitle = ""
+}
+
+/** Re-push presence when the live programme rolled over under a still-playing channel. */
+function refreshDiscordPresenceProgramme() {
+  if (presenceChannelId == null || catchupSession) return
+  const channel = findChannel(presenceChannelId)
+  if (!channel) return
+  if (currentProgrammeTitle(channel) === presenceProgrammeTitle) return
+  pushDiscordPresence(channel, "live")
 }
 
 function pickConfiguredExternal() {
@@ -3806,78 +4557,139 @@ function ensureNativeLiveSubscription() {
   if (_nativeLiveSubscribed) return
   _nativeLiveSubscribed = true
   subscribeAndroidNativeEvents((event) => {
-    if (event.type !== "xt:android-native-channel-changed") return
-    const channelId = event.payload?.channelId
-    if (!channelId) return
-    const channel = all.find((entry) => String(entry.id) === String(channelId))
-    if (!channel) return
-    if (activePlaylistId) {
-      pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
+    if (event.type === "xt:android-native-channel-changed") {
+      const channelId = event.payload?.channelId
+      if (!channelId) return
+      const channel = resolveNativeChannel(all, channelId)
+      if (!channel) return
+      pushRecent(channel.playlistId, "live", channel.id, channel.name, channel.logo || null)
+      setNowPlaying(channelKey(channel))
+      return
     }
-    setNowPlaying(channel.id)
+    if (event.type === "xt:android-native-error") {
+      const { code, httpStatus, message } = event.payload || {}
+      const contentKey = event.payload?.contentKey || ""
+      const channelId =
+        event.payload?.channelId || (contentKey.startsWith("live:") ? contentKey.slice(5) : contentKey)
+      const channel = resolveNativeChannel(all, channelId)
+      log.warn("[xt:livetv] native player error", { code, httpStatus, message, channelId })
+      if (code === "LIVE_RETUNE_EXHAUSTED") {
+        toastError(t("stream.native.lostTitle"), {
+          description: t("stream.native.lostBody", {
+            channel: event.payload?.channelName || channel?.name || "",
+          }),
+        })
+        setNowPlaying(null)
+      }
+      return
+    }
+    if (event.type === "xt:android-native-finished") {
+      nativeLiveHandoffActive = false
+      if (event.payload?.mode === "live") {
+        log.info("[xt:livetv] native player finished", { finalChannelId: event.payload?.finalChannelId })
+      }
+    }
   })
 }
 
-async function tryLaunchNativeLive(initialStreamId, initialName) {
+async function tryLaunchNativeLive(initialChannel) {
   if (!getAndroidNativePlayerEnabled()) return false
-  return launchNativeLiveSession(initialStreamId, initialName)
+  return launchNativeLiveSession(initialChannel)
 }
 
-async function launchNativeLiveSession(initialStreamId, initialName) {
+async function launchNativeLiveSession(initialChannel) {
   if (!androidNativePlayerAvailable) return false
-  if (!all.length) return false
+  if (!all.length || !initialChannel) return false
   ensureNativeLiveSubscription()
 
+  const initialKey = channelKey(initialChannel)
+  const initialNativeId = nativeChannelId(initialChannel, mergedMode)
   let initialUrl
-  if (hasDirectUrl(initialStreamId)) {
-    initialUrl = getDirectUrl(initialStreamId)
-  } else {
-    initialUrl = await resolveStreamUrl((candidate) =>
-      buildDirectLiveUrl(initialStreamId, candidate),
+  if (initialChannel.sourceEntryId && initialChannel.sourceStreamId != null) {
+    initialUrl = await resolveStreamUrl(
+      (candidate) => buildDirectLiveUrl(initialChannel, candidate),
+      { entryId: initialChannel.sourceEntryId }
     )
-    creds = await loadCreds()
+  } else if (hasDirectUrl(initialKey)) {
+    initialUrl = getDirectUrl(initialKey)
+  } else {
+    initialUrl = await resolveStreamUrl(
+      (candidate) => buildDirectLiveUrl(initialChannel, candidate),
+      { entryId: initialChannel.playlistId }
+    )
+    const refreshed = entryToCreds(entryById.get(initialChannel.playlistId))
+    credsByPlaylistId.set(initialChannel.playlistId, refreshed)
+    if (initialChannel.playlistId === activePlaylistId) creds = refreshed
   }
   if (!initialUrl) return false
 
+  const candidatesByPlaylist = new Map()
+  const candidatesFor = (playlistId) => {
+    if (!candidatesByPlaylist.has(playlistId)) {
+      candidatesByPlaylist.set(playlistId, xtreamCandidatesFor(entryById.get(playlistId)))
+    }
+    return candidatesByPlaylist.get(playlistId)
+  }
+  const initialCandidates = candidatesFor(initialChannel.playlistId)
+
   const channelInputs = []
   for (const channel of all) {
+    if (channel.isHeader) continue
+    const key = channelKey(channel)
     let streamUrl = ""
-    if (channel.id === initialStreamId) {
+    const isDirectUrlChannel = hasDirectUrl(key)
+    if (key === initialKey) {
       streamUrl = initialUrl
-    } else if (hasDirectUrl(channel.id)) {
-      streamUrl = getDirectUrl(channel.id)
+    } else if (isDirectUrlChannel) {
+      streamUrl = getDirectUrl(key)
     } else {
-      const built = buildDirectLiveUrl(channel.id, creds)
+      const built = buildDirectLiveUrl(channel)
       if (built) streamUrl = built
     }
     if (!streamUrl) continue
-    const headers = streamHeadersById.get(channel.id) || null
+    const headers = streamHeadersById.get(key) || null
+    const channelCandidates = candidatesFor(channel.playlistId)
+    const backupUrls =
+      channelCandidates.length > 1 && !isDirectUrlChannel
+        ? channelCandidates
+            .map((candidate) => buildDirectLiveUrl(channel, candidate))
+            .filter(Boolean)
+            .filter((url) => url !== streamUrl)
+        : []
     channelInputs.push({
-      id: String(channel.id),
+      id: nativeChannelId(channel, mergedMode),
       name: channel.name || "",
       logo: channel.logo || "",
       streamUrl,
       ua: headers?.userAgent || "",
       referer: headers?.referer || "",
       tvgId: channel.tvgId || null,
+      backupUrls,
     })
   }
   if (!channelInputs.length) return false
 
-  const programmes = activePlaylistId
-    ? getProgrammesSync(activePlaylistId)?.programmes ?? null
-    : null
+  const programmes = mergedMode
+    ? mergeProgrammeMaps(mergedPlaylistIds.map((playlistId) => getProgrammesSync(playlistId)?.programmes ?? null))
+    : getProgrammesSync(initialChannel.playlistId)?.programmes ?? null
   const launched = launchAndroidNativeLive({
-    contentKey: `live:${initialStreamId}`,
+    contentKey: `live:${initialNativeId}`,
     channels: channelInputs,
-    initialChannelId: String(initialStreamId),
+    initialChannelId: initialNativeId,
     defaultUa: getUserAgent() || "",
     programmes,
+    dns: (await getPlaylistDnsOverride(initialChannel.playlistId))?.raw ?? null,
   })
-  if (launched && activePlaylistId) {
-    pushRecent(activePlaylistId, "live", initialStreamId, initialName,
-      all.find((entry) => entry.id === initialStreamId)?.logo || null)
-    setNowPlaying(initialStreamId)
+  log.info("[xt:livetv] external handoff", {
+    target: "android-native",
+    channel: initialChannel.id,
+    launched,
+    backups: initialCandidates.length > 1 ? initialCandidates.length - 1 : 0,
+  })
+  if (launched) {
+    nativeLiveHandoffActive = true
+    pushRecent(initialChannel.playlistId, "live", initialChannel.id, initialChannel.name, initialChannel.logo || null)
+    setNowPlaying(initialKey)
   }
   return launched
 }
@@ -3912,15 +4724,25 @@ function releaseLocalPlaybackForHandoff() {
   return heldProviderConnection
 }
 
-async function play(streamId, name, reason = "user") {
+function replayContext(ctx, reason) {
+  const channel = findChannel(ctx.channelKey) || ctx.channel
+  if (!channel) return undefined
+  return reason ? play(channel, reason) : play(channel)
+}
+
+async function play(target, reason = "user") {
+  const streamId = target.id
+  const name = target.name
+  const playlistId = target.playlistId || activePlaylistId
+  const key = channelKey(target)
   // Every tune's trigger reaches the log file, so sessions reconstruct from it.
-  log.info("[xt:livetv] tune", { streamId, name: name || null, reason })
+  log.info("[xt:livetv] tune", { streamId, playlistId, name: name || null, reason })
   if (reason === "user") {
-    freezeRetuneCounts.delete(streamId)
-    nativeRelatchAttempts.delete(streamId)
-    liveStallRetuneCounts.delete(streamId)
+    freezeRetuneCounts.delete(key)
+    nativeRelatchAttempts.delete(key)
+    liveStallRetuneCounts.delete(key)
   }
-  const targetChannel = all.find((channel) => channel.id === streamId)
+  const targetChannel = findChannel(key) || target
   if (targetChannel?.unresolved) {
     void stopAudioTranscode()
     log.warn("[xt:livetv] channel unresolved - source playlist no longer has it", { streamId })
@@ -3938,7 +4760,7 @@ async function play(streamId, name, reason = "user") {
       contentTitle: name || null,
       quiet: true,
       stopLocal: releaseLocalPlaybackForHandoff,
-      liveContext: liveContextForChannelId(streamId),
+      liveContext: liveContextForChannel(targetChannel),
       holdsProviderConnection: true,
       buildDescriptor: async () => {
         const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
@@ -3949,14 +4771,14 @@ async function play(streamId, name, reason = "user") {
           src: liveSrc,
           title: name || "",
           logo: targetChannel?.logo || undefined,
-          drm: streamDrmById.get(streamId) || undefined,
-          headers: streamHeadersById.get(streamId) || undefined,
-          preferNativeHls: isNativeHlsFallbackChannel(streamId),
+          drm: streamDrmById.get(key) || undefined,
+          headers: streamHeadersById.get(key) || undefined,
+          preferNativeHls: isNativeHlsFallbackChannel(playlistId, streamId),
         })
       },
     })
     // Cast session owns playback now - never fall through to a local mount.
-    if (routed) setNowPlaying(streamId)
+    if (routed) setNowPlaying(key)
     return
   }
   hidePlaybackFailurePanel()
@@ -3988,13 +4810,20 @@ async function play(streamId, name, reason = "user") {
   }
   // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
   // playback session including channel switching. Returns early if successful.
-  if (await tryLaunchNativeLive(streamId, name)) {
+  if (await tryLaunchNativeLive(targetChannel)) {
     return
   }
 
-  const src = hasDirectUrl(streamId)
-    ? getDirectUrl(streamId)
-    : await resolveStreamUrl((c) => buildDirectLiveUrl(streamId, c))
+  const channel = targetChannel
+  // Custom channel: cached direct URL is stale after a mirror hop, re-resolve.
+  const src = channel.sourceEntryId && channel.sourceStreamId != null
+    ? await resolveStreamUrl(
+        (candidate) => buildDirectLiveUrl(channel, candidate),
+        { entryId: channel.sourceEntryId }
+      )
+    : hasDirectUrl(key)
+    ? getDirectUrl(key)
+    : await resolveStreamUrl((candidate) => buildDirectLiveUrl(channel, candidate), { entryId: playlistId })
 
   // Embedded players (Video.js + hls.js) only speak http(s). M3U sources can
   // ship rtsp/rtmp/udp/mms/... - those need MPV/VLC
@@ -4007,22 +4836,19 @@ async function play(streamId, name, reason = "user") {
       void stopAudioTranscode()
       const externalKind =
         externalPlayersAvailable ? pickConfiguredExternal() : null
-      const channelHeaders = streamHeadersById.get(streamId) || null
+      const channelHeaders = streamHeadersById.get(key) || null
       if (externalKind) {
-        const channel = all.find((entry) => entry.id === streamId)
         try {
           await launchExternalLive(externalKind, src, channelHeaders)
           showExternalPlayerEmptyState(externalKind, name)
-          pushDiscordPresence(channel || { id: streamId, name }, "live")
+          pushDiscordPresence(channel, "live")
           externalPlaybackActive = true
           externalPlaybackKind = externalKind
         } catch (err) {
           surfaceLaunchError(err, externalKind)
         }
-        if (activePlaylistId) {
-          pushRecent(activePlaylistId, "live", streamId, name, channel?.logo || null)
-        }
-        setNowPlaying(streamId)
+        pushRecent(playlistId, "live", streamId, name, channel?.logo || null)
+        setNowPlaying(key)
         return
       }
       const scheme = (src.split("://")[0] || "").toLowerCase()
@@ -4036,16 +4862,12 @@ async function play(streamId, name, reason = "user") {
     // backend is mpv/vlc - fall through to the existing external launch below.
   }
 
-  if (activePlaylistId) {
-    const ch = all.find((c) => c.id === streamId)
-    pushRecent(activePlaylistId, "live", streamId, name, ch?.logo || null)
-  }
+  pushRecent(playlistId, "live", streamId, name, channel?.logo || null)
 
-  const channel = all.find((c) => c.id === streamId)
   const channelLogo = channel?.logo ? safeHttpUrl(channel.logo) : null
 
   const sourceLogo = viewport?.querySelector(
-    `.channel-row[data-idx="${filtered.findIndex((c) => c.id === streamId)}"] .play-btn > div:first-child`
+    `.channel-row[data-idx="${filtered.findIndex((row) => channelKey(row) === key)}"] .play-btn > div:first-child`
   )
   const supportsVT = typeof document.startViewTransition === "function"
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
@@ -4063,7 +4885,7 @@ async function play(streamId, name, reason = "user") {
   }
 
   const swapState = () => {
-    setNowPlaying(streamId)
+    setNowPlaying(key)
 
     currentEl.replaceChildren()
     const wrap = document.createElement("div")
@@ -4094,11 +4916,11 @@ async function play(streamId, name, reason = "user") {
     moreBtn.innerHTML = ICON_DOTS
     moreBtn.addEventListener("click", () => {
       if (currentMoreMenuTrigger === moreBtn) closeCurrentMoreMenu()
-      else openCurrentMoreMenu(moreBtn, streamId, channel, src, name)
+      else openCurrentMoreMenu(moreBtn, channel, src, name)
     })
     currentEl.appendChild(moreBtn)
 
-    appendExternalLaunchButton(currentEl, streamId, src, name)
+    appendExternalLaunchButton(currentEl, channel, src, name)
 
     if (sourceLogo instanceof HTMLElement) sourceLogo.style.viewTransitionName = ""
     showTuningOverlay(channelLogo)
@@ -4119,19 +4941,32 @@ async function play(streamId, name, reason = "user") {
     swapState()
   }
 
+  await mpvEmbeddedProbe
+  if (myRequest !== catchupRequestSeq) return
+
   let backend = getPlayerBackend()
-  const channelHeaders = streamHeadersById.get(streamId) || null
-  const channelDrm = streamDrmById.get(streamId) || null
+  if (
+    canSwapToMpvEmbedded(backend, mpvEmbeddedFixAvailable) &&
+    isMpvEmbeddedFixChannel(playlistId, String(streamId))
+  ) {
+    backend = "mpv-embedded"
+  }
+  // Persisted setting can name mpv-embedded even when mpv itself isn't available.
+  if (backend === "mpv-embedded" && !mpvEmbeddedFixAvailable) backend = "artplayer"
+  const channelHeaders = streamHeadersById.get(key) || null
+  const channelDrm = streamDrmById.get(key) || null
+  const tuneStartedAtMs = performance.now()
+  log.debug("[xt:livetv] tune start", `channel=${streamId} backend=${backend} container=${credsFor(playlistId).liveContainer || "m3u8"} mode=live external=${backend === "mpv" || backend === "vlc"}`)
 
   if (backend === "mpv" || backend === "vlc") {
     void stopAudioTranscode()
     try {
       await launchExternalLive(backend, src, channelHeaders)
       showExternalPlayerEmptyState(backend, name)
-      pushDiscordPresence(channel || { id: streamId, name }, "live")
+      pushDiscordPresence(channel, "live")
       externalPlaybackActive = true
       externalPlaybackKind = backend
-      paintEpgSidePanel(streamId)
+      paintEpgSidePanel(key)
       return
     } catch (err) {
       surfaceLaunchErrorFallback(err, backend, "[xt:livetv]")
@@ -4140,8 +4975,9 @@ async function play(streamId, name, reason = "user") {
   }
 
   resetEmptyState()
-  document.getElementById("player")?.removeAttribute("hidden")
-  if (channel?.isRadio || isAudioOnlyChannel(streamId)) {
+  // The mpv-embedded handle owns the element's hidden state; a native <video> must never show.
+  if (!isNativeVideoBackend(backend)) document.getElementById("player")?.removeAttribute("hidden")
+  if (channel?.isRadio || isAudioOnlyChannel(playlistId, streamId)) {
     // Both triggers hide the video element, so record which one fired - a stale
     // manual override is otherwise indistinguishable from a broken video track.
     log.info("[xt:livetv] starting in audio-only (radio) mode", {
@@ -4149,18 +4985,19 @@ async function play(streamId, name, reason = "user") {
       trigger: channel?.isRadio ? "playlist-radio-flag" : "manual-audio-only",
     })
     setRadioMode(
-      { id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
+      { id: streamId, playlistId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
       { probeIcy: !!channel?.isRadio }
     )
   } else {
     clearRadioMode()
   }
 
-  const wantsAudioProxyFix = audioProxyOneShotFixSet.has(streamId)
+  const wantsAudioProxyFix = audioProxyOneShotFixSet.has(key)
   const useAudioProxy =
+    !isNativeVideoBackend(backend) &&
     audioProxyAvailable &&
-    !audioProxyBypassSet.has(streamId) &&
-    (wantsAudioProxyFix || isAudioTranscodeChannel(activePlaylistId, String(streamId)))
+    !audioProxyBypassSet.has(key) &&
+    (wantsAudioProxyFix || isAudioTranscodeChannel(playlistId, String(streamId)))
 
   let mountSrc = src
   let mountMime = "application/x-mpegURL"
@@ -4170,7 +5007,7 @@ async function play(streamId, name, reason = "user") {
   if (useAudioProxy) {
     const proxyUserAgent = channelHeaders?.userAgent || getUserAgent() || null
     const proxySession = await startAudioTranscode(src, proxyUserAgent)
-    audioProxyOneShotFixSet.delete(streamId)
+    audioProxyOneShotFixSet.delete(key)
     if (myRequest !== catchupRequestSeq) {
       if (proxySession) void stopAudioTranscode(proxySession.sessionId)
       return
@@ -4182,14 +5019,17 @@ async function play(streamId, name, reason = "user") {
       audioProxySessionId = proxySession.sessionId
     } else {
       // Registration itself failed - retrying would just loop the watchdog forever. Bypass the proxy for this channel this session.
-      audioProxyBypassSet.add(streamId)
+      audioProxyBypassSet.add(key)
       void stopAudioTranscode()
     }
   } else {
     void stopAudioTranscode()
   }
 
-  const player = await ensureEmbeddedPlayer(backend)
+  const player = await ensureEmbeddedPlayer(backend, {
+    userAgent: channelHeaders?.userAgent || getUserAgent() || null,
+    referer: channelHeaders?.referer || null,
+  })
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
   if (myRequest !== catchupRequestSeq) {
     return
@@ -4203,10 +5043,15 @@ async function play(streamId, name, reason = "user") {
   const seq = ++playSeq
   lastPlayContext = {
     streamId,
+    playlistId,
+    channelKey: key,
+    channel,
     name,
     src: mountSrc,
     seq,
     retried: false,
+    rejectionRetries: 0,
+    rejectionRetryTimer: null,
     started: false,
     nativeFallbackTried: false,
     audioClockWedge: false,
@@ -4214,6 +5059,11 @@ async function play(streamId, name, reason = "user") {
     isLive: true,
     audioProxied,
     audioProxySessionId,
+    mirrorHops: 0,
+    mirrorEntryId: channel?.sourceEntryId ?? null,
+    mirrorStreamId: channel?.sourceStreamId ?? null,
+    drm: audioProxied ? null : channelDrm,
+    startedAtMs: tuneStartedAtMs,
   }
   // An "auto:*" reason is a recovery re-invocation of the same tune, not a new one - keep it in the same session.
   if (isAutomaticRetuneReason(reason)) {
@@ -4230,8 +5080,10 @@ async function play(streamId, name, reason = "user") {
     player.src({
       src: mountSrc,
       type: mountMime,
+      isLive: true,
       drm: audioProxied ? null : channelDrm,
-      preferNativeHls: isNativeHlsFallbackChannel(streamId),
+      preferNativeHls: isNativeHlsFallbackChannel(playlistId, streamId),
+      title: name,
     })
   } catch {}
   const playResult = player.play?.()
@@ -4242,11 +5094,11 @@ async function play(streamId, name, reason = "user") {
       const errorName = err?.name || String(err)
       const write = errorName === "AbortError" ? log.debug : log.info
       write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
-      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      const mediaEl = mediaElementOf(player)
       if (!mediaEl) return
       const resume = () => {
         mediaEl.removeEventListener("canplay", resume)
-        if (lastPlayContext?.streamId !== streamId) return
+        if (lastPlayContext?.channelKey !== key) return
         try {
           void player.play?.()?.catch?.((retryErr) => {
             log.warn("[xt:livetv] retry play() rejected", { streamId, error: retryErr?.name || String(retryErr) })
@@ -4259,11 +5111,11 @@ async function play(streamId, name, reason = "user") {
   }
   armStartWedgeWatch()
   applyVideoScale()
-  pushDiscordPresence(channel || { id: streamId, name }, "live")
+  pushDiscordPresence(channel, "live")
   externalPlaybackActive = false
   externalPlaybackKind = null
 
-  paintEpgSidePanel(streamId)
+  paintEpgSidePanel(key)
 }
 
 // ----------------------------
@@ -4318,15 +5170,15 @@ function renderCatchupCurrentRow(channel, title) {
 function backToLive(channel) {
   hideTimeshiftChip()
   // Already tuned live on this channel (no shifted session) - avoid a pointless remount.
-  if (!catchupSession && currentlyPlayingId === channel.id) return
-  play(channel.id, channel.name || "")
+  if (!catchupSession && currentlyPlayingId === channelKey(channel)) return
+  play(channel)
 }
 
 /** Re-mounts the active session at the current playhead (archive URLs embed timestamps, so a stale src must not be replayed); automatic callers are capped, manual retry resets the budget. */
 function retryCatchupSession(ctx, opts = {}) {
   const session = catchupSession
-  if (!session || session.channelId !== ctx.streamId) return false
-  const channel = all.find((entry) => entry.id === session.channelId)
+  if (!session || session.channelId !== ctx.channelKey) return false
+  const channel = findChannel(session.channelId)
   if (!channel) return false
   if (opts.automatic) {
     if (catchupAutoRetryCount >= CATCHUP_MAX_AUTO_RETRIES) return false
@@ -4354,14 +5206,11 @@ function retryCatchupSession(ctx, opts = {}) {
 
 /** Programme title under the playhead at `atUtcMs`, from XMLTV or the cached Xtream full table; "" when EPG data is missing. */
 function resolveProgrammeTitleAt(channel, atUtcMs) {
-  if (!channel || !activePlaylistId) return ""
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (tvgId) {
-    const state = getProgrammesSync(activePlaylistId)
-    const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
-    const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
-    if (current?.title) return current.title
-  }
+  if (!channel?.playlistId) return ""
+  const state = getProgrammesSync(channel.playlistId)
+  const displayedAtMs = utcToDisplayedMs(channel.playlistId, atUtcMs)
+  const { current } = getNowNextForChannel(state?.programmes, channel, channel.playlistId, displayedAtMs)
+  if (current?.title) return current.title
   const xtreamEntries = peekXtreamFullEpgCache(channel)
   const listing = xtreamEntries?.find((entry) => entry.startUtcMs <= atUtcMs && atUtcMs < entry.stopUtcMs)
   return listing?.title || ""
@@ -4369,28 +5218,23 @@ function resolveProgrammeTitleAt(channel, atUtcMs) {
 
 /** Programme `catchup-id` under the playhead at `atUtcMs`, or null when EPG data or the field is missing. */
 function resolveProgrammeCatchupIdAt(channel, atUtcMs) {
-  if (!channel || !activePlaylistId) return null
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (!tvgId) return null
-  const state = getProgrammesSync(activePlaylistId)
-  const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
-  const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
+  if (!channel?.playlistId) return null
+  const state = getProgrammesSync(channel.playlistId)
+  const displayedAtMs = utcToDisplayedMs(channel.playlistId, atUtcMs)
+  const { current } = getNowNextForChannel(state?.programmes, channel, channel.playlistId, displayedAtMs)
   return current?.catchupId || null
 }
 
-/** Programme window under the playhead at `atUtcMs`, from XMLTV or the cached Xtream full table; null when EPG data is missing. */
+/** Programme window at atUtcMs, from XMLTV (raw) or the cached Xtream full table; null when missing. */
 function resolveProgrammeWindowAt(channel, atUtcMs) {
-  if (!channel || !activePlaylistId) return null
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (tvgId) {
-    const state = getProgrammesSync(activePlaylistId)
-    const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
-    const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
-    if (current) {
-      return {
-        startUtcMs: displayedToUtcMs(activePlaylistId, current.start),
-        stopUtcMs: displayedToUtcMs(activePlaylistId, current.stop),
-      }
+  if (!channel?.playlistId) return null
+  const state = getProgrammesSync(channel.playlistId)
+  const displayedAtMs = utcToDisplayedMs(channel.playlistId, atUtcMs)
+  const { current } = getNowNextForChannel(state?.programmes, channel, channel.playlistId, displayedAtMs)
+  if (current) {
+    return {
+      startUtcMs: displayedToUtcMs(channel.playlistId, current.rawStart ?? current.start),
+      stopUtcMs: displayedToUtcMs(channel.playlistId, current.rawStop ?? current.stop),
     }
   }
   const xtreamEntries = peekXtreamFullEpgCache(channel)
@@ -4400,7 +5244,7 @@ function resolveProgrammeWindowAt(channel, atUtcMs) {
 
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
-  if (!currentEl || !channel || !activePlaylistId) return false
+  if (!currentEl || !channel?.playlistId) return false
   if (channel.unresolved) {
     toastError(t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }), {
       description: t("stream.error.checkConnection"),
@@ -4410,7 +5254,7 @@ async function playCatchup(channel, opts) {
   // Reachable via a stale/hand-crafted deep link - the channel itself may no longer offer catch-up.
   if (!channelSupportsCatchup(channel)) {
     toastError(t("catchup.notAvailable"))
-    void play(channel.id, channel.name)
+    void play(channel)
     return false
   }
   const { startUtcMs, stopUtcMs, seekSeconds = 0, kind = "programme" } = opts || {}
@@ -4429,12 +5273,12 @@ async function playCatchup(channel, opts) {
       contentTitle: title || channel.name || null,
       quiet: true,
       stopLocal: releaseLocalPlaybackForHandoff,
-      liveContext: liveContextForChannelId(channel.id),
+      liveContext: liveContextForChannel(channel),
       holdsProviderConnection: true,
       buildDescriptor: async () => {
         const descriptor = await resolveCatchupCastDescriptor({
-          playlistId: activePlaylistId,
-          creds,
+          playlistId: channel.playlistId,
+          creds: credsFor(channel.playlistId),
           channel,
           startUtcMs,
           stopUtcMs,
@@ -4446,14 +5290,14 @@ async function playCatchup(channel, opts) {
           seekSeconds,
           title: title || channel.name || "",
           logo: channel.logo || undefined,
-          headers: streamHeadersById.get(channel.id) || undefined,
+          headers: streamHeadersById.get(channelKey(channel)) || undefined,
         })
         // A newer play()/playCatchup() call took over while the descriptor was resolving - superseded, not failed.
         if (requestSeq !== catchupRequestSeq) return CAST_SUPERSEDED
         return descriptor
       },
     })
-    if (routed && requestSeq === catchupRequestSeq) setNowPlaying(channel.id)
+    if (routed && requestSeq === catchupRequestSeq) setNowPlaying(channelKey(channel))
     return routed
   }
 
@@ -4465,6 +5309,8 @@ async function playCatchup(channel, opts) {
   }
 
   const backend = getPlayerBackend()
+  const catchupTuneStartedAtMs = performance.now()
+  log.debug("[xt:livetv] tune start", `channel=${channel.id} backend=${backend} mode=catchup kind=${kind} external=${backend === "mpv" || backend === "vlc"}`)
   if (backend === "mpv" || backend === "vlc") {
     toastError(kind === "timeshift" ? t("timeshift.seekFailed") : t("catchup.failed"))
     return false
@@ -4476,7 +5322,7 @@ async function playCatchup(channel, opts) {
   clearRadioMode()
 
   // A different channel (or no active session) is a fresh pick, not a same-session remount/auto-advance - don't let stale strikes leak in.
-  if (!catchupSession || catchupSession.channelId !== channel.id) {
+  if (!catchupSession || catchupSession.channelId !== channelKey(channel)) {
     catchupLastEndedAbsUtcMs = null
     catchupConsecutiveShortAdvances = 0
   }
@@ -4489,7 +5335,7 @@ async function playCatchup(channel, opts) {
   // wire formats) - give the same tuning feedback the live path shows.
   showTuningOverlay(channel.logo ? safeHttpUrl(channel.logo) : null, CATCHUP_TUNING_MAX_MS)
 
-  const resolution = await resolveCatchupSrc(activePlaylistId, creds, {
+  const resolution = await resolveCatchupSrc(channel.playlistId, credsFor(channel.playlistId), {
     channel,
     startUtcMs,
     stopUtcMs,
@@ -4523,9 +5369,14 @@ async function playCatchup(channel, opts) {
   const timelineStopUtcMs = timeline.timelineStopUtcMs
 
   resetEmptyState()
-  document.getElementById("player")?.removeAttribute("hidden")
+  if (!isNativeVideoBackend(backend)) document.getElementById("player")?.removeAttribute("hidden")
 
-  const player = await ensureEmbeddedPlayer(backend, { liveui: false })
+  const channelHeaders = streamHeadersById.get(channelKey(channel)) || null
+  const player = await ensureEmbeddedPlayer(backend, {
+    liveui: false,
+    userAgent: channelHeaders?.userAgent || getUserAgent() || null,
+    referer: channelHeaders?.referer || null,
+  })
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
   if (requestSeq !== catchupRequestSeq) {
     return false
@@ -4540,11 +5391,11 @@ async function playCatchup(channel, opts) {
   hideTimeshiftChip()
   timeshiftChipLastUpdateAt = 0
 
-  pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
-  setNowPlaying(channel.id)
+  pushRecent(channel.playlistId, "live", channel.id, channel.name, channel.logo || null)
+  setNowPlaying(channelKey(channel))
   catchupSession = {
     kind,
-    channelId: channel.id,
+    channelId: channelKey(channel),
     channelName: channel.name || "",
     title,
     startUtcMs,
@@ -4556,22 +5407,30 @@ async function playCatchup(channel, opts) {
     profile: resolution.profile,
   }
   renderCatchupCurrentRow(channel, title)
-  paintEpgSidePanel(channel.id)
+  paintEpgSidePanel(channelKey(channel))
 
   const seq = ++playSeq
   const mime = catchupMimeForKindHint(resolution.kindHint)
   lastPlayContext = {
     streamId: channel.id,
+    playlistId: channel.playlistId,
+    channelKey: channelKey(channel),
+    channel,
     name: channel.name,
     src: resolution.src,
     seq,
     retried: false,
+    rejectionRetries: 0,
+    rejectionRetryTimer: null,
     started: false,
     // Skip the Android native-handoff escape hatch for catch-up sessions.
     nativeFallbackTried: true,
     audioClockWedge: false,
     mime,
     isLive: false,
+    mirrorEntryId: null,
+    mirrorStreamId: null,
+    startedAtMs: catchupTuneStartedAtMs,
   }
   getPlayerInsights().startSession({ label: channel.name, seq })
   hideBufferingChip()
@@ -4670,6 +5529,7 @@ async function playCatchup(channel, opts) {
     isLive: false,
     durationSeconds: timelineSpanSeconds,
     timelineOffsetSeconds,
+    title: title || channel.name,
   })
   attachCatchupSeekInterceptor(player, seq)
   armLiveEdgeTracking(channel)
@@ -4680,15 +5540,15 @@ async function playCatchup(channel, opts) {
       // AbortError is the expected remount-vs-autoplay race, so it stays out of the log file.
       const errorName = err?.name || String(err)
       const write = errorName === "AbortError" ? log.debug : log.info
-      write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
-      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId: channel.id, error: errorName })
+      const mediaEl = mediaElementOf(player)
       if (!mediaEl) return
       const resume = () => {
         mediaEl.removeEventListener("canplay", resume)
-        if (lastPlayContext?.streamId !== streamId) return
+        if (lastPlayContext?.channelKey !== channelKey(channel)) return
         try {
           void player.play?.()?.catch?.((retryErr) => {
-            log.warn("[xt:livetv] retry play() rejected", { streamId, error: retryErr?.name || String(retryErr) })
+            log.warn("[xt:livetv] retry play() rejected", { streamId: channel.id, error: retryErr?.name || String(retryErr) })
           })
         } catch {}
       }
@@ -4712,7 +5572,7 @@ function attachCatchupSeekInterceptor(player, seq) {
     catchupSeekingEl = null
     catchupSeekingHandler = null
   }
-  const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+  const mediaEl = mediaElementOf(player)
   if (!mediaEl) return
   catchupSeekingHandler = () => {
     if (seq !== playSeq || !catchupSession) return
@@ -4800,8 +5660,7 @@ function provisionalStreamProfile(channel): StreamProfile {
 
 /** Committed timeshift seek: clamp against the archive window, take the buffered fast-path when possible, otherwise remount via playCatchup. */
 async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
-  const channelId = catchupSession?.channelId ?? currentlyPlayingId
-  const channel = all.find((entry) => entry.id === channelId)
+  const channel = findChannel(catchupSession?.channelId ?? currentlyPlayingId)
   if (!channel) return
 
   const profile = catchupSession?.profile ?? provisionalStreamProfile(channel)
@@ -4819,13 +5678,25 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
   }
 
   // forceRemount: resume-after-long-pause must rebuild the connection even when the paused position still sits at a buffered edge.
-  if (!seekOpts.forceRemount && catchupSession && catchupSession.channelId === channel.id && vjs) {
-    const videoEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+  if (!seekOpts.forceRemount && catchupSession && catchupSession.channelId === channelKey(channel) && vjs) {
+    const videoEl = mediaElementOf(vjs)
     const buffered = videoEl?.buffered
+    const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000
     if (buffered) {
-      const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000
       for (let i = 0; i < buffered.length; i++) {
         if (relSeconds >= buffered.start(i) - 1 && relSeconds <= buffered.end(i) + 1) {
+          markProgrammaticCatchupSeek()
+          try { vjs.currentTime(Math.max(0, relSeconds)) } catch {}
+          return
+        }
+      }
+    } else if (typeof vjs.engineStats === "function") {
+      // No <video> element to read .buffered from (e.g. mpv-embedded) - derive the buffered window from engine stats instead.
+      const stats = vjs.engineStats()
+      if (stats && typeof stats.bufferedAheadSeconds === "number") {
+        const currentTimeSeconds = vjs.currentTime?.() || 0
+        const bufferedEndSeconds = currentTimeSeconds + stats.bufferedAheadSeconds
+        if (relSeconds >= currentTimeSeconds - 1 && relSeconds <= bufferedEndSeconds + 1) {
           markProgrammaticCatchupSeek()
           try { vjs.currentTime(Math.max(0, relSeconds)) } catch {}
           return
@@ -4842,7 +5713,7 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
   const withinProgrammeReplay =
     catchupSession &&
     catchupSession.kind === "programme" &&
-    catchupSession.channelId === channel.id &&
+    catchupSession.channelId === channelKey(channel) &&
     remountTargetUtcMs < catchupSession.stopUtcMs
   if (withinProgrammeReplay) {
     void playCatchup(channel, {
@@ -4871,7 +5742,7 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
   })
 }
 
-async function openDisplayModeDialog(streamId) {
+async function openDisplayModeDialog(channel) {
   const currentMode = resolveVideoScaleMode()
   const result = await openVideoScaleDialog({
     currentMode,
@@ -4880,20 +5751,20 @@ async function openDisplayModeDialog(streamId) {
   applyVideoScale()
   if (!result) return
   if (result.applyToAll) {
-    if (activePlaylistId) clearAllVideoScaleOverrides(activePlaylistId, "live")
+    for (const playlistId of mergedPlaylistIds) clearAllVideoScaleOverrides(playlistId, "live")
     setVideoScale(result.mode)
     toast({
       title: t("stream.scale.toastAllChannels", { mode: t(videoScaleModeLabelKey(result.mode)) }),
       duration: 2200,
     })
-  } else if (activePlaylistId) {
-    setVideoScaleOverride(activePlaylistId, "live", streamId, result.mode)
+  } else if (channel.playlistId) {
+    setVideoScaleOverride(channel.playlistId, "live", channel.id, result.mode)
   }
 }
 
 let liveExternalBtnHandle: ExternalPlayerButtonHandle | null = null
 
-function appendExternalLaunchButton(parent, streamId, src, name) {
+function appendExternalLaunchButton(parent, channel, src, name) {
   liveExternalBtnHandle?.dispose()
   liveExternalBtnHandle = null
 
@@ -4920,7 +5791,7 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
   liveExternalBtnHandle = setupExternalPlayerButton(btn, {
     getSrc: () => src,
     getHeaders: () => {
-      const channelHeaders = streamHeadersById.get(streamId) || null
+      const channelHeaders = streamHeadersById.get(channelKey(channel)) || null
       return {
         userAgent: channelHeaders?.userAgent || getUserAgent() || null,
         referer: channelHeaders?.referer || null,
@@ -4935,11 +5806,10 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
       releaseLocalPlaybackForHandoff()
     },
     restoreLocal: () => {
-      play(streamId, name, "user")
+      play(channel, "user")
     },
     afterLaunch: (kind) => {
-      const channel = all.find((entry) => entry.id === streamId)
-      pushDiscordPresence(channel || { id: streamId, name }, "live")
+      pushDiscordPresence(channel, "live")
       externalPlaybackActive = true
       externalPlaybackKind = kind
       // The embedded surface is empty now; show the "Now playing in <PLAYER>" state instead.
@@ -5004,14 +5874,14 @@ async function launchExternalLive(backend, src, channelHeaders) {
   const launcher = getExternalLauncher(backend)
   const ua = channelHeaders?.userAgent || getUserAgent() || null
   const referer = channelHeaders?.referer || null
-  log.log(`[xt:livetv] external launch backend=${backend} url=${redactUrl(src)}`)
+  log.info(`[xt:livetv] external launch backend=${backend} url=${redactUrl(src)}`)
   toast({
     title: t("settings.playback.launching", { player: backend.toUpperCase() })
       || `Launching ${backend.toUpperCase()}…`,
     duration: 2000,
   })
-  const result = await launcher.launch(src, { userAgent: ua, referer })
-  log.log(
+  const result = await launcher.launch(src, { userAgent: ua, referer, isLive: true })
+  log.info(
     `[xt:livetv] external launch result backend=${backend} pid=${result?.pid} reused=${result?.reused}`
   )
 }
@@ -5040,6 +5910,8 @@ let epgListChannelId = 0
 let epgListChannelName = ""
 // Number of EPG_SIDE_PANEL_PAST_WINDOW_MS pages currently shown; grows via the "Load earlier" button.
 let epgSidePanelPastPages = 1
+// Number of EPG_SIDE_PANEL_UPCOMING_PAGE_SIZE pages currently shown; grows via the "Load later" button.
+let epgSidePanelUpcomingPages = 1
 let epgSidePanelExtending = false
 
 const epgDayKey = (ms) => new Date(ms).toDateString()
@@ -5096,122 +5968,44 @@ epgPanel?.addEventListener(
 )
 
 /** Whether the entry starting at `entryStartMs` is the one actually mounted right now, accounting for an active catch-up/timeshift session. */
-function isEpgEntryPlaying(entryStartMs, entryStopMs, isLive, isM3uSource) {
+function isEpgEntryPlaying(entryStartMs, entryStopMs, isLive, timesAreDisplayed) {
   if (catchupSession) {
     if (catchupSession.channelId !== epgListChannelId) return false
-    const entryStartUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStartMs) : entryStartMs
-    const entryStopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStopMs) : entryStopMs
+    const panelPlaylistId = findChannel(epgListChannelId)?.playlistId || activePlaylistId
+    const entryStartUtcMs = timesAreDisplayed ? displayedToUtcMs(panelPlaylistId, entryStartMs) : entryStartMs
+    const entryStopUtcMs = timesAreDisplayed ? displayedToUtcMs(panelPlaylistId, entryStopMs) : entryStopMs
     return entryStartUtcMs <= catchupSession.startUtcMs && catchupSession.startUtcMs < entryStopUtcMs
   }
   return isLive && currentlyPlayingId === epgListChannelId
 }
 
-async function loadEPG(streamId) {
-  if (!epgList) return
-  epgList.innerHTML = `<div class="text-fg-3">Loading EPG…</div>`
-  epgListData = []
-  if (epgDayIndicator) epgDayIndicator.textContent = ""
-  epgListChannelId = streamId
-  epgListChannelName = all.find((c) => c.id === streamId)?.name || ""
-  try {
-    const r = await xtreamApiFetch("get_short_epg", {
-      stream_id: String(streamId),
-      limit: "10",
-    })
-    if (!r.ok) throw new Error(await r.text())
-    const data = await r.json()
-
-    const items = Array.isArray(data?.epg_listings)
-      ? data.epg_listings
-      : Array.isArray(data)
-      ? data
-      : []
-    if (!items.length) {
-      epgList.innerHTML = `<div class="text-fg-3">No EPG available.</div>`
-      if (epgDayIndicator) epgDayIndicator.textContent = ""
-      return
-    }
-
-    const now = Date.now()
-    epgListData = items
-      .map((it) => ({
-        start: Number(it.start_timestamp || it.start) * 1000,
-        stop: Number(it.stop_timestamp || it.end) * 1000,
-        title: maybeB64ToUtf8(it.title || it.title_raw || t("programme.untitled")),
-        desc: maybeB64ToUtf8(it.description || it.description_raw || ""),
-      }))
-      .filter((p) => Number.isFinite(p.start) && Number.isFinite(p.stop) && p.stop > p.start)
-
-    let previousDayKey = epgDayKey(now)
-    epgList.innerHTML = epgListData
-      .map((p, idx) => {
-        const isLive = p.start <= now && now < p.stop
-        const isPlaying = isEpgEntryPlaying(p.start, p.stop, isLive, false)
-        const start = fmtTime(p.start / 1000)
-        const end = fmtTime(p.stop / 1000)
-        const title = escapeHtml(p.title)
-        const desc = escapeHtml(p.desc)
-        const dayKey = epgDayKey(p.start)
-        const daySeparator = dayKey !== previousDayKey ? renderEpgDaySeparator(p.start) : ""
-        previousDayKey = dayKey
-        const rowClass = isPlaying
-          ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20"
-          : isLive
-          ? "bg-surface-2 hover:bg-surface-3 ring-1 ring-accent/30"
-          : "bg-surface-2 hover:bg-surface-3"
-        const dot = isLive
-          ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-hidden="true"></span>'
-          : ""
-        return `
-          ${daySeparator}
-          <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
-            class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
-                   ${rowClass}
-                   focus-visible:ring-1 focus-visible:ring-accent">
-            <div class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-2 min-w-0">
-                ${dot}
-                <div class="font-medium text-fg truncate">${title}</div>
-              </div>
-              <div class="text-xs text-fg-3 tabular-nums shrink-0">${start}–${end}</div>
-            </div>
-            ${desc ? `<div class="mt-1 text-sm text-fg-2 leading-relaxed line-clamp-3">${desc}</div>` : ""}
-          </button>`
-      })
-      .join("")
-    updateEpgDayIndicator()
-  } catch (e) {
-    // A channel switch aborts this fetch mid-body; that's expected, not a failure to report.
-    if (epgListChannelId !== streamId) {
-      log.warn("[xt:livetv] short-EPG fetch superseded by a newer channel", { streamId, error: e })
-      return
-    }
-    log.error("[xt:livetv] short-EPG fetch failed", { streamId, error: e })
-    epgList.innerHTML = `<div class="text-bad">Failed to load EPG.</div>`
-    if (epgDayIndicator) epgDayIndicator.textContent = ""
-  }
-}
-
-/** Splits a sorted programme array into the upcoming slice (next 10) and a past slice sized by `pastPages` (page 1 shows the 8 most recent, "Load earlier" pages grow the window). */
-function computeEpgSidePanelWindow(programmes, pastPages, supportsCatchup) {
+/** Splits programmes into a past slice, an upcoming slice, and whether more past/upcoming remain, paged by pastPages/upcomingPages. */
+function computeEpgSidePanelWindow(programmes, pastPages, upcomingPages) {
   const now = Date.now()
-  const upcoming = programmes.filter((programme) => programme.stop >= now).slice(0, 10)
+  const upcomingAll = programmes.filter((programme) => programme.stop >= now)
+  const upcomingLimit = upcomingPages * EPG_SIDE_PANEL_UPCOMING_PAGE_SIZE
+  const upcoming = upcomingAll.slice(0, upcomingLimit)
+  const hasMoreUpcoming = upcomingAll.length > upcomingLimit
   const pastWindowMs = pastPages * EPG_SIDE_PANEL_PAST_WINDOW_MS
-  const pastWithinWindow = supportsCatchup
-    ? programmes.filter((programme) => programme.stop < now && now - programme.stop <= pastWindowMs)
-    : []
+  const pastAll = programmes.filter((programme) => programme.stop < now)
+  const pastWithinWindow = pastAll.filter((programme) => now - programme.stop <= pastWindowMs)
   const past = pastPages > 1 ? pastWithinWindow : pastWithinWindow.slice(-8)
-  return { past, upcoming }
+  const hasMorePast = pastAll.length > past.length
+  return { past, upcoming, hasMoreUpcoming, hasMorePast }
 }
 
-/** Shared side-panel renderer for past + upcoming rows; isM3uSource marks entry times as display-shifted XMLTV rather than true UTC. */
-function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, isNewChannelPaint }) {
+/** Shared side-panel renderer for past + upcoming rows; timesAreDisplayed marks entry times as display-shifted rather than raw provider UTC. */
+function renderEpgSidePanelRows(past, upcoming, { timesAreDisplayed, canLoadEarlier, canLoadLater, isNewChannelPaint, channel }) {
   const combined = [...past, ...upcoming]
   epgListData = combined
   const now = Date.now()
   const loadEarlierHtml = canLoadEarlier
     ? `<button type="button" data-epg-load-earlier
          class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-1 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadEarlier"))}</button>`
+    : ""
+  const loadLaterHtml = canLoadLater
+    ? `<button type="button" data-epg-load-later
+         class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-1 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadLater"))}</button>`
     : ""
 
   let previousDayKey = epgDayKey(now)
@@ -5220,7 +6014,12 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
   const rowsHtml = combined
     .map((programme, idx) => {
       const isLive = programme.start <= now && now < programme.stop
-      const isPlaying = isEpgEntryPlaying(programme.start, programme.stop, isLive, isM3uSource)
+      const isPlaying = isEpgEntryPlaying(
+        programme.rawStart ?? programme.start,
+        programme.rawStop ?? programme.stop,
+        isLive,
+        timesAreDisplayed,
+      )
       if (isPlaying) playingIndex = idx
       if (isLive) liveIndex = idx
       const isPast = programme.stop <= now
@@ -5230,7 +6029,13 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
       const desc = escapeHtml(programme.desc)
       // has_archive narrows the badge/playability when the provider sends it; missing/null means "trust the channel-level catch-up window".
       const archiveKnownPlayable = programme.hasArchive == null ? true : programme.hasArchive
-      const replayBadge = isPast && archiveKnownPlayable
+      const canReplay =
+        isPast &&
+        archiveKnownPlayable &&
+        channel != null &&
+        channelSupportsCatchup(channel) &&
+        isCatchupPlayable(channel, programme.rawStart ?? programme.start, now)
+      const replayBadge = canReplay
         ? `<span class="inline-flex shrink-0 items-center rounded-md border border-line bg-surface-2 px-1.5 text-2xs font-medium text-fg-3">${escapeHtml(t("catchup.badge"))}</span>`
         : ""
       const dayKey = epgDayKey(programme.start)
@@ -5262,7 +6067,7 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
         </button>`
     })
     .join("")
-  epgList.innerHTML = loadEarlierHtml + rowsHtml
+  epgList.innerHTML = loadEarlierHtml + rowsHtml + loadLaterHtml
 
   // Fresh channel tune lands the panel on the playing/live/upcoming entry; same-channel repaints keep position.
   if (isNewChannelPaint && epgPanel) {
@@ -5279,21 +6084,24 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
   updateEpgDayIndicator()
 }
 
-/** M3U variant of loadEPG: renders the channel's XMLTV programmes (via effective tvg-id) through the shared renderer. */
+/** M3U side panel: renders the channel's XMLTV programmes (via effective tvg-id) through the shared renderer. */
 function paintSidePanelFromXmltv(streamId) {
   if (!epgList) return
-  const channel = all.find((entry) => entry.id === streamId)
+  const channel = findChannel(streamId)
   if (!channel) {
     epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
   const isNewChannelPaint = streamId !== epgListChannelId
-  if (isNewChannelPaint) epgSidePanelPastPages = 1
+  if (isNewChannelPaint) {
+    epgSidePanelPastPages = 1
+    epgSidePanelUpcomingPages = 1
+  }
   epgListChannelId = streamId
   epgListChannelName = channel.name || ""
 
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
+  const tvgId = effectiveTvgId(channel, channel.playlistId)
   if (!tvgId) {
     epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelNoMapping"))}</div>`
     epgListData = []
@@ -5301,7 +6109,7 @@ function paintSidePanelFromXmltv(streamId) {
     return
   }
 
-  const state = getProgrammesSync(activePlaylistId)
+  const state = getProgrammesSync(channel.playlistId)
   // rawStart/rawStop let the catch-up handler below recover true XMLTV time, bypassing tvg-shift.
   const programmes = shiftChannelProgrammes(state?.programmes?.get(tvgId) || [], channel.tvgShift)
   if (!programmes.length) {
@@ -5311,8 +6119,11 @@ function paintSidePanelFromXmltv(streamId) {
     return
   }
 
-  const supportsCatchup = channelSupportsCatchup(channel)
-  const { past, upcoming } = computeEpgSidePanelWindow(programmes, epgSidePanelPastPages, supportsCatchup)
+  const { past, upcoming, hasMoreUpcoming, hasMorePast } = computeEpgSidePanelWindow(
+    programmes,
+    epgSidePanelPastPages,
+    epgSidePanelUpcomingPages,
+  )
   if (!past.length && !upcoming.length) {
     epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     epgListData = []
@@ -5320,9 +6131,14 @@ function paintSidePanelFromXmltv(streamId) {
     return
   }
 
-  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
-  const canLoadEarlier = supportsCatchup && epgSidePanelPastPages < maxPastPages
-  renderEpgSidePanelRows(past, upcoming, { isM3uSource: true, canLoadEarlier, isNewChannelPaint })
+  const canLoadEarlier = hasMorePast && epgSidePanelPastPages < EPG_SIDE_PANEL_MAX_PAST_DAYS
+  renderEpgSidePanelRows(past, upcoming, {
+    timesAreDisplayed: true,
+    canLoadEarlier,
+    canLoadLater: hasMoreUpcoming,
+    isNewChannelPaint,
+    channel,
+  })
 }
 
 // ----------------------------
@@ -5352,10 +6168,10 @@ function normalizeXtreamFullEpgListings(listings) {
     .sort((a, b) => a.startUtcMs - b.startUtcMs)
 }
 
-async function fetchXtreamFullEpgAction(action, streamId) {
+async function fetchXtreamFullEpgAction(action, channel) {
   // Never throw: a 2xx non-JSON body for the first action spelling must still let the fallback spelling run.
   try {
-    const response = await xtreamApiFetch(action, { stream_id: String(streamId) })
+    const response = await xtreamApiFetch(action, { stream_id: String(channel.id) }, { entryId: channel.playlistId })
     if (!response.ok) return null
     const data = await response.json()
     const listings = Array.isArray(data?.epg_listings) ? data.epg_listings : []
@@ -5365,26 +6181,27 @@ async function fetchXtreamFullEpgAction(action, streamId) {
   }
 }
 
-/** Fresh cached full-table entries, or null (used to skip the loading placeholder on remount repaints). */
+/** Fresh cached full-table entries (raw provider UTC), or null (used to skip the loading placeholder on remount repaints). */
 function peekXtreamFullEpgCache(channel) {
-  const cached = xtreamFullEpgCache.get(`${activePlaylistId}:${channel.id}`)
+  const cached = xtreamFullEpgCache.get(`${channel.playlistId}:${channel.id}`)
   return cached && Date.now() - cached.at < XTREAM_FULL_EPG_CACHE_TTL_MS ? cached.entries : null
 }
 
-/** Full-table Xtream EPG (`get_simple_date_table`, falling back to the `get_simple_data_table` spelling), windowed and cached per playlist+channel. */
+/** Full-table Xtream EPG (`get_simple_date_table`, falling back to the `get_simple_data_table` spelling), windowed and cached per playlist+channel. Cached entries stay in raw provider UTC so an offset change can re-render without a refetch. */
 async function fetchXtreamFullEpg(channel) {
-  const cacheKey = `${activePlaylistId}:${channel.id}`
+  const cacheKey = `${channel.playlistId}:${channel.id}`
   const cached = xtreamFullEpgCache.get(cacheKey)
   if (cached && Date.now() - cached.at < XTREAM_FULL_EPG_CACHE_TTL_MS) return cached.entries
   try {
     const listings =
-      (await fetchXtreamFullEpgAction("get_simple_date_table", channel.id)) ||
-      (await fetchXtreamFullEpgAction("get_simple_data_table", channel.id))
+      (await fetchXtreamFullEpgAction("get_simple_date_table", channel)) ||
+      (await fetchXtreamFullEpgAction("get_simple_data_table", channel))
     if (!listings) return null
     const normalized = normalizeXtreamFullEpgListings(listings)
     const now = Date.now()
-    const windowStartMs = now - catchupWindowDays(channel) * 24 * 60 * 60 * 1000
-    const windowEndMs = now + 36 * 60 * 60 * 1000
+    // Bounds shifted into raw provider space to match the cached entries; badges narrow real playability separately.
+    const windowStartMs = displayedToUtcMs(channel.playlistId, now - EPG_SIDE_PANEL_MAX_PAST_DAYS * 24 * 60 * 60 * 1000)
+    const windowEndMs = displayedToUtcMs(channel.playlistId, now + 36 * 60 * 60 * 1000)
     const windowed = normalized.filter(
       (entry) => entry.startUtcMs >= windowStartMs && entry.startUtcMs <= windowEndMs
     )
@@ -5399,34 +6216,81 @@ async function fetchXtreamFullEpg(channel) {
   }
 }
 
-/** Maps cached full-table listings to the {start, stop, title, desc, hasArchive} shape renderEpgSidePanelRows expects. */
-function xtreamListingsToProgrammes(listings) {
+/** Maps cached full-table listings (raw provider UTC) to the {start, stop, title, desc, hasArchive} shape renderEpgSidePanelRows expects, shifted into display space. */
+function xtreamListingsToProgrammes(listings, playlistId) {
   return listings.map((listing) => ({
-    start: listing.startUtcMs,
-    stop: listing.stopUtcMs,
+    start: utcToDisplayedMs(playlistId, listing.startUtcMs),
+    stop: utcToDisplayedMs(playlistId, listing.stopUtcMs),
     title: listing.title,
     desc: listing.description,
     hasArchive: listing.hasArchive,
   }))
 }
 
-function renderXtreamEpgEntries(channel, programmes, isNewChannelPaint) {
-  const { past, upcoming } = computeEpgSidePanelWindow(programmes, epgSidePanelPastPages, true)
-  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
-  const canLoadEarlier = epgSidePanelPastPages < maxPastPages
-  renderEpgSidePanelRows(past, upcoming, { isM3uSource: false, canLoadEarlier, isNewChannelPaint })
+/** Same XMLTV lookup as paintSidePanelFromXmltv (effective tvg-id + tvg-shift), used to fill the gaps some providers leave in the Xtream full table. */
+function xtreamChannelXmltvProgrammes(channel) {
+  const tvgId = effectiveTvgId(channel, channel.playlistId)
+  if (!tvgId) return []
+  const state = getProgrammesSync(channel.playlistId)
+  return shiftChannelProgrammes(state?.programmes?.get(tvgId) || [], channel.tvgShift)
 }
 
-/** Xtream variant of paintSidePanelFromXmltv: fetches the full EPG table for catch-up-capable channels; falls back to loadEPG's short list when the table is unavailable. */
+/** Merges full-table and XMLTV programmes; XMLTV gap-fill rows inside the table's covered span are marked non-archived. */
+function mergeSidePanelProgrammes(fullTableProgrammes, xmltvProgrammes) {
+  const DEDUPE_WINDOW_MS = 60 * 1000
+  const merged = [...fullTableProgrammes]
+  const tableStart = fullTableProgrammes.length ? Math.min(...fullTableProgrammes.map((programme) => programme.start)) : null
+  const tableEnd = fullTableProgrammes.length ? Math.max(...fullTableProgrammes.map((programme) => programme.stop)) : null
+  for (const xmltvProgramme of xmltvProgrammes) {
+    const xmltvStart = xmltvProgramme.rawStart ?? xmltvProgramme.start
+    const isDuplicate = fullTableProgrammes.some(
+      (fullTableProgramme) => Math.abs(fullTableProgramme.start - xmltvStart) <= DEDUPE_WINDOW_MS,
+    )
+    if (isDuplicate) continue
+    const withinTableSpan = tableStart !== null && xmltvStart >= tableStart && xmltvStart <= tableEnd
+    merged.push(withinTableSpan ? { ...xmltvProgramme, hasArchive: false } : xmltvProgramme)
+  }
+  return merged.sort((a, b) => a.start - b.start)
+}
+
+/** Renders the merged table + XMLTV panel; false when it fell back to the short-EPG path. */
+function renderXtreamEpgEntries(channel, fullTableProgrammes, isNewChannelPaint) {
+  const mergedProgrammes = mergeSidePanelProgrammes(fullTableProgrammes, xtreamChannelXmltvProgrammes(channel))
+  if (!mergedProgrammes.length) {
+    void paintSidePanelFromShortEpg(channelKey(channel), channel, isNewChannelPaint)
+    return false
+  }
+  const { past, upcoming, hasMoreUpcoming, hasMorePast } = computeEpgSidePanelWindow(
+    mergedProgrammes,
+    epgSidePanelPastPages,
+    epgSidePanelUpcomingPages,
+  )
+  const canLoadEarlier = hasMorePast && epgSidePanelPastPages < EPG_SIDE_PANEL_MAX_PAST_DAYS
+  renderEpgSidePanelRows(past, upcoming, {
+    timesAreDisplayed: true,
+    canLoadEarlier,
+    canLoadLater: hasMoreUpcoming,
+    isNewChannelPaint,
+    channel,
+  })
+  return true
+}
+
+/** Xtream full-table panel for catch-up channels, merged with XMLTV; falls back to short EPG when empty. */
 async function paintSidePanelFromXtreamEpg(streamId, channel) {
   if (!epgList) return
   const isNewChannelPaint = streamId !== epgListChannelId
-  if (isNewChannelPaint) epgSidePanelPastPages = 1
+  if (isNewChannelPaint) {
+    epgSidePanelPastPages = 1
+    epgSidePanelUpcomingPages = 1
+  }
+  // Keep visible rows instead of flashing the placeholder.
+  const hasRowsAlready = !isNewChannelPaint && epgListData.length > 0
   epgListChannelId = streamId
   epgListChannelName = channel.name || ""
-  epgListData = []
   // Remount repaints (seek, auto-advance) hit the cache; blanking to a placeholder there just flashes the panel.
-  if (!peekXtreamFullEpgCache(channel)) {
+  if (!peekXtreamFullEpgCache(channel) && !hasRowsAlready) {
+    epgListData = []
     epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.loading"))}</div>`
     if (epgDayIndicator) epgDayIndicator.textContent = ""
   }
@@ -5434,11 +6298,80 @@ async function paintSidePanelFromXtreamEpg(streamId, channel) {
   const listings = await fetchXtreamFullEpg(channel)
   // A different channel has since taken over the panel while the fetch was in flight.
   if (epgListChannelId !== streamId) return
-  if (!listings || !listings.length) {
-    loadEPG(streamId)
+  renderXtreamEpgEntries(channel, listings ? xtreamListingsToProgrammes(listings, channel.playlistId) : [], isNewChannelPaint)
+}
+
+/** Short-EPG panel merged with XMLTV; non-catch-up channels and the empty-merge fallback. */
+async function paintSidePanelFromShortEpg(streamId, channel, forcedIsNewChannelPaint) {
+  if (!epgList) return
+  const isNewChannelPaint = forcedIsNewChannelPaint ?? streamId !== epgListChannelId
+  if (isNewChannelPaint) {
+    epgSidePanelPastPages = 1
+    epgSidePanelUpcomingPages = 1
+  }
+  epgListChannelId = streamId
+  epgListChannelName = channel.name || ""
+  // Keep visible rows instead of flashing the placeholder.
+  const hasRowsAlready = !isNewChannelPaint && epgListData.length > 0
+  if (!hasRowsAlready) {
+    epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.loading"))}</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+  }
+
+  let shortProgrammes
+  try {
+    const response = await xtreamApiFetch(
+      "get_short_epg",
+      { stream_id: String(channel.id), limit: "10" },
+      { entryId: channel.playlistId }
+    )
+    if (!response.ok) throw new Error(await response.text())
+    const data = await response.json()
+    const items = Array.isArray(data?.epg_listings) ? data.epg_listings : Array.isArray(data) ? data : []
+    shortProgrammes = items
+      .map((item) => ({
+        start: utcToDisplayedMs(channel.playlistId, Number(item.start_timestamp || item.start) * 1000),
+        stop: utcToDisplayedMs(channel.playlistId, Number(item.stop_timestamp || item.end) * 1000),
+        title: maybeB64ToUtf8(item.title || item.title_raw || t("programme.untitled")),
+        desc: maybeB64ToUtf8(item.description || item.description_raw || ""),
+      }))
+      .filter((programme) => Number.isFinite(programme.start) && Number.isFinite(programme.stop) && programme.stop > programme.start)
+  } catch (err) {
+    // A channel switch aborts this fetch mid-body; that's expected, not a failure to report.
+    if (epgListChannelId !== streamId) {
+      log.warn("[xt:livetv] short-EPG fetch superseded by a newer channel", { streamId, error: err })
+      return
+    }
+    log.error("[xt:livetv] short-EPG fetch failed", { streamId, error: err })
+    epgList.innerHTML = `<div class="text-bad">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
+    epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
-  renderXtreamEpgEntries(channel, xtreamListingsToProgrammes(listings), isNewChannelPaint)
+  // A different channel has since taken over the panel while the fetch was in flight.
+  if (epgListChannelId !== streamId) return
+
+  const merged = mergeSidePanelProgrammes(shortProgrammes, xtreamChannelXmltvProgrammes(channel))
+  if (!merged.length) {
+    epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
+    epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+    return
+  }
+
+  const { past, upcoming, hasMoreUpcoming, hasMorePast } = computeEpgSidePanelWindow(
+    merged,
+    epgSidePanelPastPages,
+    epgSidePanelUpcomingPages,
+  )
+  const canLoadEarlier = hasMorePast && epgSidePanelPastPages < EPG_SIDE_PANEL_MAX_PAST_DAYS
+  renderEpgSidePanelRows(past, upcoming, {
+    timesAreDisplayed: true,
+    canLoadEarlier,
+    canLoadLater: hasMoreUpcoming,
+    isNewChannelPaint,
+    channel,
+  })
 }
 
 /** Side-panel EPG router: XMLTV for M3U channels, full table for catch-up-capable Xtream channels, short EPG otherwise. */
@@ -5447,44 +6380,118 @@ function paintEpgSidePanel(streamId) {
     paintSidePanelFromXmltv(streamId)
     return
   }
-  const channel = all.find((entry) => entry.id === streamId)
-  if (channel && channelSupportsCatchup(channel)) {
+  const channel = findChannel(streamId)
+  if (!channel) {
+    epgListChannelId = streamId
+    epgListChannelName = ""
+    epgListData = []
+    if (epgList) epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+    return
+  }
+  if (channelSupportsCatchup(channel)) {
     void paintSidePanelFromXtreamEpg(streamId, channel)
     return
   }
-  loadEPG(streamId)
+  void paintSidePanelFromShortEpg(streamId, channel)
 }
 
 /** Loads one more day of past programmes into the side panel, re-rendering while preserving scroll position. */
 function extendSidePanelPastWindow() {
   if (epgSidePanelExtending) return
   const streamId = epgListChannelId
-  const channel = all.find((entry) => entry.id === streamId)
-  if (!channel || !channelSupportsCatchup(channel)) return
-  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
-  if (epgSidePanelPastPages >= maxPastPages) return
+  const channel = findChannel(streamId)
+  if (!channel) return
+  if (epgSidePanelPastPages >= EPG_SIDE_PANEL_MAX_PAST_DAYS) return
 
   const isM3uPanel = hasDirectUrl(streamId)
-  const cachedXtreamEntries = isM3uPanel ? null : peekXtreamFullEpgCache(channel)
-  // No fresh cache to extend from: refetch instead of consuming a page on a no-op.
-  if (!isM3uPanel && !cachedXtreamEntries) {
+  const isCatchupCapable = !isM3uPanel && channelSupportsCatchup(channel)
+  const cachedXtreamEntries = isCatchupCapable ? peekXtreamFullEpgCache(channel) : null
+  const previousPastPages = epgSidePanelPastPages
+
+  // No fresh cache to extend from: refetch instead of redrawing the same window, still consuming a page.
+  if (isCatchupCapable && !cachedXtreamEntries) {
+    epgSidePanelPastPages = Math.min(epgSidePanelPastPages + 1, EPG_SIDE_PANEL_MAX_PAST_DAYS)
     void paintSidePanelFromXtreamEpg(streamId, channel)
+    return
+  }
+  // No full table for non-catch-up channels.
+  if (!isM3uPanel && !isCatchupCapable) {
+    epgSidePanelPastPages = Math.min(epgSidePanelPastPages + 1, EPG_SIDE_PANEL_MAX_PAST_DAYS)
+    void paintSidePanelFromShortEpg(streamId, channel, false)
     return
   }
 
   epgSidePanelExtending = true
   const focusWasInList = !!epgList && epgList.contains(document.activeElement)
-  epgSidePanelPastPages = Math.min(epgSidePanelPastPages + 1, maxPastPages)
+  epgSidePanelPastPages = Math.min(epgSidePanelPastPages + 1, EPG_SIDE_PANEL_MAX_PAST_DAYS)
   const previousScrollHeight = epgPanel?.scrollHeight ?? 0
   const previousScrollTop = epgPanel?.scrollTop ?? 0
+  let rendered = true
   if (isM3uPanel) {
     paintSidePanelFromXmltv(streamId)
   } else {
-    renderXtreamEpgEntries(channel, xtreamListingsToProgrammes(cachedXtreamEntries), false)
+    rendered = renderXtreamEpgEntries(channel, xtreamListingsToProgrammes(cachedXtreamEntries, channel.playlistId), false)
+  }
+  if (!rendered) {
+    // Fell back to the short-EPG path, which paints itself.
+    epgSidePanelPastPages = previousPastPages
+    epgSidePanelExtending = false
+    return
   }
   if (epgPanel) epgPanel.scrollTop = previousScrollTop + (epgPanel.scrollHeight - previousScrollHeight)
   if (focusWasInList) {
     const nextFocusTarget = epgList?.querySelector("[data-epg-load-earlier]") ?? epgList?.querySelector("[data-epg-idx]")
+    if (nextFocusTarget instanceof HTMLElement) nextFocusTarget.focus({ preventScroll: true })
+  }
+  epgSidePanelExtending = false
+}
+
+/** Adds one page of upcoming rows below the fold, keeping scroll position. */
+function extendSidePanelUpcomingWindow() {
+  if (epgSidePanelExtending) return
+  const streamId = epgListChannelId
+  const channel = findChannel(streamId)
+  if (!channel) return
+
+  const isM3uPanel = hasDirectUrl(streamId)
+  const isCatchupCapable = !isM3uPanel && channelSupportsCatchup(channel)
+  const cachedXtreamEntries = isCatchupCapable ? peekXtreamFullEpgCache(channel) : null
+
+  // No fresh cache to extend from: refetch instead of redrawing the same window, still consuming a page.
+  if (isCatchupCapable && !cachedXtreamEntries) {
+    epgSidePanelUpcomingPages += 1
+    void paintSidePanelFromXtreamEpg(streamId, channel)
+    return
+  }
+  // No full table for non-catch-up channels.
+  if (!isM3uPanel && !isCatchupCapable) {
+    epgSidePanelUpcomingPages += 1
+    void paintSidePanelFromShortEpg(streamId, channel, false)
+    return
+  }
+
+  epgSidePanelExtending = true
+  const focusWasInList = !!epgList && epgList.contains(document.activeElement)
+  const previousCombinedLength = epgListData.length
+  epgSidePanelUpcomingPages += 1
+  const previousScrollTop = epgPanel?.scrollTop ?? 0
+  let rendered = true
+  if (isM3uPanel) {
+    paintSidePanelFromXmltv(streamId)
+  } else {
+    rendered = renderXtreamEpgEntries(channel, xtreamListingsToProgrammes(cachedXtreamEntries, channel.playlistId), false)
+  }
+  if (!rendered) {
+    // Fell back to the short-EPG path, which paints itself.
+    epgSidePanelUpcomingPages -= 1
+    epgSidePanelExtending = false
+    return
+  }
+  if (epgPanel) epgPanel.scrollTop = previousScrollTop
+  if (focusWasInList) {
+    const nextFocusTarget =
+      epgList?.querySelector(`[data-epg-idx="${previousCombinedLength}"]`) ?? epgList?.querySelector("[data-epg-load-later]")
     if (nextFocusTarget instanceof HTMLElement) nextFocusTarget.focus({ preventScroll: true })
   }
   epgSidePanelExtending = false
@@ -5496,34 +6503,37 @@ epgList?.addEventListener("click", async (e) => {
     extendSidePanelPastWindow()
     return
   }
+  if (target?.closest("[data-epg-load-later]")) {
+    extendSidePanelUpcomingWindow()
+    return
+  }
   const btn = target?.closest("[data-epg-idx]")
   if (!btn) return
   const idx = Number(/** @type {HTMLElement} */ (btn).dataset.epgIdx)
   const entry = epgListData[idx]
   if (!entry) return
 
-  const channel = all.find((candidate) => candidate.id === epgListChannelId)
+  const channel = findChannel(epgListChannelId)
+  const panelPlaylistId = channel?.playlistId || activePlaylistId
   const now = Date.now()
   const isLive = entry.start <= now && now < entry.stop
   const isEnded = entry.stop <= now
-  // XMLTV panel entries carry display-shifted times; short-EPG and full-table entries are already UTC.
-  // rawStart/rawStop recover the true XMLTV time so catch-up math never sees the tvg-shift correction.
-  const isM3uSource = hasDirectUrl(epgListChannelId)
-  const startUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.rawStart ?? entry.start) : entry.start
-  const stopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.rawStop ?? entry.stop) : entry.stop
+  // rawStart/rawStop (M3U) skip the tvg-shift so catch-up math sees true XMLTV time.
+  const startUtcMs = displayedToUtcMs(panelPlaylistId, entry.rawStart ?? entry.start)
+  const stopUtcMs = displayedToUtcMs(panelPlaylistId, entry.rawStop ?? entry.stop)
   // has_archive narrows catch-up eligibility when sent; it never widens past the channel-level window check.
   const archiveKnownPlayable = entry.hasArchive == null ? true : entry.hasArchive
 
   let onCatchup
   let onWatchFromStart
   if (channel && channelSupportsCatchup(channel)) {
-    if (isEnded && archiveKnownPlayable && isCatchupPlayable(channel, startUtcMs, now)) {
+    if (isEnded && archiveKnownPlayable && isCatchupPlayable(channel, entry.rawStart ?? entry.start, now)) {
       onCatchup = () => {
         void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, catchupId: entry.catchupId })
       }
     }
     // has_archive is 0 while a programme is still airing, so it must not gate "Watch from start".
-    if (isLive && isCatchupPlayable(channel, startUtcMs, now)) {
+    if (isLive && isCatchupPlayable(channel, entry.rawStart ?? entry.start, now)) {
       onWatchFromStart = () => {
         void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, seekSeconds: 0, catchupId: entry.catchupId })
       }
@@ -5539,9 +6549,8 @@ epgList?.addEventListener("click", async (e) => {
     channelName: epgListChannelName,
     channelId: epgListChannelId,
     onWatch: () => {
-      if (currentlyPlayingId !== epgListChannelId && epgListChannelId) {
-        play(epgListChannelId, epgListChannelName)
-      }
+      const watchTarget = findChannel(epgListChannelId)
+      if (currentlyPlayingId !== epgListChannelId && watchTarget) play(watchTarget)
     },
     onCatchup,
     onWatchFromStart,
@@ -5550,8 +6559,10 @@ epgList?.addEventListener("click", async (e) => {
 
 setInterval(() => {
   if (!activePlaylistId) return
-  if (!getProgrammesSync(activePlaylistId)) return
+  if (!mergedPlaylistIds.some((playlistId) => getProgrammesSync(playlistId))) return
   refreshNowSlots()
+  refreshDiscordPresenceProgramme()
+  if (radioModeChannelId != null) paintRadioNowPlaying(radioModeChannelId)
 }, 60 * 1000)
 
 // Window resize (incl. maximize) changes the 0.84vw root font-size and
@@ -5590,7 +6601,8 @@ if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
   await reconcileFirstRun()
   creds = await loadCreds()
   log.log("[xt:livetv] boot creds host=", !!creds.host)
-  if (creds.host) {
+  const bootEntries = await getMergedEntries()
+  if (creds.host || bootEntries.length) {
     loadChannels()
   } else {
     showEmptyState()

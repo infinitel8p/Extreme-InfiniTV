@@ -8,3 +8,13 @@ export function isTvDevice(): boolean {
     return false
   }
 }
+
+/** ActivityManager.memoryClass in MB, or null off Android / when the bridge is unavailable. */
+export function getAndroidMemoryClassMb(): number | null {
+  try {
+    const memoryClassMb = window.AndroidDeviceInfo?.getMemoryClass?.()
+    return typeof memoryClassMb === "number" && memoryClassMb > 0 ? memoryClassMb : null
+  } catch {
+    return null
+  }
+}

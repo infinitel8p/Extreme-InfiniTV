@@ -40,6 +40,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     }
     if (command === "warmup_status") return statusQueue.shift() ?? null
     if (command === "warmup_read_staged") return "[]"
+    if (command === "warmup_read_staged_bytes") return new TextEncoder().encode("[]").buffer
     return null
   },
 }))
@@ -47,6 +48,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@/scripts/lib/creds.js", () => ({
   isTauri: true,
   getEntries: async () => [{ _id: "pl-1", type: "xtream" }],
+  getEntryById: async () => ({ _id: "pl-1", type: "xtream" }),
+  getActiveEntry: async () => null,
   entryToCreds: () => ({ host: "http://provider.test", port: "", user: "user", pass: "pass" }),
   xtreamCandidatesFor: () => [{ host: "http://provider.test", port: "", user: "user", pass: "pass" }],
   getMirrorPin: () => 0,
@@ -55,6 +58,7 @@ vi.mock("@/scripts/lib/creds.js", () => ({
   isLocalM3UHost: () => false,
   isCustomHost: () => false,
   buildApiUrl: (candidate: { host: string }, action: string) => `${candidate.host}/player_api.php?action=${action}`,
+  getEntryDnsOverride: () => null,
 }))
 
 vi.mock("@/scripts/lib/cache.js", () => ({
@@ -84,6 +88,11 @@ vi.mock("@/scripts/lib/catalog-mappers.js", () => ({
   mapXtreamLiveRows: () => [],
   mapXtreamVodRows: () => [],
   mapXtreamSeriesRows: () => [],
+  unwrapRows: (parsed: unknown, arrayKey: string) => {
+    if (Array.isArray(parsed)) return parsed
+    const obj = parsed as Record<string, unknown> | null
+    return (obj?.[arrayKey] as unknown[]) || (obj?.results as unknown[]) || []
+  },
 }))
 
 vi.mock("@/scripts/lib/account-info.js", () => ({ ensureUserInfo: async () => null }))

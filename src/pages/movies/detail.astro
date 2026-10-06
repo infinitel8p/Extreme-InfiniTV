@@ -66,10 +66,10 @@ import {
         </div>
 
         <!-- Hero: poster (default) or player (after Play). -->
-        <div class="w-full">
+        <div id="movie-detail-hero" class="w-full">
           <div
             id="movie-detail-poster"
-            class="dt-hero skel aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
+            class="dt-hero dt-hero--loading aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
                    max-h-[60dvh] max-w-[calc(60dvh*2/3)] sm:max-w-[calc(60dvh*16/9)]"
             style="view-transition-name: active-poster;">
           </div>
@@ -113,6 +113,8 @@ import {
             </div>
           </div>
         </div>
+
+        <div id="movie-detail-scroll" class="flex flex-col gap-5 custom-scroll">
 
         <!-- Action buttons -->
         <div class="dt-enter dt-stagger-2 flex flex-wrap justify-center items-center gap-2">
@@ -303,6 +305,8 @@ import {
             class="flex gap-3 overflow-x-auto custom-scroll snap-x snap-mandatory -mx-2 px-2 py-1">
           </div>
         </section>
+
+        </div>
 
       </div>
     </div>

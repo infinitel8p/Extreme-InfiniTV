@@ -4,11 +4,16 @@
 // opened at least once before.
 import { log } from "@/scripts/lib/log.js"
 import {
-  loadCreds,
   getActiveEntry,
+  getEntryById,
+  entryToCreds,
   isTauri,
+  getPlaylistDnsOverride,
 } from "@/scripts/lib/creds.js"
+import { detailHrefFor, readDetailPlaylistParam } from "@/scripts/lib/detail-href.ts"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isProviderRejection } from "@/scripts/lib/stream-reject.ts"
+import { createMirrorHopper } from "@/scripts/lib/vod-mirror-hop.ts"
 import { isCastRoutingActive, routePlayToCast, castXtreamEpisodeToTv } from "@/scripts/lib/tv-cast.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
@@ -25,6 +30,7 @@ import {
   markCompleted,
   isCompleted,
   clearProgress,
+  getTrackPrefs,
   getVideoScaleOverride,
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
@@ -45,28 +51,32 @@ import {
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
+import { tryAndroidNativeVodPlayback } from "@/scripts/lib/android-native-vod.ts"
 import {
   clearAmbient,
   setAmbient as setAmbientOn,
   paintHero as paintHeroOn,
   sanitizeProviderBackdropUrl,
 } from "@/scripts/lib/morph-detail.js"
+import { peekPosterTint } from "@/scripts/lib/img-cache.ts"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
 import {
-  androidNativePlayerAvailable,
-  launchAndroidNativeVodWithProgress,
-} from "@/scripts/lib/android-video-launcher.js"
-import {
-  getAndroidNativePlayerEnabled,
   getPlayerBackend,
   DEFAULT_PLAYER_BACKEND,
   getVideoScale,
   setVideoScale,
   isTmdbActive,
   getContentLanguage,
+  getUserAgent,
   VIDEO_SCALE_EVENT,
+  getPlayerPath,
+  getExternalPlayerPref,
+  EXTERNAL_PLAYER_BACKENDS,
+  getRememberedAndroidPlayer,
+  setRememberedAndroidPlayer,
+  clearRememberedAndroidPlayer,
 } from "@/scripts/lib/app-settings.js"
 import { fetchSeasonEnrichment, peekCachedSeasonEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
 import { resolveTitleEnrichmentDetailed, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
@@ -105,10 +115,22 @@ import {
   mountPlayer,
   getExternalLauncher,
   subscribeExternalPlayerExit,
+  androidExternalAvailable,
+  externalPlayersAvailable,
+  listAndroidVideoPlayerApps,
+  openStreamInAndroidPackage,
+  androidMimeForUrl,
 } from "@/scripts/lib/player-runtime.ts"
-import { toast } from "@/scripts/lib/toast.js"
-import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
+import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
+import { toast, toastError } from "@/scripts/lib/toast.js"
+import {
+  setupExternalPlayerButton,
+  surfaceLaunchErrorFallback,
+  surfaceAndroidHandoffError,
+} from "@/scripts/lib/external-player-button.ts"
 import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
+import { openAndroidPlayerPicker } from "@/scripts/lib/player-picker-dialog.ts"
+import { pickExternalPlayer } from "@/scripts/lib/external-player-choice-dialog.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
@@ -117,6 +139,7 @@ import { attachPosterContextMenu } from "@/scripts/lib/poster-menu.ts"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { createVodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
 import { mountVodPlayback } from "@/scripts/lib/vod-mount.ts"
+import { parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -155,11 +178,12 @@ wireDetailBackLink(backLink, "/series")
 // ----------------------------
 const urlParams = new URLSearchParams(location.search)
 const seriesId = Number(urlParams.get("id") || "0")
+const requestedPlaylistId = readDetailPlaylistParam(location.search)
 const autoplayEpisodeId = urlParams.get("autoplay") === "1"
   ? Number(urlParams.get("episode") || "0") || null
   : null
 let autoplayPending = !!autoplayEpisodeId
-let activePlaylistId = ""
+let detailPlaylistId = ""
 let creds = { host: "", port: "", user: "", pass: "" }
 let series = null
 let seriesInfoRaw = null
@@ -190,12 +214,17 @@ let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
+function applyHeroTint(url) {
+  peekPosterTint(url).then((css) => {
+    if (css && posterEl && !heroSettled) posterEl.style.setProperty("--xt-poster-tint", css)
+  })
+}
+
 // Paints the hero once, at whichever point the caller decided enough is known.
 function settleHero() {
   if (heroSettled) return
   heroSettled = true
   paintedHeroPosterUrl = heroPosterUrl
-  posterEl?.classList.remove("skel")
   paintHeroOn(posterEl, {
     name: series?.name || "",
     posterUrl: heroPosterUrl,
@@ -274,6 +303,105 @@ function episodeMenuTitle(ep) {
   return ep.title || t("series.episode.fallback", { n: ep.episode_num || "" })
 }
 
+function desktopExternalKinds() {
+  return EXTERNAL_PLAYER_BACKENDS.filter((kind) => getPlayerPath(kind))
+}
+
+function externalPlayerLabel(kind) {
+  const playerName = kind === "vlc" ? "VLC" : String(kind).toUpperCase()
+  const localized = t("settings.playback.openIn", { player: playerName })
+  return localized && localized !== "settings.playback.openIn" ? localized : `Open in ${playerName}`
+}
+
+function openInPlayerLabel() {
+  const localized = t("settings.playback.openInSystem")
+  return localized && localized !== "settings.playback.openInSystem" ? localized : "Open in player…"
+}
+
+// Desktop escape hatch: reuses launchExternalPlayback, prompting via the
+// choice dialog when "ask each time" and multiple players are configured.
+async function launchEpisodeExternally(ep, src, desktopKind) {
+  try { vjs?.pause?.() } catch {}
+  let kind = desktopKind
+  if (!kind) {
+    const chosen = await pickExternalPlayer(desktopExternalKinds(), { subtitle: episodeMenuTitle(ep) || undefined })
+    if (!chosen) return
+    kind = chosen
+  }
+  const saved = detailPlaylistId ? getProgress(detailPlaylistId, "episode", ep.id) : null
+  const resumeSeconds = saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+  try {
+    await launchExternalPlayback(kind, src, resumeSeconds, ep)
+  } catch (error) {
+    surfaceLaunchErrorFallback(error, kind, "[xt:series-detail]")
+  }
+}
+
+// Android escape hatch: mirrors external-player-button.ts's "system" flow -
+// remembered app first, else the in-app picker (chooser routing is unreliable).
+async function launchEpisodeOnAndroid(ep, src) {
+  try { vjs?.pause?.() } catch {}
+  const title = episodeMenuTitle(ep)
+  const mime = androidMimeForUrl(src)
+  const apps = listAndroidVideoPlayerApps(src, mime)
+  if (apps.length === 0) {
+    toastError(
+      t("settings.playback.androidNoHandler") ||
+        "No app on this device can play this stream. Install VLC or MX Player."
+    )
+    return
+  }
+  const remembered = getRememberedAndroidPlayer()
+  if (remembered) {
+    const stillInstalled = apps.find((app) => app.pkg === remembered.pkg)
+    if (stillInstalled) {
+      toast({
+        title:
+          t("settings.playback.launching", { player: stillInstalled.label || stillInstalled.pkg }) ||
+          `Launching ${stillInstalled.label || stillInstalled.pkg}…`,
+        duration: 2000,
+      })
+      try {
+        await openStreamInAndroidPackage(stillInstalled.pkg, src, {
+          activity: stillInstalled.activity || remembered.activity || null,
+          title,
+          mime,
+        })
+      } catch (error) {
+        surfaceAndroidHandoffError(error, "system")
+      }
+      return
+    }
+    clearRememberedAndroidPlayer()
+  }
+  const choice = await openAndroidPlayerPicker({ apps, contentTitle: title })
+  if (!choice) return
+  const { app: pickedApp, remember } = choice
+  if (remember) {
+    setRememberedAndroidPlayer({
+      pkg: pickedApp.pkg,
+      activity: pickedApp.activity,
+      label: pickedApp.label || pickedApp.pkg,
+      icon: pickedApp.icon,
+    })
+  }
+  toast({
+    title:
+      t("settings.playback.launching", { player: pickedApp.label || pickedApp.pkg }) ||
+      `Launching ${pickedApp.label || pickedApp.pkg}…`,
+    duration: 2000,
+  })
+  try {
+    await openStreamInAndroidPackage(pickedApp.pkg, src, {
+      activity: pickedApp.activity || null,
+      title,
+      mime,
+    })
+  } catch (error) {
+    surfaceAndroidHandoffError(error, "system")
+  }
+}
+
 function openEpisodeMenu(ep, anchor, point) {
   closeEpisodeMenu()
   const url = buildEpisodeStreamUrl(ep)
@@ -290,8 +418,8 @@ function openEpisodeMenu(ep, anchor, point) {
     t("list.menu.ariaFor", { name: episodeMenuTitle(ep) || t("list.fallbackTitle") })
   )
 
-  if (isTauri && activePlaylistId && series) {
-    const saved = getProgress(activePlaylistId, "episode", ep.id)
+  if (isTauri && detailPlaylistId && series) {
+    const saved = getProgress(detailPlaylistId, "episode", ep.id)
     const resumeSeconds = saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
     const durationSeconds = episodeDurationSeconds(ep)
     menu.appendChild(
@@ -299,7 +427,7 @@ function openEpisodeMenu(ep, anchor, point) {
         t("cast.menu.playOnTv"),
         castXtreamEpisodeToTv({
           creds,
-          playlistId: activePlaylistId,
+          playlistId: detailPlaylistId,
           seriesId: series.id,
           episodeId: ep.id,
           containerExt: ep.container_extension,
@@ -309,25 +437,51 @@ function openEpisodeMenu(ep, anchor, point) {
           logo: series.logo || null,
           resumeSeconds,
           durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
-          contentHref: `/series/detail?id=${series.id}`,
+          contentHref: detailHrefFor("series", series.id, { playlistId: detailPlaylistId }),
           src: ep._directUrl || undefined,
         })
       )
     )
   }
 
-  const watchedOn = activePlaylistId ? isCompleted(activePlaylistId, "episode", ep.id) : false
+  const watchedOn = detailPlaylistId ? isCompleted(detailPlaylistId, "episode", ep.id) : false
   menu.appendChild(
     makeEpisodeMenuItem(
       t(watchedOn ? "list.menu.watchedUnmark" : "list.menu.watchedMark"),
       () => {
-        if (!activePlaylistId) return
-        if (watchedOn) clearProgress(activePlaylistId, "episode", ep.id)
-        else markCompleted(activePlaylistId, "episode", ep.id, progressExtrasFor(ep))
+        if (!detailPlaylistId) return
+        if (watchedOn) clearProgress(detailPlaylistId, "episode", ep.id)
+        else markCompleted(detailPlaylistId, "episode", ep.id, progressExtrasFor(ep))
         renderEpisodes()
       }
     )
   )
+
+  if (androidExternalAvailable) {
+    menu.appendChild(
+      makeEpisodeMenuItem(openInPlayerLabel(), () => {
+        launchEpisodeOnAndroid(ep, url)
+      })
+    )
+  } else if (externalPlayersAvailable) {
+    const configuredKinds = desktopExternalKinds()
+    if (configuredKinds.length > 1 && getExternalPlayerPref() !== "ask") {
+      for (const kind of configuredKinds) {
+        menu.appendChild(
+          makeEpisodeMenuItem(externalPlayerLabel(kind), () => {
+            launchEpisodeExternally(ep, url, kind)
+          })
+        )
+      }
+    } else if (configuredKinds.length > 0) {
+      const soloKind = configuredKinds.length === 1 ? configuredKinds[0] : null
+      menu.appendChild(
+        makeEpisodeMenuItem(soloKind ? externalPlayerLabel(soloKind) : openInPlayerLabel(), () => {
+          launchEpisodeExternally(ep, url, soloKind)
+        })
+      )
+    }
+  }
 
   menu.appendChild(
     makeEpisodeMenuItem(t("stream.menu.test"), () => {
@@ -377,16 +531,16 @@ function openEpisodeMenu(ep, anchor, point) {
 }
 
 function syncFavButton() {
-  if (!favBtn || !series || !activePlaylistId) return
-  const fav = isFavorite(activePlaylistId, "series", series.id)
+  if (!favBtn || !series || !detailPlaylistId) return
+  const fav = isFavorite(detailPlaylistId, "series", series.id)
   favBtn.textContent = fav ? t("detail.action.removeFavorite") : t("detail.action.addFavorite")
   favBtn.classList.toggle("text-accent", fav)
   favBtn.setAttribute("aria-pressed", String(fav))
 }
 
 function syncWatchButton() {
-  if (!watchBtn || !series || !activePlaylistId) return
-  const onWatchlist = isOnWatchlist(activePlaylistId, "series", series.id)
+  if (!watchBtn || !series || !detailPlaylistId) return
+  const onWatchlist = isOnWatchlist(detailPlaylistId, "series", series.id)
   if (watchLabelEl) {
     watchLabelEl.textContent = onWatchlist ? t("detail.watchlist.on") : t("detail.action.watchLater")
   }
@@ -526,8 +680,8 @@ function renderEpisodes() {
       row.dataset.nowPlaying = "true"
     }
     if (
-      activePlaylistId &&
-      isCompleted(activePlaylistId, "episode", ep.id)
+      detailPlaylistId &&
+      isCompleted(detailPlaylistId, "episode", ep.id)
     ) {
       row.dataset.watched = "true"
     }
@@ -571,8 +725,8 @@ function renderEpisodes() {
 
     playBtn.appendChild(wrap)
 
-    const epProgress = activePlaylistId
-      ? getProgress(activePlaylistId, "episode", ep.id)
+    const epProgress = detailPlaylistId
+      ? getProgress(detailPlaylistId, "episode", ep.id)
       : null
     const canResume =
       epProgress && !epProgress.completed && epProgress.position > RESUME_MIN_SECONDS
@@ -600,8 +754,8 @@ function renderEpisodes() {
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="size-4"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>'
       restartBtn.addEventListener("click", (e) => {
         e.stopPropagation()
-        if (!activePlaylistId) return
-        clearProgress(activePlaylistId, "episode", ep.id)
+        if (!detailPlaylistId) return
+        clearProgress(detailPlaylistId, "episode", ep.id)
         playEpisode(ep)
       })
       row.appendChild(restartBtn)
@@ -669,7 +823,7 @@ function renderEpisodes() {
               ext: ep.container_extension || inferExt(epUrl, "mp4"),
               source: {
                 kind: "episode",
-                playlistId: activePlaylistId,
+                playlistId: detailPlaylistId,
                 id: ep.id,
                 seriesId: series?.id ?? null,
                 seriesName: series?.name || "",
@@ -817,7 +971,7 @@ function applySeriesInfo(data) {
   metaRatingText = fmtImdbRating(rating)
   metaSeasonsText = seasons.length ? `${seasons.length} season${seasons.length > 1 ? "s" : ""}` : ""
   renderMetaLine()
-  if (activePlaylistId) noteDetailGenres(activePlaylistId, "series", seriesId, genre)
+  if (detailPlaylistId) noteDetailGenres(detailPlaylistId, "series", seriesId, genre)
   providerPlotApplied = Boolean(plot.trim())
   if (plotEl) {
     plotEl.textContent = plot || (cast ? t("series.castPrefix", { cast }) : t("detail.noDescription"))
@@ -950,7 +1104,7 @@ function patchGenreFromEnrichment(genres) {
   if (!genres?.length || metaGenreText) return
   metaGenreText = genres.join(", ")
   renderMetaLine()
-  if (activePlaylistId) noteDetailGenres(activePlaylistId, "series", seriesId, metaGenreText)
+  if (detailPlaylistId) noteDetailGenres(detailPlaylistId, "series", seriesId, metaGenreText)
 }
 
 function patchYearFromEnrichment(year) {
@@ -990,7 +1144,7 @@ function renderSimilar(matches) {
     listEl: similarListEl,
     matches,
     kind: "series",
-    activePlaylistId,
+    playlistId: detailPlaylistId,
     detailHrefBase: "/series/detail",
     fallbackTitleKey: "list.seriesFallback",
   })
@@ -1030,7 +1184,7 @@ function patchSeasonEpisodes(episodes) {
 // Re-run on every episode render (initial paint, season switch, up-next), since rows are rebuilt each time.
 async function refreshSeasonEnrichment() {
   const requestId = ++seasonEnrichRequestId
-  if (!activePlaylistId) return
+  if (!detailPlaylistId) return
   if (!resolvedTmdbId && !resolvedTvdbId) return
   const seasonNumber = toIndex(currentSeason)
   if (seasonNumber == null) return
@@ -1065,11 +1219,11 @@ function adoptCatalogRow(catalog) {
 
 // The in-memory catalog is empty on a deep link, so load it instead of giving up on the rail.
 function loadSeriesCatalog() {
-  if (!activePlaylistId) return Promise.resolve([])
-  const cached = getCached(activePlaylistId, "series")?.data
+  if (!detailPlaylistId) return Promise.resolve([])
+  const cached = getCached(detailPlaylistId, "series")?.data
   if (cached?.length) return Promise.resolve(cached)
   if (!seriesCatalogPromise) {
-    seriesCatalogPromise = ensureSeries(creds, activePlaylistId)
+    seriesCatalogPromise = ensureSeries(creds, detailPlaylistId)
       .then((catalog) => {
         adoptCatalogRow(catalog)
         return catalog
@@ -1085,7 +1239,7 @@ function loadSeriesCatalog() {
 const getGroupingIndexFor = createGroupingIndexMemo()
 
 function groupKeyForCatalog(catalog) {
-  return sharedGroupKeyForCatalog(activePlaylistId, catalog, getGroupingIndexFor)
+  return sharedGroupKeyForCatalog(detailPlaylistId, catalog, getGroupingIndexFor)
 }
 
 function renderLanguagePills(catalog) {
@@ -1093,7 +1247,7 @@ function renderLanguagePills(catalog) {
     langsEl,
     item: series,
     kind: "series",
-    activePlaylistId,
+    playlistId: detailPlaylistId,
     catalog,
     getGroupingIndexFor,
     detailHrefBase: "/series/detail",
@@ -1125,7 +1279,7 @@ function applyEnrichmentPatch(enrichment) {
 // Returns whether the similar rail was populated from TMDb recommendations.
 async function enrichSeriesDetailFromTmdb(requestId) {
   // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
-  if (!series || !activePlaylistId) {
+  if (!series || !detailPlaylistId) {
     settleHero()
     return false
   }
@@ -1140,7 +1294,7 @@ async function enrichSeriesDetailFromTmdb(requestId) {
 
   const details = await resolveTitleEnrichmentDetailed({
     kind: "series",
-    playlistId: activePlaylistId,
+    playlistId: detailPlaylistId,
     itemId: String(series.id),
     name: series.name,
     year: parseInt(String(series.year || info.releaseDate || info.releasedate || info.year), 10) || null,
@@ -1182,7 +1336,7 @@ async function enrichSeriesDetailFromTmdb(requestId) {
 }
 
 async function populateLocalSimilarRail(requestId) {
-  if (!series || !activePlaylistId) return
+  if (!series || !detailPlaylistId) return
   const catalog = await loadSeriesCatalog()
   if (requestId !== enrichRequestId) return
   renderLanguagePills(catalog)
@@ -1198,7 +1352,7 @@ async function populateLocalSimilarRail(requestId) {
     {
       limit: 12,
       infoLookup: (id) => {
-        const cached = getCached(activePlaylistId, `series_info_${id}`)?.data
+        const cached = getCached(detailPlaylistId, `series_info_${id}`)?.data
         return cached ? parseProviderPeople(cached.info) : null
       },
       sourcePrefix: parseNamePrefix(series.name).tag,
@@ -1298,11 +1452,11 @@ function setupPipButton(player) {
 
 // One display-mode override per series (not per episode) - same mounted
 // player and container across episode changes.
-const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
 
 function resolveVideoScaleMode() {
-  if (activePlaylistId && series) {
-    const override = getVideoScaleOverride(activePlaylistId, "series", series.id)
+  if (detailPlaylistId && series) {
+    const override = getVideoScaleOverride(detailPlaylistId, "series", series.id)
     if (override) return override
   }
   return getVideoScale()
@@ -1318,7 +1472,7 @@ document.addEventListener(VIDEO_SCALE_EVENT, () => {
 
 document.addEventListener(CHANNEL_VIDEO_SCALE_CHANGED_EVENT, (e) => {
   const detail = e.detail
-  if (!detail || detail.playlistId !== activePlaylistId || detail.kind !== "series") return
+  if (!detail || detail.playlistId !== detailPlaylistId || detail.kind !== "series") return
   if (!series) return
   if (detail.itemId === null || detail.itemId === series.id) applyVideoScale()
 })
@@ -1364,14 +1518,14 @@ async function openDisplayModeDialog() {
   applyVideoScale()
   if (!result) return
   if (result.applyToAll) {
-    if (activePlaylistId) clearAllVideoScaleOverrides(activePlaylistId, "series")
+    if (detailPlaylistId) clearAllVideoScaleOverrides(detailPlaylistId, "series")
     setVideoScale(result.mode)
     toast({
       title: t("stream.scale.toastDefault", { mode: t(videoScaleModeLabelKey(result.mode)) }),
       duration: 2200,
     })
-  } else if (activePlaylistId) {
-    setVideoScaleOverride(activePlaylistId, "series", series.id, result.mode)
+  } else if (detailPlaylistId) {
+    setVideoScaleOverride(detailPlaylistId, "series", series.id, result.mode)
   }
 }
 
@@ -1406,13 +1560,15 @@ async function ensureEmbeddedPlayer(backend) {
     autoplay: false,
     aspectRatio: "16:9",
     pictureInPictureToggle: !hasNativePipBridge,
+    userAgent: getUserAgent() || null,
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
-  if (mounted.backend === "videojs") {
+  if (mounted.backend === "videojs" || (mounted.backend === "mpv-embedded" && typeof vjs.userActive === "function")) {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
+  vjs.el()?.addEventListener?.("xt:mpv-retry", () => { if (currentEpisode) playEpisode(currentEpisode) })
   return vjs
 }
 
@@ -1441,8 +1597,8 @@ function findEpisodeById(episodeId) {
 /** Mirrors the poster-badge "resume next episode" pick, falling back to the first episode overall. */
 function pickDefaultPlayEpisode() {
   if (!episodesByKey) return null
-  if (activePlaylistId && series) {
-    const summary = getSeriesProgressSummary(activePlaylistId, series.id)
+  if (detailPlaylistId && series) {
+    const summary = getSeriesProgressSummary(detailPlaylistId, series.id)
     const resumeEpisode = summary?.lastEpisodeId != null ? findEpisodeById(summary.lastEpisodeId) : null
     if (resumeEpisode) {
       if (!summary.lastWatched?.completed) return resumeEpisode
@@ -1483,57 +1639,79 @@ function retirePreviousPlayback() {
 
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
+  const mirrorHopsUsed = options.mirrorHopsUsed || 0
   if (isTauri && isCastRoutingActive() && !options.forceLocal) {
     const title = episodeCastTitle(episode)
     await routePlayToCast({
       contentTitle: title || null,
-      contentHref: `/series/detail?id=${series.id}`,
+      contentHref: detailHrefFor("series", series.id, { playlistId: detailPlaylistId }),
       stopLocal: () => {
         try { vjs?.pause?.() } catch {}
         try { vjs?.reset?.() } catch {}
         retirePreviousPlayback()
       },
       restoreLocal: () => { void playEpisode(episode, { forceLocal: true }) },
-      seriesContext: activePlaylistId
+      seriesContext: detailPlaylistId
         ? {
-            playlistId: activePlaylistId,
+            playlistId: detailPlaylistId,
             seriesId: String(series.id),
             season: Number(episode.season || currentSeason) || 0,
             episodeNum: Number(episode.episode_num) || 0,
           }
         : undefined,
-      buildDescriptor: () => {
+      buildDescriptor: async () => {
         const src = buildEpisodeStreamUrl(episode)
         if (!src || !isCastableSrc(src)) return null
-        const saved = activePlaylistId ? getProgress(activePlaylistId, "episode", episode.id) : null
+        const saved = detailPlaylistId ? getProgress(detailPlaylistId, "episode", episode.id) : null
         const resumeSeconds =
           saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
         const durationSeconds = episodeDurationSeconds(episode)
-        return buildVodCastDescriptor({
+        const descriptor = buildVodCastDescriptor({
           src,
           title,
           logo: series?.logo || undefined,
           resumeSeconds,
           durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
         })
+        descriptor.dns = (await getPlaylistDnsOverride(detailPlaylistId))?.raw ?? null
+        return descriptor
       },
     })
     return
   }
   inlineTrailer.close()
   const requestId = ++playRequestId
-  const src = episode?._directUrl
-    ? buildEpisodeStreamUrl(episode)
-    : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
+  const episodeSrcBuilder = episode?._directUrl
+    ? null
+    : (candidate) => buildEpisodeStreamUrl(episode, candidate)
+
+  const tryMirrorHop = createMirrorHopper({
+    buildUrl: episodeSrcBuilder,
+    entryId: detailPlaylistId,
+    isCurrent: () => requestId === playRequestId,
+    logTag: "[xt:series-detail]",
+    hopsUsed: mirrorHopsUsed,
+    onHop: (url, hopsUsed) => {
+      retirePreviousPlayback()
+      playEpisode(episode, { isAutomaticRetry: true, mirrorHopsUsed: hopsUsed, overrideSrc: url })
+    },
+  })
+
+  // Already probed by the mirror hop - re-resolving could re-pin back to the primary.
+  const src = options.overrideSrc
+    ? options.overrideSrc
+    : episode?._directUrl
+      ? buildEpisodeStreamUrl(episode)
+      : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c), { entryId: detailPlaylistId })
   if (!src) return
   if (requestId !== playRequestId) return
   // Ahead of every await that can register a proxy/remux session for this run.
   retirePreviousPlayback()
   dismissUpNext()
 
-  if (activePlaylistId) {
+  if (detailPlaylistId) {
     pushRecent(
-      activePlaylistId,
+      detailPlaylistId,
       "series",
       series.id,
       series.name,
@@ -1541,11 +1719,8 @@ async function playEpisode(episode, options = {}) {
     )
   }
 
-  // Mark before the Android intent handoff so the marker is in place if
-  // the user comes back to the page from the system player.
+  // Marked before the Android handoff so it survives a return from the native player.
   markNowPlayingEpisode(episode.id)
-
-  if (await tryAndroidIntentPlayback(src)) return
   if (requestId !== playRequestId) return
 
   if (nowPlayingEl) {
@@ -1557,14 +1732,8 @@ async function playEpisode(episode, options = {}) {
   externalBtnHandle?.refresh()
   playTvBtnHandle?.refresh()
 
-  const localSrc = await getLocalPlayableSrc(src)
-  const playSrc = localSrc || src
-  // The asset.localhost/asset:// mount URL doesn't reliably parse as http(s), so the container
-  // decision for a local download uses the download's on-disk path instead.
-  const localDownloadPath = localSrc ? await getLocalDownloadPath(src) : null
-  if (requestId !== playRequestId) return
-  const saved = activePlaylistId
-    ? getProgress(activePlaylistId, "episode", episode.id)
+  const saved = detailPlaylistId
+    ? getProgress(detailPlaylistId, "episode", episode.id)
     : null
   const resumePos =
     saved && !saved.completed && saved.position > RESUME_MIN_SECONDS
@@ -1575,22 +1744,22 @@ async function playEpisode(episode, options = {}) {
         })()
       : 0
 
-  // Native ExoPlayer Activity path
-  if (
-    androidNativePlayerAvailable &&
-    getAndroidNativePlayerEnabled() &&
-    activePlaylistId
-  ) {
-    const launched = launchAndroidNativeVodWithProgress({
-      playlistId: activePlaylistId,
-      contentKey: `ep:${episode.id}`,
+  if (detailPlaylistId) {
+    const nativeDns = (await getPlaylistDnsOverride(detailPlaylistId))?.raw ?? null
+    if (requestId !== playRequestId) return
+    const launched = await tryAndroidNativeVodPlayback({
+      playlistId: detailPlaylistId,
       kind: "episode",
       id: episode.id,
-      url: playSrc,
+      contentKey: `ep:${episode.id}`,
+      remoteUrl: src,
       title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}`,
       posterUrl: series?.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      ua: getUserAgent() || undefined,
+      dns: nativeDns,
       progressExtras: progressExtrasFor(episode),
+      isStale: () => requestId !== playRequestId,
       onCompleted: () => {
         // Trigger the same Up Next overlay the WebView player path uses.
         document.dispatchEvent(new CustomEvent("xt:series-episode-ended", {
@@ -1599,14 +1768,25 @@ async function playEpisode(episode, options = {}) {
       },
     })
     if (launched) return
+  } else if (await tryAndroidIntentPlayback(src)) {
+    return
   }
+  if (requestId !== playRequestId) return
+
+  const localSrc = await getLocalPlayableSrc(src)
+  const playSrc = localSrc || src
+  // The asset.localhost/asset:// mount URL doesn't reliably parse as http(s), so the container
+  // decision for a local download uses the download's on-disk path instead.
+  const localDownloadPath = localSrc ? await getLocalDownloadPath(src) : null
+  if (requestId !== playRequestId) return
 
   let backend = getPlayerBackend()
+  log.debug("[xt:series-detail] playback source", `id=${episode.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)
 
   if (backend === "mpv" || backend === "vlc") {
     try {
       const externalSrc = (await getLocalDownloadPath(src)) || playSrc
-      await launchExternalPlayback(backend, externalSrc, resumePos)
+      await launchExternalPlayback(backend, externalSrc, resumePos, episode)
       pushEpisodePresence(episode)
       externalPresenceActive = true
       return
@@ -1621,13 +1801,14 @@ async function playEpisode(episode, options = {}) {
     prematureEndedLogTag: "[xt:series-detail]",
     contentId: episode.id,
     remuxContentKind: "episode",
-    playlistId: activePlaylistId,
+    playlistId: detailPlaylistId,
     playSrc,
     mimeFallbackSrc: src,
     localDownloadPath,
     savedProgress: saved,
     resumePos,
     nameHintSource: episode.title || series?.name,
+    title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}${episode.title ? ` - ${episode.title}` : ""}`,
     posterEl,
     playerWrap,
     videoElementId: "series-player",
@@ -1640,6 +1821,20 @@ async function playEpisode(episode, options = {}) {
       setupStatsButton()
       setupHealthButton()
       subtitleDelayController.setup()
+      // mpv-only signals the generic remux-failure classifier below doesn't recognize.
+      player.one?.("error", async () => {
+        const errorDetail = player.codecInfo?.()?.errorDetail
+        if (typeof errorDetail !== "string") return
+        const httpStatus = parseHttpStatusPrefix(errorDetail)
+        if (isProviderRejection({ errorDetail, httpStatus })) {
+          const hopped = await tryMirrorHop({ errorDetail, httpStatus })
+          if (requestId !== playRequestId) return
+          if (hopped) return
+        }
+        if (errorDetail.startsWith("OFFLINE_PLACEHOLDER")) vodPlaybackToasts.showOfflinePlaceholderToast()
+        else if (httpStatus != null) vodPlaybackToasts.showHttpErrorToast(httpStatus)
+        else if (errorDetail.startsWith("NETWORK:")) vodPlaybackToasts.showNetworkErrorToast()
+      })
     },
     applyVideoScale,
     toasts: vodPlaybackToasts,
@@ -1652,6 +1847,7 @@ async function playEpisode(episode, options = {}) {
       retirePreviousPlayback()
       playEpisode(currentEpisode, { isAutomaticRetry: true })
     },
+    tryMirrorHop,
     beginInsightsSession: (isAutomaticRetry) => {
       if (isAutomaticRetry) getSeriesInsights().record("fallback", "auto:mkv-remux-fallback")
       else getSeriesInsights().startSession({ label: [series?.name, episode.title].filter(Boolean).join(" - ") })
@@ -1672,13 +1868,13 @@ async function playEpisode(episode, options = {}) {
       progressListenersBound = true
       registerListeners()
     },
-    hasActiveContent: () => !!activePlaylistId && !!currentEpisode,
+    hasActiveContent: () => !!detailPlaylistId && !!currentEpisode,
     writeProgress: (pos, dur) => {
-      setProgress(activePlaylistId, "episode", currentEpisode.id, pos, dur, progressExtrasFor(currentEpisode))
+      setProgress(detailPlaylistId, "episode", currentEpisode.id, pos, dur, progressExtrasFor(currentEpisode))
     },
     recordPlaybackEndedSession: () => getSeriesInsights().endSession("ended"),
     markContentCompleted: (dur) => {
-      markCompleted(activePlaylistId, "episode", currentEpisode.id, {
+      markCompleted(detailPlaylistId, "episode", currentEpisode.id, {
         duration: dur,
         ...progressExtrasFor(currentEpisode),
       })
@@ -1693,9 +1889,9 @@ async function playEpisode(episode, options = {}) {
 }
 
 function pushEpisodePresence(episode) {
-  if (!activePlaylistId || !series || !episode) return
+  if (!detailPlaylistId || !series || !episode) return
   setRichPresence({
-    playlistId: activePlaylistId,
+    playlistId: detailPlaylistId,
     details: series.name || "Watching a series",
     state: `S${episode.season || currentSeason || "?"}E${episode.episode_num || "?"} · ${episode.title || ""}`.trim(),
     largeImage: series.logo || "logo",
@@ -1706,14 +1902,32 @@ function pushEpisodePresence(episode) {
   })
 }
 
-async function launchExternalPlayback(backend, src, resumeSeconds) {
+async function launchExternalPlayback(backend, src, resumeSeconds, episode) {
   const launcher = getExternalLauncher(backend)
   toast({
     title: t("settings.playback.launching", { player: backend.toUpperCase() })
       || `Launching ${backend.toUpperCase()}…`,
     duration: 2000,
   })
-  await launcher.launch(src, { resumeSeconds })
+  const trackPrefs = detailPlaylistId ? getTrackPrefs(detailPlaylistId, "episode", episode.id) : null
+  const result = await launcher.launch(src, {
+    resumeSeconds,
+    tracks: trackPrefs
+      ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+      : null,
+  })
+  if (result.sessionId && detailPlaylistId && backend === "mpv") {
+    beginExternalSession({
+      sessionId: result.sessionId,
+      kind: "mpv",
+      srcKey: externalSrcKey(result.src),
+      playlistId: detailPlaylistId,
+      contentKind: "episode",
+      contentId: String(episode.id),
+      extras: progressExtrasFor(episode),
+      startedAt: Date.now(),
+    })
+  }
 }
 
 // ----------------------------
@@ -1736,8 +1950,8 @@ const externalBtnHandle = setupExternalPlayerButton(
       return buildEpisodeStreamUrl(currentEpisode) || null
     },
     getResumeSeconds() {
-      if (!activePlaylistId || !currentEpisode) return 0
-      const saved = getProgress(activePlaylistId, "episode", currentEpisode.id)
+      if (!detailPlaylistId || !currentEpisode) return 0
+      const saved = getProgress(detailPlaylistId, "episode", currentEpisode.id)
       if (!saved || saved.completed) return 0
       return saved.position > RESUME_MIN_SECONDS ? saved.position : 0
     },
@@ -1749,6 +1963,20 @@ const externalBtnHandle = setupExternalPlayerButton(
       const seriesName = series?.name || ""
       const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
       return [seriesName, sxe, episodeTitle].filter(Boolean).join(" · ") || null
+    },
+    getTrackPrefs() {
+      if (!detailPlaylistId || !currentEpisode) return null
+      const prefs = getTrackPrefs(detailPlaylistId, "episode", currentEpisode.id)
+      return prefs ? { audioLang: prefs.audioLang, subLang: prefs.subLang, subOff: prefs.subOff } : null
+    },
+    getProgressTarget() {
+      if (!detailPlaylistId || !currentEpisode) return null
+      return {
+        playlistId: detailPlaylistId,
+        kind: "episode",
+        id: String(currentEpisode.id),
+        extras: progressExtrasFor(currentEpisode),
+      }
     },
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
@@ -1772,6 +2000,7 @@ const externalBtnHandle = setupExternalPlayerButton(
 const playTvBtnHandle = setupPlayOnTvButton(
   document.getElementById("series-detail-play-tv"),
   {
+    getPlaylistId: () => detailPlaylistId,
     getSrcBuilder() {
       const episode = currentEpisode || defaultPlayEpisode
       return episode ? (c) => buildEpisodeStreamUrl(episode, c) : null
@@ -1789,8 +2018,8 @@ const playTvBtnHandle = setupPlayOnTvButton(
     },
     getResumeSeconds() {
       const episode = currentEpisode || defaultPlayEpisode
-      if (!activePlaylistId || !episode) return 0
-      const saved = getProgress(activePlaylistId, "episode", episode.id)
+      if (!detailPlaylistId || !episode) return 0
+      const saved = getProgress(detailPlaylistId, "episode", episode.id)
       if (!saved || saved.completed) return 0
       return saved.position > RESUME_MIN_SECONDS ? saved.position : 0
     },
@@ -1802,10 +2031,10 @@ const playTvBtnHandle = setupPlayOnTvButton(
     },
     getCastContext() {
       const episode = currentEpisode || defaultPlayEpisode
-      if (!activePlaylistId || !series || !episode) return null
+      if (!detailPlaylistId || !series || !episode) return null
       return {
         seriesContext: {
-          playlistId: activePlaylistId,
+          playlistId: detailPlaylistId,
           seriesId: String(series.id),
           season: Number(episode.season || currentSeason) || 0,
           episodeNum: Number(episode.episode_num) || 0,
@@ -1826,12 +2055,12 @@ subscribeExternalPlayerExit(() => {
 window.addEventListener("pagehide", () => {
   closeEpisodeMenu()
   try {
-    if (activePlaylistId && currentEpisode && vjs) {
+    if (detailPlaylistId && currentEpisode && vjs) {
       const pos = vjs.currentTime?.() || 0
       const dur = vjs.duration?.() || 0
       if (pos > 1) {
         setProgress(
-          activePlaylistId,
+          detailPlaylistId,
           "episode",
           currentEpisode.id,
           pos,
@@ -2017,9 +2246,9 @@ function showUpNextOverlay(next) {
 // Favorites
 // ----------------------------
 favBtn?.addEventListener("click", () => {
-  if (!series || !activePlaylistId) return
+  if (!series || !detailPlaylistId) return
   const isStubName = series.name === t("list.seriesFallback", { id: series.id })
-  toggleFavorite(activePlaylistId, "series", series.id, {
+  toggleFavorite(detailPlaylistId, "series", series.id, {
     name: isStubName ? "" : series.name || series.title || "",
     logo: series.logo || series.cover || null,
   })
@@ -2027,7 +2256,7 @@ favBtn?.addEventListener("click", () => {
 
 document.addEventListener("xt:favorites-changed", (e) => {
   const detail = e.detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || detail.playlistId !== detailPlaylistId) return
   if (detail.kind !== "series") return
   if (series?.id === detail.id) syncFavButton()
 })
@@ -2036,9 +2265,9 @@ document.addEventListener("xt:favorites-changed", (e) => {
 // Watchlist
 // ----------------------------
 watchBtn?.addEventListener("click", () => {
-  if (!series || !activePlaylistId) return
+  if (!series || !detailPlaylistId) return
   const isStubName = series.name === t("list.seriesFallback", { id: series.id })
-  toggleWatchlist(activePlaylistId, "series", series.id, {
+  toggleWatchlist(detailPlaylistId, "series", series.id, {
     name: isStubName ? "" : series.name || series.title || "",
     logo: series.logo || series.cover || null,
   })
@@ -2046,7 +2275,7 @@ watchBtn?.addEventListener("click", () => {
 
 document.addEventListener("xt:watchlist-changed", (e) => {
   const detail = e.detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || detail.playlistId !== detailPlaylistId) return
   if (detail.kind !== "series") return
   if (series?.id === detail.id) syncWatchButton()
 })
@@ -2062,7 +2291,7 @@ trailerBtn?.addEventListener("click", () => {
 
 document.addEventListener("xt:progress-changed", (e) => {
   const detail = e.detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || detail.playlistId !== detailPlaylistId) return
   if (detail.kind !== "episode") return
   if (!episodeList) return
   const row = episodeList.querySelector(
@@ -2153,22 +2382,27 @@ async function boot() {
   if (seasonTabs) seasonTabs.replaceChildren()
   if (episodeList) episodeList.replaceChildren()
 
-  const active = await getActiveEntry()
-  if (!active) {
+  const requestedEntry = requestedPlaylistId ? await getEntryById(requestedPlaylistId) : null
+  if (requestedPlaylistId && !requestedEntry) {
+    log.warn("[xt:series-detail] requested playlist not found:", requestedPlaylistId)
+  }
+  const entry = requestedEntry ?? (await getActiveEntry())
+  if (!entry) {
     showError(t("detail.error.noPlaylist"))
     return
   }
-  activePlaylistId = active._id
+  detailPlaylistId = entry._id
   await ensurePrefsLoaded()
-  creds = await loadCreds()
+  creds = entryToCreds(entry)
 
-  const list = getCached(active._id, "series")
+  const list = getCached(detailPlaylistId, "series")
   const catalogSeries = list?.data?.find((entry) => Number(entry.id) === seriesId) || null
 
   const seriesDownloads = listDownloads().filter(
     (d) =>
       d.source?.kind === "episode" &&
-      Number(d.source?.seriesId) === seriesId
+      Number(d.source?.seriesId) === seriesId &&
+      (!d.source?.playlistId || d.source.playlistId === detailPlaylistId)
   )
 
   const stubName = t("list.seriesFallback", { id: seriesId })
@@ -2184,6 +2418,7 @@ async function boot() {
   if (titleEl && series.name !== stubName) titleEl.textContent = displayTitle(series.name)
   // Hero stays in its skeleton state - settleHero() below decides when to paint it once.
   heroPosterUrl = series.logo || null
+  applyHeroTint(heroPosterUrl)
   setAmbient(series.logo || null)
   syncFavButton()
   syncWatchButton()
@@ -2192,7 +2427,7 @@ async function boot() {
   // Both probes are network-free (hydrate + memory read) and run under one bound,
   // so a cold IDB read can never delay first paint past the shared timeout.
   const { enrichment: earlyEnrichment, tmdbId: earlyTmdbId, tvdbId: earlyTvdbId, providerInfo: earlyProviderInfo } =
-    await peekEarlyTitleEnrichment("series", active._id, String(series.id), active._id, `series_info_${seriesId}`)
+    await peekEarlyTitleEnrichment("series", detailPlaylistId, String(series.id), detailPlaylistId, `series_info_${seriesId}`)
   if (enrichRequestIdForThisBoot !== enrichRequestId) return
 
   let providerInfoReady = false
@@ -2276,14 +2511,21 @@ async function boot() {
 
   let infoOk = providerInfoReady
   if (creds.host && creds.user && creds.pass) {
+    const seriesInfoFetchStartedAtMs = performance.now()
+    log.debug("[xt:series-detail] series info fetch start", `id=${seriesId}`)
     try {
-      const r = await xtreamApiFetch("get_series_info", {
-        series_id: String(seriesId),
-        series: String(seriesId),
-      })
+      const r = await xtreamApiFetch(
+        "get_series_info",
+        { series_id: String(seriesId), series: String(seriesId) },
+        { entryId: detailPlaylistId },
+      )
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
-      setCached(active._id, `series_info_${seriesId}`, data, SERIES_INFO_TTL_MS)
+      setCached(detailPlaylistId, `series_info_${seriesId}`, data, SERIES_INFO_TTL_MS)
+      log.debug(
+        "[xt:series-detail] series info fetch end",
+        `id=${seriesId} ok=true ms=${Math.round(performance.now() - seriesInfoFetchStartedAtMs)} seasons=${Array.isArray(data?.seasons) ? data.seasons.length : "unknown"}`
+      )
       if (enrichRequestIdForThisBoot === enrichRequestId) {
         applySeriesInfo(data)
         // applySeriesInfo rebuilds meta text and episode rows, wiping the merge; reassert it.
@@ -2301,6 +2543,7 @@ async function boot() {
       }
       infoOk = true
     } catch (e) {
+      log.debug("[xt:series-detail] series info fetch end", `id=${seriesId} ok=false ms=${Math.round(performance.now() - seriesInfoFetchStartedAtMs)}`)
       log.error("[xt:series-detail] info fetch failed:", e)
       if (!providerInfoReady && enrichRequestIdForThisBoot === enrichRequestId) {
         if (plotEl) {
@@ -2368,6 +2611,11 @@ async function boot() {
   setTimeout(() => favBtn?.focus?.(), 0)
 }
 
-document.addEventListener("xt:active-changed", () => boot())
+document.addEventListener("xt:active-changed", () => {
+  if (!requestedPlaylistId) boot()
+})
+document.addEventListener("xt:entries-updated", async () => {
+  if (requestedPlaylistId && !(await getEntryById(requestedPlaylistId))) boot()
+})
 
 boot()

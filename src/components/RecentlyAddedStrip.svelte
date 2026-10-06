@@ -3,10 +3,11 @@
   // Pass `kind` to filter to a single content kind ("vod" / "series").
   import { onMount } from "svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-  import { getActiveEntry } from "@/scripts/lib/creds.js"
+  import { getMergedEntries } from "@/scripts/lib/creds.js"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
   import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
-  import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { hydrateMergedRows, readMergedRows } from "@/scripts/lib/merged-catalog.ts"
+  import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
@@ -25,7 +26,6 @@
    *   rating: string,
    * }>} */
   let entries = $state([])
-  let activePlaylistId = $state("")
   let locale = $state(0)
   // Wrapper reads the locale rune so {tr(...)} template effects track it
   // and re-evaluate on LOCALE_EVENT.
@@ -40,13 +40,11 @@
 
   function buildEntry(item, kind) {
     const subtitle = kind === "vod" ? "Movie" : "Series"
-    const href =
-      kind === "vod"
-        ? `/movies/detail?id=${encodeURIComponent(item.id)}`
-        : `/series/detail?id=${encodeURIComponent(item.id)}`
+    const href = detailHrefFor(kind, item.id, { playlistId: item.playlistId })
     return {
       kind,
       id: Number(item.id),
+      playlistId: item.playlistId,
       name: item.name || `${subtitle} ${item.id}`,
       logo: item.logo || null,
       subtitle,
@@ -55,16 +53,12 @@
     }
   }
 
-  function buildEntries(playlistId, wantVod, wantSeries) {
+  function buildEntries(wantVod, wantSeries) {
     const vod = wantVod
-      ? (getCached(playlistId, "vod")?.data || []).filter(
-          (item) => item && item.id && (item.added || 0) > 0,
-        )
+      ? readMergedRows("vod").rows.filter((item) => item && item.id && (item.added || 0) > 0)
       : []
     const series = wantSeries
-      ? (getCached(playlistId, "series")?.data || []).filter(
-          (item) => item && item.id && (item.added || 0) > 0,
-        )
+      ? readMergedRows("series").rows.filter((item) => item && item.id && (item.added || 0) > 0)
       : []
     const merged = [
       ...vod.map((item) => ({ ts: Number(item.added) || 0, kind: "vod", item })),
@@ -78,35 +72,34 @@
 
   async function reload() {
     const generation = ++reloadGeneration
-    const active = await getActiveEntry()
+    const mergedEntries = await getMergedEntries()
     if (generation !== reloadGeneration) return
-    if (!active) {
+    if (!mergedEntries.length) {
       entries = []
-      activePlaylistId = ""
       return
     }
-    activePlaylistId = active._id
     const wantVod = filterKind === "all" || filterKind === "vod"
     const wantSeries = filterKind === "all" || filterKind === "series"
     const hydrations = [
-      wantVod ? hydrateCache(active._id, "vod") : Promise.resolve(),
-      wantSeries ? hydrateCache(active._id, "series") : Promise.resolve(),
+      wantVod ? hydrateMergedRows("vod") : Promise.resolve(),
+      wantSeries ? hydrateMergedRows("series") : Promise.resolve(),
     ]
-    const alreadyHydrated =
-      (!wantVod || getCached(active._id, "vod") !== null) &&
-      (!wantSeries || getCached(active._id, "series") !== null)
-    if (alreadyHydrated) {
-      entries = buildEntries(active._id, wantVod, wantSeries)
+    const current = [
+      ...(wantVod ? readMergedRows("vod").rows : []),
+      ...(wantSeries ? readMergedRows("series").rows : []),
+    ]
+    if (current.length) {
+      entries = buildEntries(wantVod, wantSeries)
       void Promise.allSettled(hydrations).then(() => {
         if (generation !== reloadGeneration) return
-        entries = buildEntries(active._id, wantVod, wantSeries)
+        entries = buildEntries(wantVod, wantSeries)
       }).catch(() => {})
       return
     }
     // Cold path: keep current entries (skeleton/hidden) until hydration resolves.
     await Promise.allSettled(hydrations)
     if (generation !== reloadGeneration) return
-    entries = buildEntries(active._id, wantVod, wantSeries)
+    entries = buildEntries(wantVod, wantSeries)
   }
 
   onMount(() => {
@@ -125,6 +118,7 @@
     const onLocaleChange = () => { locale++ }
     const handlers = {
       "xt:active-changed": scheduleReload,
+      "xt:merged-changed": scheduleReload,
       "xt:catalog-warmed": scheduleReload,
       [LOCALE_EVENT]: onLocaleChange,
     }
@@ -161,7 +155,7 @@
       use:dragScroll
       class="ra-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as entry, idx (entry.kind + ":" + entry.id)}
+      {#each entries as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
         <li
           class="ra-item shrink-0 snap-start"
           data-kind={entry.kind}
@@ -174,7 +168,7 @@
               id: entry.id,
               name: entry.name,
               logo: entry.logo,
-              playlistId: activePlaylistId,
+              playlistId: entry.playlistId,
             }}
             class="ra-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line

@@ -5,6 +5,7 @@ import {
   eligibleEntries,
   parseEntryYear,
   pickSurprise,
+  surpriseEntryKey,
   type SurpriseEntry,
 } from "../src/scripts/lib/surprise-picker.ts"
 
@@ -143,5 +144,29 @@ describe("pickSurprise", () => {
       random: () => 0,
     })
     expect(picked?.id).toBe(2)
+  })
+})
+
+describe("pickSurprise across merged playlists", () => {
+  const pool: SurpriseEntry[] = [
+    { id: 1, playlistId: "A", name: "A1" },
+    { id: 1, playlistId: "B", name: "B1" },
+  ]
+
+  it("keys entries by playlist and id", () => {
+    expect(surpriseEntryKey(pool[0])).toBe("A:1")
+    expect(surpriseEntryKey({ id: 1, name: "bare" })).toBe("1")
+  })
+
+  it("treats the same id in two playlists as two eligible entries", () => {
+    expect(pickSurprise(pool, { random: () => 0 })?.name).toBe("A1")
+    expect(pickSurprise(pool, { random: () => 0.9 })?.name).toBe("B1")
+  })
+
+  it("excludes by composite key only", () => {
+    const picked = pickSurprise(pool, { excludeIds: ["A:1"], random: () => 0 })
+    expect(picked?.name).toBe("B1")
+    const stillBoth = pickSurprise(pool, { excludeIds: ["1"], random: () => 0 })
+    expect(stillBoth?.name).toBe("A1")
   })
 })

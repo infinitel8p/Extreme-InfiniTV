@@ -19,4 +19,9 @@
     <color name="xt_row_bg_active">#59EC92E5</color>
     <color name="xt_row_text">#FFF5F5F7</color>
     <color name="xt_row_text_dim">#FFA1A1AA</color>
+
+    <!-- White masks: backgroundTint recolours them in SRC_IN, keeping each alpha -->
+    <color name="xt_focus_mask_stroke">#FFFFFFFF</color>
+    <color name="xt_focus_mask_fill">#33FFFFFF</color>
+    <color name="xt_focus_mask_fill_strong">#59FFFFFF</color>
 </resources>

@@ -7,7 +7,7 @@
 // pre-extraction versions.
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { matchesNormQuery, normalize, parseSearchQuery, scoreNormMatch, type SearchToken } from "@/scripts/lib/text.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { ICON_X } from "@/scripts/lib/icons.js"
 import {
@@ -39,6 +39,14 @@ import {
   type GenreIndex,
 } from "@/scripts/lib/genre-index.ts"
 import { isEnrichmentActive } from "@/scripts/lib/app-settings.js"
+import {
+  buildMergedCategoryRows,
+  categoryLabel,
+  mergedCategoryKey,
+  parseMergedCategoryKey,
+  type MergedCategoryRow,
+  type MergedPlaylistSource,
+} from "@/scripts/lib/merged-catalog-core.ts"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
@@ -63,6 +71,7 @@ export interface CategoryPickerItem {
   category?: string | null
   /** Every group this item belongs to (semicolon-split `group-title`). Falls back to `category` when absent. */
   categories?: string[] | null
+  playlistId?: string
 }
 
 export interface CategoryPickerOptions {
@@ -80,6 +89,8 @@ export interface CategoryPickerOptions {
   activeCatChangedEvent: string
   /** Read-only accessor for the active playlist id. */
   getActivePlaylistId(): string
+  /** Merged sources. Category values are `mergedCategoryKey(playlistId, name)`; bare names mean the active playlist. */
+  getSources?(): MergedPlaylistSource[]
   /** Read-only accessor for the channel / movie / series items. */
   getItems(): CategoryPickerItem[]
   /**
@@ -105,13 +116,14 @@ export interface CategoryPickerHandle {
   /** Set the active drill-down category (without firing the change event). */
   setActiveCat(cat: string, opts?: { silent?: boolean }): void
   getActiveCat(): string
+  getActiveSelection(): { playlistId: string; name: string } | null
   /** The kind whose hide / allow / mode are currently being applied. */
   resolvedKind(): PickerKind
   hiddenCategories(): Set<string>
   allowedCategories(): Set<string>
   categoryMode(): "hide" | "select"
   /** True if a category passes the resolved hide / allow filter. */
-  categoryPassesFilter(name: string): boolean
+  categoryPassesFilter(value: string): boolean
   destroy(): void
 }
 
@@ -121,7 +133,7 @@ export function mountCategoryPicker(
   const pseudoKind = opts.pseudoRowKind || (opts.kind === "epg" ? "live" : opts.kind)
   const genreKind: "vod" | "series" | null =
     opts.kind === "vod" || opts.kind === "series" ? opts.kind : null
-  let genreIndexSnapshot: GenreIndex | null = null
+  let genreIndexSnapshots = new Map<string, GenreIndex>()
 
   const dialog = document.getElementById(
     `${opts.idPrefix}-dialog`
@@ -178,14 +190,31 @@ export function mountCategoryPicker(
     return pid ? resolveEpgKind(pid) : "live"
   }
 
-  const hiddenSet = (): Set<string> => {
-    const pid = opts.getActivePlaylistId()
-    return pid ? getHiddenCategories(pid, resolvedKind()) : new Set()
+  const currentSources = (): MergedPlaylistSource[] => {
+    const list = opts.getSources?.()
+    return list && list.length
+      ? list
+      : [{ playlistId: opts.getActivePlaylistId(), title: "" }]
   }
 
-  const allowedSet = (): Set<string> => {
-    const pid = opts.getActivePlaylistId()
-    return pid ? getAllowedCategories(pid, resolvedKind()) : new Set()
+  const sourceIdsKey = (): string =>
+    currentSources()
+      .map((source) => source.playlistId)
+      .join("|")
+
+  const isMergedNow = (): boolean => currentSources().length >= 2
+
+  const normalizeCatValue = (value: string): string => {
+    const parsed = parseMergedCategoryKey(value, opts.getActivePlaylistId())
+    return parsed ? mergedCategoryKey(parsed.playlistId, parsed.name) : value
+  }
+
+  const hiddenSet = (playlistId: string = opts.getActivePlaylistId()): Set<string> => {
+    return playlistId ? getHiddenCategories(playlistId, resolvedKind()) : new Set()
+  }
+
+  const allowedSet = (playlistId: string = opts.getActivePlaylistId()): Set<string> => {
+    return playlistId ? getAllowedCategories(playlistId, resolvedKind()) : new Set()
   }
 
   const categoryMode = (): "hide" | "select" => {
@@ -198,30 +227,76 @@ export function mountCategoryPicker(
     return pid ? getCategorySort(pid, resolvedKind()) : "default"
   }
 
-  const categoryPassesFilter = (name: string): boolean => {
+  const categoryPassesFilter = (value: string): boolean => {
+    const parsed = parseMergedCategoryKey(value, opts.getActivePlaylistId())
+    if (!parsed) return true
     const mode = categoryMode()
     if (mode === "select") {
-      const allowed = allowedSet()
+      const allowed = allowedSet(parsed.playlistId)
       if (allowed.size === 0) return true
-      return allowed.has(name)
+      return allowed.has(parsed.name)
     }
-    return !hiddenSet().has(name)
+    return !hiddenSet(parsed.playlistId).has(parsed.name)
   }
 
-  const computeCategoryCounts = (items: CategoryPickerItem[]): Map<string, number> => {
-    const counts = new Map<string, number>()
+  const buildCategoryRows = (items: CategoryPickerItem[]): MergedCategoryRow[] => {
+    const sources = currentSources()
+    const activeId = opts.getActivePlaylistId()
+    const rowsByPlaylist = new Map<string, Array<{ categories: string[] }>>()
     for (const item of items) {
       const groups =
         Array.isArray(item.categories) && item.categories.length
           ? item.categories
           : [((item.category || "") + "").trim()]
-      // An item present in several groups counts toward every one of them.
-      for (const group of groups) {
-        const key = group.trim() || t("list.uncategorized")
-        counts.set(key, (counts.get(key) || 0) + 1)
+      const playlistId = item.playlistId ?? activeId
+      let bucket = rowsByPlaylist.get(playlistId)
+      if (!bucket) {
+        bucket = []
+        rowsByPlaylist.set(playlistId, bucket)
+      }
+      bucket.push({ categories: groups.map((group) => group.trim()) })
+    }
+    const rows = buildMergedCategoryRows(
+      sources,
+      rowsByPlaylist,
+      t("stream.uncategorized"),
+      sources.length >= 2,
+    )
+    const sortMode = categorySortMode()
+    const ordered: MergedCategoryRow[] = []
+    for (const source of sources) {
+      const own = rows.filter((row) => row.playlistId === source.playlistId)
+      const byName = new Map(own.map((row) => [row.name, row]))
+      for (const name of sortCategoryNames(Array.from(byName.keys()), sortMode)) {
+        ordered.push(byName.get(name)!)
       }
     }
-    return counts
+    return ordered
+  }
+
+  const rowAllowed = (row: MergedCategoryRow): boolean =>
+    allowedSet(row.playlistId).has(row.name)
+
+  const rowHidden = (row: MergedCategoryRow): boolean =>
+    hiddenSet(row.playlistId).has(row.name)
+
+  const pseudoCounts = (): { favorites: number; recents: number } => {
+    let favorites = 0
+    let recents = 0
+    for (const source of currentSources()) {
+      if (!source.playlistId) continue
+      favorites += getFavorites(source.playlistId, pseudoKind).size
+      recents += getRecents(source.playlistId, pseudoKind).length
+    }
+    return { favorites, recents }
+  }
+
+  const sanitizeActiveCat = (): void => {
+    if (!activeCat) return
+    const parsed = parseMergedCategoryKey(activeCat, opts.getActivePlaylistId())
+    if (!parsed) return
+    if (currentSources().some((source) => source.playlistId === parsed.playlistId)) return
+    setActiveCat("")
   }
 
   const syncLabel = (): void => {
@@ -234,7 +309,12 @@ export function mountCategoryPicker(
       labelEl.setAttribute("data-i18n", "list.specialRecents")
       labelEl.textContent = t("list.specialRecents")
     } else if (activeCat) {
-      labelEl.textContent = genreLabelForCategory(activeCat) || activeCat
+      const parsed = parseMergedCategoryKey(activeCat, opts.getActivePlaylistId())
+      const title =
+        currentSources().find((source) => source.playlistId === parsed?.playlistId)?.title || ""
+      labelEl.textContent =
+        genreLabelForCategory(activeCat) ||
+        (parsed ? categoryLabel(parsed.name, title, isMergedNow()) : activeCat)
     } else {
       labelEl.setAttribute("data-i18n", "list.allCategories")
       labelEl.textContent = t("list.allCategories")
@@ -243,9 +323,10 @@ export function mountCategoryPicker(
 
   const highlightActiveInList = (): void => {
     if (!listEl) return
+    const activeKey = normalizeCatValue(activeCat)
     for (const el of Array.from(listEl.querySelectorAll('[role="option"]'))) {
       const row = el as HTMLElement
-      const isActive = (row.dataset.val || "") === activeCat
+      const isActive = (row.dataset.val || "") === activeKey
       row.classList.toggle("bg-surface-2", isActive)
       row.setAttribute("aria-selected", String(isActive))
     }
@@ -284,6 +365,8 @@ export function mountCategoryPicker(
       selectChecked?: boolean
       dim?: boolean
       searchLabel?: string
+      playlistId?: string
+      name?: string
     } = {}
   ): HTMLElement => {
     const row = document.createElement("div")
@@ -292,6 +375,7 @@ export function mountCategoryPicker(
     row.setAttribute("aria-selected", "false")
     row.dataset.val = val
     if (rowOpts.searchLabel) row.dataset.searchLabel = normalize(rowOpts.searchLabel)
+    if (rowOpts.name != null) row.dataset.catLabel = label
     if (val.startsWith("__")) row.dataset.rowKind = "pseudo"
     else if (val === "") row.dataset.rowKind = "all"
     else if (rowOpts.hideAction === "unhide") row.dataset.rowKind = "hidden"
@@ -330,17 +414,17 @@ export function mountCategoryPicker(
       rightAction.addEventListener("click", (ev) => {
         ev.stopPropagation()
         ev.preventDefault()
-        const pid = opts.getActivePlaylistId()
+        const pid = rowOpts.playlistId || opts.getActivePlaylistId()
         if (!pid) return
         const willHide = rowOpts.hideAction === "hide"
-        setCategoryHidden(pid, resolvedKind(), val, willHide)
+        setCategoryHidden(pid, resolvedKind(), rowOpts.name ?? val, willHide)
         if (willHide) {
           toast({
             title: t("list.toast.hidCategory", { label }),
             description: t("stream.toast.hiddenInSettings"),
             duration: 4000,
           })
-          if (activeCat === val) setActiveCat("")
+          if (normalizeCatValue(activeCat) === val) setActiveCat("")
         }
       })
     } else if (rowOpts.selectAction) {
@@ -369,11 +453,11 @@ export function mountCategoryPicker(
       rightAction.addEventListener("click", (ev) => {
         ev.stopPropagation()
         ev.preventDefault()
-        const pid = opts.getActivePlaylistId()
+        const pid = rowOpts.playlistId || opts.getActivePlaylistId()
         if (!pid) return
         const currentlyChecked =
           (ev.currentTarget as HTMLElement).getAttribute("aria-checked") === "true"
-        setCategoryAllowed(pid, resolvedKind(), val, !currentlyChecked)
+        setCategoryAllowed(pid, resolvedKind(), rowOpts.name ?? val, !currentlyChecked)
       })
     }
 
@@ -408,38 +492,36 @@ export function mountCategoryPicker(
   const renderList = (): void => {
     if (!listEl) return
     const items = opts.getItems()
-    const counts = computeCategoryCounts(items)
-    const names = sortCategoryNames(Array.from(counts.keys()), categorySortMode())
+    const names = buildCategoryRows(items)
     const mode = categoryMode()
-    const hidden = hiddenSet()
-    const allowed = allowedSet()
     const visibleNames =
-      mode === "hide" ? names.filter((name) => !hidden.has(name)) : names
+      mode === "hide" ? names.filter((row) => !rowHidden(row)) : names
     const hiddenNames =
-      mode === "hide" ? names.filter((name) => hidden.has(name)) : []
+      mode === "hide" ? names.filter((row) => rowHidden(row)) : []
 
     const frag = document.createDocumentFragment()
-    const pid = opts.getActivePlaylistId()
 
-    const favs = pid ? getFavorites(pid, pseudoKind) : new Set<number>()
-    const recs = pid ? getRecents(pid, pseudoKind) : []
+    const pseudo = pseudoCounts()
 
-    const favRow = addRow(CAT_FAVORITES, t("list.specialFavorites"), favs.size, "text-accent")
-    if (favs.size === 0) favRow.style.display = "none"
+    const favRow = addRow(CAT_FAVORITES, t("list.specialFavorites"), pseudo.favorites, "text-accent")
+    if (pseudo.favorites === 0) favRow.style.display = "none"
     frag.appendChild(favRow)
 
-    const recRow = addRow(CAT_RECENTS, t("list.specialRecents"), recs.length, "")
-    if (recs.length === 0) recRow.style.display = "none"
+    const recRow = addRow(CAT_RECENTS, t("list.specialRecents"), pseudo.recents, "")
+    if (pseudo.recents === 0) recRow.style.display = "none"
     frag.appendChild(recRow)
 
     frag.appendChild(addRow("", t("list.allCategories"), null, ""))
 
     if (genreKind) {
       const enrichmentActive = isEnrichmentActive()
-      const genreEntries = CANONICAL_GENRES.map((genre) => ({
-        genre,
-        count: genreIndexSnapshot?.sets.get(genre.id)?.size || 0,
-      })).filter((entry) => enrichmentActive || entry.count > 0)
+      const genreEntries = CANONICAL_GENRES.map((genre) => {
+        let count = 0
+        for (const snapshot of genreIndexSnapshots.values()) {
+          count += snapshot.sets.get(genre.id)?.size || 0
+        }
+        return { genre, count }
+      }).filter((entry) => enrichmentActive || entry.count > 0)
 
       if (genreEntries.length) {
         const header = document.createElement("div")
@@ -455,12 +537,18 @@ export function mountCategoryPicker(
           )
         }
 
-        if (genreIndexSnapshot) {
+        if (genreIndexSnapshots.size) {
+          let classifiedCount = 0
+          let totalCount = 0
+          for (const snapshot of genreIndexSnapshots.values()) {
+            classifiedCount += snapshot.classifiedCount
+            totalCount += snapshot.totalCount
+          }
           const footer = document.createElement("div")
           footer.className = "px-2 pt-1.5 pb-2 text-xs text-fg-3 border-b border-line"
           footer.textContent = t("genres.coverage", {
-            classified: genreIndexSnapshot.classifiedCount.toLocaleString(),
-            total: genreIndexSnapshot.totalCount.toLocaleString(),
+            classified: classifiedCount.toLocaleString(),
+            total: totalCount.toLocaleString(),
           })
           if (!enrichmentActive) {
             const hint = document.createElement("div")
@@ -475,18 +563,22 @@ export function mountCategoryPicker(
 
     let origIndex = 0
     if (mode === "select") {
-      for (const name of visibleNames) {
-        const row = addRow(name, name, counts.get(name) || 0, "", {
+      for (const catRow of visibleNames) {
+        const row = addRow(catRow.key, catRow.label, catRow.count, "", {
           selectAction: true,
-          selectChecked: allowed.has(name),
+          selectChecked: rowAllowed(catRow),
+          playlistId: catRow.playlistId,
+          name: catRow.name,
         })
         row.dataset.origIndex = String(origIndex++)
         frag.appendChild(row)
       }
     } else {
-      for (const name of visibleNames) {
-        const row = addRow(name, name, counts.get(name) || 0, "", {
+      for (const catRow of visibleNames) {
+        const row = addRow(catRow.key, catRow.label, catRow.count, "", {
           hideAction: "hide",
+          playlistId: catRow.playlistId,
+          name: catRow.name,
         })
         row.dataset.origIndex = String(origIndex++)
         frag.appendChild(row)
@@ -511,11 +603,13 @@ export function mountCategoryPicker(
       })
       frag.appendChild(toggle)
       if (showHidden) {
-        for (const name of hiddenNames) {
+        for (const catRow of hiddenNames) {
           frag.appendChild(
-            addRow(name, name, counts.get(name) || 0, "", {
+            addRow(catRow.key, catRow.label, catRow.count, "", {
               hideAction: "unhide",
               dim: true,
+              playlistId: catRow.playlistId,
+              name: catRow.name,
             })
           )
         }
@@ -528,7 +622,7 @@ export function mountCategoryPicker(
       if (mode === "select") {
         const totalCats = names.length
         const pickedCount = names.reduce(
-          (acc, name) => (allowed.has(name) ? acc + 1 : acc),
+          (acc, row) => (rowAllowed(row) ? acc + 1 : acc),
           0
         )
         statusEl.textContent =
@@ -556,10 +650,8 @@ export function mountCategoryPicker(
 
   const filterCategories = (): void => {
     if (!listEl || !statusEl || !searchEl) return
-    const qnorm = normalize(searchEl.value || "")
-    const tokens = qnorm.length ? qnorm.split(" ") : []
+    const tokens = parseSearchQuery(searchEl.value)
     const mode = categoryMode()
-    const allowed = mode === "select" ? allowedSet() : null
     const filterToSelected = mode === "select" && showSelectedOnly
 
     let visibleCount = 0
@@ -574,19 +666,21 @@ export function mountCategoryPicker(
       const isAllButton = val === ""
       const isRegularRow = !isAllButton && !isPseudo
       if (isRegularRow) totalCount++
-      const label = row.dataset.searchLabel || normalize(val || row.textContent || "")
-      const searchMatches =
-        !tokens.length || tokens.every((token) => label.includes(token))
-      let show = searchMatches
+      const nameText = row.dataset.catLabel || val
+      const label = row.dataset.searchLabel || normalize(nameText || row.textContent || "")
+      const rawName = row.dataset.searchLabel ? null : nameText || row.textContent || ""
+      let show = matchesNormQuery(label, tokens, rawName)
       if (show && filterToSelected && isRegularRow) {
-        show = !!allowed && allowed.has(val)
+        const parsed = parseMergedCategoryKey(val, opts.getActivePlaylistId())
+        show = !!parsed && allowedSet(parsed.playlistId).has(parsed.name)
       }
       row.style.display = show ? "" : "none"
       if (show && isRegularRow) visibleCount++
     }
 
     if (mode === "select") {
-      const pickedCount = allowed ? allowed.size : 0
+      let pickedCount = 0
+      for (const source of currentSources()) pickedCount += allowedSet(source.playlistId).size
       statusEl.textContent = filterToSelected
         ? t("list.statusSelectFiltered", {
             visible: visibleCount.toLocaleString(),
@@ -609,7 +703,7 @@ export function mountCategoryPicker(
   }
 
   // Reorder regular category rows by search relevance when a query is active
-  const sortRegularRows = (tokens: string[]): void => {
+  const sortRegularRows = (tokens: SearchToken[]): void => {
     if (!listEl) return
     const rows = Array.from(
       listEl.querySelectorAll<HTMLElement>(
@@ -621,8 +715,9 @@ export function mountCategoryPicker(
     const scoreOf = (row: HTMLElement): number => {
       if (!tokens.length) return 0
       if (row.style.display === "none") return 0
-      const label = normalize(row.dataset.val || row.textContent || "")
-      return scoreNormMatch(label, tokens)
+      const rawName = row.dataset.catLabel || row.dataset.val || row.textContent || ""
+      const label = normalize(rawName)
+      return scoreNormMatch(label, tokens, rawName)
     }
     const origOf = (row: HTMLElement): number =>
       Number(row.dataset.origIndex) || 0
@@ -650,13 +745,20 @@ export function mountCategoryPicker(
 
   const refreshGenreIndex = (): void => {
     if (!genreKind) return
-    const playlistId = opts.getActivePlaylistId()
-    if (!playlistId) return
-    getGenreIndex(playlistId, genreKind).then((index) => {
-      if (opts.getActivePlaylistId() !== playlistId) return
-      genreIndexSnapshot = index
-      renderList()
-    })
+    const requestedKey = sourceIdsKey()
+    const playlistIds = currentSources()
+      .map((source) => source.playlistId)
+      .filter(Boolean)
+    if (!playlistIds.length) return
+    Promise.all(playlistIds.map((playlistId) => getGenreIndex(playlistId, genreKind))).then(
+      (indexes) => {
+        if (sourceIdsKey() !== requestedKey) return
+        genreIndexSnapshots = new Map(
+          playlistIds.map((playlistId, i) => [playlistId, indexes[i]])
+        )
+        renderList()
+      }
+    )
   }
 
   const syncModeToggle = (): void => {
@@ -711,13 +813,10 @@ export function mountCategoryPicker(
 
   const refreshPseudoRows = (): void => {
     if (!listEl) return
-    const pid = opts.getActivePlaylistId()
-    if (!pid) return
-    const favs = getFavorites(pid, pseudoKind)
-    const recs = getRecents(pid, pseudoKind)
+    const pseudo = pseudoCounts()
     for (const [val, count] of [
-      [CAT_FAVORITES, favs.size],
-      [CAT_RECENTS, recs.length],
+      [CAT_FAVORITES, pseudo.favorites],
+      [CAT_RECENTS, pseudo.recents],
     ] as Array<[string, number]>) {
       const row = listEl.querySelector(
         `[role="option"][data-val="${val}"]`
@@ -758,9 +857,8 @@ export function mountCategoryPicker(
   })
 
   selectAllBtn?.addEventListener("click", () => {
-    const pid = opts.getActivePlaylistId()
-    if (!pid || !listEl) return
-    const allowed = new Set(allowedSet())
+    if (!listEl) return
+    const allowedByPlaylist = new Map<string, Set<string>>()
     for (const el of Array.from(
       listEl.querySelectorAll('[role="option"]')
     )) {
@@ -769,26 +867,38 @@ export function mountCategoryPicker(
       if (!val) continue
       if (val.startsWith("__")) continue
       if (row.style.display === "none") continue
-      allowed.add(val)
+      const parsed = parseMergedCategoryKey(val, opts.getActivePlaylistId())
+      if (!parsed || !parsed.playlistId) continue
+      let allowed = allowedByPlaylist.get(parsed.playlistId)
+      if (!allowed) {
+        allowed = new Set(allowedSet(parsed.playlistId))
+        allowedByPlaylist.set(parsed.playlistId, allowed)
+      }
+      allowed.add(parsed.name)
     }
-    setAllowedCategories(pid, resolvedKind(), allowed)
+    for (const [playlistId, allowed] of allowedByPlaylist) {
+      setAllowedCategories(playlistId, resolvedKind(), allowed)
+    }
   })
 
   selectClearBtn?.addEventListener("click", () => {
-    const pid = opts.getActivePlaylistId()
-    if (!pid) return
-    setAllowedCategories(pid, resolvedKind(), [])
+    for (const source of currentSources()) {
+      if (!source.playlistId) continue
+      setAllowedCategories(source.playlistId, resolvedKind(), [])
+    }
   })
 
   searchEl?.addEventListener("input", debounce(filterCategories, 120))
 
   // Sync-with-Live toggle (EPG only). Reflect current state on mount so the
   // checkbox doesn't show a hardcoded "checked".
+  let reflectSyncInput: () => void = () => {}
   if (syncInput && opts.kind === "epg") {
     const reflectSync = (): void => {
       const pid = opts.getActivePlaylistId()
       syncInput.checked = pid ? getSyncEpgWithLive(pid) : true
     }
+    reflectSyncInput = reflectSync
     reflectSync()
     syncInput.addEventListener("change", () => {
       const pid = opts.getActivePlaylistId()
@@ -809,12 +919,13 @@ export function mountCategoryPicker(
   }
 
   // Mutate one row's "selected" state without rebuilding the whole list
-  const updateRowAllowedState = (categoryName: string, allowed: boolean): boolean => {
+  const updateRowAllowedState = (categoryKey: string, allowed: boolean): boolean => {
     if (!listEl) return false
-    const row = listEl.querySelector<HTMLElement>(
-      `[role="option"][data-val="${CSS.escape(categoryName)}"]`,
+    const row = Array.from(listEl.querySelectorAll<HTMLElement>('[role="option"]')).find(
+      (candidate) => candidate.dataset.val === categoryKey,
     )
     if (!row) return false
+    const categoryName = row.dataset.catLabel || categoryKey
     const checkbox = row.querySelector<HTMLButtonElement>(".category-select-btn")
     if (!checkbox) return false
     checkbox.setAttribute("aria-checked", String(allowed))
@@ -840,14 +951,17 @@ export function mountCategoryPicker(
   const onAnyPrefChange = (event: Event): void => {
     const detail = (event as CustomEvent).detail
     if (!detail) return
-    if (detail.playlistId !== opts.getActivePlaylistId()) return
+    if (!currentSources().some((source) => source.playlistId === detail.playlistId)) return
     const targetKind = resolvedKind()
     if (detail.kind !== targetKind) return
 
     if (
       event.type === "xt:allowed-categories-changed" &&
       detail.categoryId != null &&
-      updateRowAllowedState(String(detail.categoryId), !!detail.allowed)
+      updateRowAllowedState(
+        mergedCategoryKey(detail.playlistId, String(detail.categoryId)),
+        !!detail.allowed,
+      )
     ) {
       filterCategories()
       return
@@ -863,7 +977,7 @@ export function mountCategoryPicker(
   onDoc(GENRE_INDEX_EVENT, (event: Event) => {
     const detail = (event as CustomEvent).detail
     if (!detail || !genreKind) return
-    if (detail.playlistId !== opts.getActivePlaylistId()) return
+    if (!currentSources().some((source) => source.playlistId === detail.playlistId)) return
     if (detail.kind !== genreKind) return
     scheduleGenreRefresh()
   })
@@ -920,15 +1034,21 @@ export function mountCategoryPicker(
 
   return {
     rerender: () => {
+      sanitizeActiveCat()
+      reflectSyncInput()
       scheduleListRefresh()
       scheduleGenreRefresh()
     },
     refreshPseudoRows,
     setActiveCat,
     getActiveCat: () => activeCat,
+    getActiveSelection: () => {
+      const parsed = parseMergedCategoryKey(activeCat, opts.getActivePlaylistId())
+      return parsed && parsed.playlistId ? parsed : null
+    },
     resolvedKind,
-    hiddenCategories: hiddenSet,
-    allowedCategories: allowedSet,
+    hiddenCategories: () => hiddenSet(),
+    allowedCategories: () => allowedSet(),
     categoryMode,
     categoryPassesFilter,
     destroy: () => {

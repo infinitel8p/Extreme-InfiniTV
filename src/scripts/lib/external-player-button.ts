@@ -40,6 +40,7 @@ import { openAndroidPlayerPicker } from "@/scripts/lib/player-picker-dialog.ts"
 import { pickExternalPlayer } from "@/scripts/lib/external-player-choice-dialog.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
+import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
 
 type ButtonKind = ExternalPlayerKind | AndroidHandoffKind
 
@@ -48,6 +49,15 @@ export interface EscapeHatchHooks {
   getHeaders?(): { userAgent?: string | null; referer?: string | null } | null | undefined
   getResumeSeconds?(): number
   getTitle?(): string | null | undefined
+  /** Remembered audio/sub language for this title, fed into the mpv/vlc launch args. */
+  getTrackPrefs?(): { audioLang: string | null; subLang: string | null; subOff: boolean } | null
+  /** Identifies the item for the external-progress recorder; mpv only. */
+  getProgressTarget?(): {
+    playlistId: string
+    kind: "vod" | "episode"
+    id: string
+    extras: Record<string, unknown>
+  } | null
   beforeLaunch?(kind: ButtonKind): void
   /** Fires past every cancellable chooser, right before launch: drop local playback and its recovery machinery here. */
   releaseLocal?(kind: ButtonKind): void
@@ -299,6 +309,7 @@ export function setupExternalPlayerButton(
       userAgent: headers?.userAgent ?? null,
       referer: headers?.referer ?? null,
       resumeSeconds: hooks.getResumeSeconds?.() ?? 0,
+      tracks: hooks.getTrackPrefs?.() ?? null,
     }
     toast({
       title:
@@ -308,7 +319,20 @@ export function setupExternalPlayerButton(
     })
     releaseLocal(desktopKind)
     try {
-      await launcher.launch(src, opts)
+      const result = await launcher.launch(src, opts)
+      const progressTarget = desktopKind === "mpv" ? hooks.getProgressTarget?.() : null
+      if (result.sessionId && progressTarget) {
+        beginExternalSession({
+          sessionId: result.sessionId,
+          kind: "mpv",
+          srcKey: externalSrcKey(result.src),
+          playlistId: progressTarget.playlistId,
+          contentKind: progressTarget.kind,
+          contentId: progressTarget.id,
+          extras: progressTarget.extras,
+          startedAt: Date.now(),
+        })
+      }
       notifyLaunched(desktopKind)
     } catch (err) {
       surfaceLaunchError(err, desktopKind)

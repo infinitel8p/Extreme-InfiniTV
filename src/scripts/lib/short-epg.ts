@@ -66,11 +66,12 @@ function xtreamApiOpts(creds: XtreamCreds) {
   return creds.entryId ? { entryId: creds.entryId } : {}
 }
 
-/** Fetches current + upcoming programmes for one live stream. Null on failure or an unavailable source. */
+/** Fetches current + upcoming programmes for one live stream; nowMs is provider-space. Null on failure. */
 export async function fetchShortEpg(
   creds: XtreamCreds,
   streamId: string | number,
-  limit: number = SHORT_EPG_LIMIT
+  limit: number = SHORT_EPG_LIMIT,
+  nowMs: number = Date.now()
 ): Promise<Programme[] | null> {
   if (!xtreamShortEpgAvailable(creds)) return null
   try {
@@ -87,7 +88,7 @@ export async function fetchShortEpg(
       ? data
       : null
     if (!rows) return null
-    return mapShortEpgRows(rows, Date.now())
+    return mapShortEpgRows(rows, nowMs)
   } catch {
     return null
   }

@@ -3,13 +3,9 @@
 import { log } from "@/scripts/lib/log.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { normalize } from "@/scripts/lib/text.js"
-import {
-  loadCreds,
-  getActiveEntry,
-  isLikelyM3USource,
-  safeHttpUrl,
-} from "@/scripts/lib/creds.js"
+import { matchesNormQuery, normalize, parseSearchQuery, type SearchToken } from "@/scripts/lib/text.js"
+import { getMergedEntries, safeHttpUrl } from "@/scripts/lib/creds.js"
+import { rowKey, stampRowsWithPlaylist } from "@/scripts/lib/merged-catalog-core.ts"
 import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live-catalog.ts"
 import {
   effectiveTvgId,
@@ -29,6 +25,7 @@ import { getDensityFactor } from "@/scripts/lib/app-settings.js"
 
 type Channel = {
   id: number
+  playlistId: string
   name: string
   tvgId?: string
   logo?: string | null
@@ -58,26 +55,25 @@ if (pickDialog) {
   attachDialogSpatialNav(pickDialog, { defaultElement: "#epg-pick-search" })
 }
 
-let activePlaylistId = ""
-let activeIsM3U = false
-let pickerChannelId: number | null = null
+let pickerChannel: Channel | null = null
 
 type MapFilter = "all" | "unmapped" | "auto" | "overridden"
 let mapFilter: MapFilter = "all"
 
-async function getActiveChannels(): Promise<Channel[]> {
-  const entry = await getActiveEntry()
-  if (!entry) {
-    activePlaylistId = ""
-    activeIsM3U = false
-    return []
-  }
-  activePlaylistId = entry._id
-  const creds = await loadCreds()
-  activeIsM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
+async function getMappableChannels(): Promise<Channel[]> {
+  const entries = await getMergedEntries()
   // Overrides live in prefs, so a cache-only read has to wait for them.
   await ensureOverridesReady()
-  return readCachedLiveChannels(activePlaylistId) as Channel[]
+  const channels: Channel[] = []
+  for (const entry of entries) {
+    const rows = stampRowsWithPlaylist(readCachedLiveChannels(entry._id), entry._id) as (Channel & {
+      isHeader?: boolean
+    })[]
+    for (const row of rows) {
+      if (!row.isHeader) channels.push(row)
+    }
+  }
+  return channels
 }
 
 function escapeHtml(input: string) {
@@ -92,7 +88,7 @@ function escapeHtml(input: string) {
 
 function channelMatchesFilter(channel: Channel) {
   if (mapFilter === "all") return true
-  const source = classifyTvgIdSource(channel, activePlaylistId)
+  const source = classifyTvgIdSource(channel, channel.playlistId)
   if (mapFilter === "overridden") return source === "override" || source === "name"
   if (mapFilter === "auto") return source === "tvg-id"
   if (mapFilter === "unmapped") return source === "none"
@@ -103,7 +99,7 @@ let cachedChannels: Channel[] = []
 let cachedChannelsNorm: string[] = []
 let filteredChannels: Channel[] = []
 
-let channelById = new Map<number, Channel>()
+let channelByKey = new Map<string, Channel>()
 
 const MAP_ROW_H = Math.max(44, Math.round(60 * getDensityFactor()))
 const MAP_OVERSCAN = 6
@@ -111,15 +107,15 @@ let mapSpacer: HTMLElement | null = null
 let mapRenderToken = 0
 let mapScrollScheduled = false
 
-let justChangedChannelId: number | null = null
+let justChangedChannelKey: string | null = null
 let justChangedTimer: number | null = null
 const JUST_CHANGED_MS = 1200
 
-function flagJustChanged(channelId: number): void {
-  justChangedChannelId = channelId
+function flagJustChanged(channel: Channel): void {
+  justChangedChannelKey = rowKey(channel)
   if (justChangedTimer != null) window.clearTimeout(justChangedTimer)
   justChangedTimer = window.setTimeout(() => {
-    justChangedChannelId = null
+    justChangedChannelKey = null
     justChangedTimer = null
   }, JUST_CHANGED_MS)
 }
@@ -128,20 +124,16 @@ function recomputeCachedNorm() {
   cachedChannelsNorm = cachedChannels.map((channel) =>
     normalize(`${channel.name} ${channel.tvgId || ""}`)
   )
-  channelById = new Map(cachedChannels.map((channel) => [channel.id, channel]))
+  channelByKey = new Map(cachedChannels.map((channel) => [rowKey(channel), channel]))
 }
 
 function rebuildFiltered() {
-  const search = normalize(mapSearchEl?.value || "")
-  const tokens = search.length ? search.split(" ") : []
+  const tokens = parseSearchQuery(mapSearchEl?.value || "")
   filteredChannels = []
   for (let i = 0; i < cachedChannels.length; i++) {
     const channel = cachedChannels[i]
     if (!channelMatchesFilter(channel)) continue
-    if (tokens.length) {
-      const haystack = cachedChannelsNorm[i]
-      if (!tokens.every((token) => haystack.includes(token))) continue
-    }
+    if (!matchesNormQuery(cachedChannelsNorm[i], tokens, channel.name)) continue
     filteredChannels.push(channel)
   }
 }
@@ -215,9 +207,9 @@ function renderMapWindow() {
   const html: string[] = []
   for (let i = startIdx; i < endIdx; i++) {
     const channel = filteredChannels[i]
-    const override = getChannelEpgOverride(activePlaylistId, channel.id)
-    const source = classifyTvgIdSource(channel, activePlaylistId)
-    const resolved = effectiveTvgId(channel, activePlaylistId)
+    const override = getChannelEpgOverride(channel.playlistId, channel.id)
+    const source = classifyTvgIdSource(channel, channel.playlistId)
+    const resolved = effectiveTvgId(channel, channel.playlistId)
 
     let badgeHtml: string
     if (source === "override") {
@@ -247,9 +239,9 @@ function renderMapWindow() {
 
     const top = i * MAP_ROW_H
     const justChangedAttr =
-      channel.id === justChangedChannelId ? ` data-just-changed="true"` : ""
+      rowKey(channel) === justChangedChannelKey ? ` data-just-changed="true"` : ""
     html.push(
-      `<button type="button" data-channel-id="${channel.id}"${justChangedAttr} class="${rowClassBase}" style="top:${top}px;height:${MAP_ROW_H}px;">${logoHtml}<div class="flex-1 min-w-0"><div class="truncate text-sm font-medium text-fg">${escapeHtml(channel.name)}</div>${subHtml}</div>${badgeHtml}</button>`
+      `<button type="button" data-channel-key="${escapeHtml(rowKey(channel))}"${justChangedAttr} class="${rowClassBase}" style="top:${top}px;height:${MAP_ROW_H}px;">${logoHtml}<div class="flex-1 min-w-0"><div class="truncate text-sm font-medium text-fg">${escapeHtml(channel.name)}</div>${subHtml}</div>${badgeHtml}</button>`
     )
   }
   if (token !== mapRenderToken) return
@@ -269,12 +261,10 @@ function scheduleScrollRender() {
 // Delegated click handler - one listener on the list, not N on each row.
 mapListEl?.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement)?.closest(
-    "button[data-channel-id]"
+    "button[data-channel-key]"
   ) as HTMLButtonElement | null
   if (!target) return
-  const channelId = Number(target.dataset.channelId)
-  if (!Number.isFinite(channelId)) return
-  const channel = channelById.get(channelId)
+  const channel = channelByKey.get(target.dataset.channelKey || "")
   if (channel) openPicker(channel)
 })
 
@@ -311,7 +301,7 @@ openBtn?.addEventListener("click", async () => {
   if (typeof mapDialog.showModal === "function") mapDialog.showModal()
   else mapDialog.setAttribute("open", "")
 
-  cachedChannels = await getActiveChannels()
+  cachedChannels = await getMappableChannels()
   if (!mapDialog.open) return
   requestAnimationFrame(() => {
     recomputeCachedNorm()
@@ -327,8 +317,8 @@ openBtn?.addEventListener("click", async () => {
 
 function openPicker(channel: Channel) {
   if (!pickDialog) return
-  pickerChannelId = channel.id
-  const current = getChannelEpgOverride(activePlaylistId, channel.id)
+  pickerChannel = channel
+  const current = getChannelEpgOverride(channel.playlistId, channel.id)
   const original = (channel.tvgId || "").toLowerCase()
   // The button's own `disabled:opacity-50 disabled:cursor-not-allowed` classes
   // (see epg.astro) paint the disabled state - just toggle the attribute here.
@@ -355,9 +345,21 @@ function openPicker(channel: Channel) {
 
 const PICKER_RENDER_CAP = 200
 
+function fieldTier(haystack: string, token: SearchToken): number {
+  if (!haystack) return 0
+  if (haystack === token.text) return 3
+  if (token.wholeWord) {
+    const padded = " " + haystack + " "
+    return padded.includes(" " + token.text + " ") ? 2 : 0
+  }
+  if (haystack.startsWith(token.text)) return 2
+  if (haystack.includes(token.text)) return 1
+  return 0
+}
+
 function renderPickList() {
   if (!pickListEl) return
-  const available = getAvailableEpgChannels(activePlaylistId)
+  const available = pickerChannel ? getAvailableEpgChannels(pickerChannel.playlistId) : []
   if (!available.length) {
     pickListEl.innerHTML = `<div role="status" class="h-full flex flex-col items-center justify-center gap-3 p-6 text-sm text-fg-3 text-center">
       <span class="text-2xl text-fg-3/50" aria-hidden="true">${ICON_INFO}</span>
@@ -371,10 +373,9 @@ function renderPickList() {
   }
   if (pickStatusEl) pickStatusEl.removeAttribute("data-i18n")
 
-  const search = normalize(pickSearchEl?.value || "")
-  const tokens = search.length ? search.split(" ") : []
-  const currentOverride = pickerChannelId != null
-    ? getChannelEpgOverride(activePlaylistId, pickerChannelId)
+  const tokens = parseSearchQuery(pickSearchEl?.value || "")
+  const currentOverride = pickerChannel
+    ? getChannelEpgOverride(pickerChannel.playlistId, pickerChannel.id)
     : ""
 
   // Score results so the best matches float to the top. Exact-id / exact-name
@@ -387,10 +388,9 @@ function renderPickList() {
       const nameNorm = normalize(entry.name)
       let tokenHits = 0
       for (const token of tokens) {
-        if (nameNorm === token || idNorm === token) tokenHits += 3
-        else if (nameNorm.startsWith(token) || idNorm.startsWith(token)) tokenHits += 2
-        else if (nameNorm.includes(token) || idNorm.includes(token)) tokenHits += 1
-        else { tokenHits = 0; break }
+        const tier = Math.max(fieldTier(nameNorm, token), fieldTier(idNorm, token))
+        if (!tier) { tokenHits = 0; break }
+        tokenHits += tier
       }
       if (!tokenHits) continue
       score = tokenHits + Math.min(entry.count, 200) / 200
@@ -450,11 +450,11 @@ pickListEl?.addEventListener("click", (event) => {
     "button[data-tvg-id]"
   ) as HTMLButtonElement | null
   if (!target) return
-  if (pickerChannelId == null || !activePlaylistId) return
+  if (!pickerChannel) return
   const tvgId = target.dataset.tvgId
   if (!tvgId) return
-  flagJustChanged(pickerChannelId)
-  setChannelEpgOverride(activePlaylistId, pickerChannelId, tvgId)
+  flagJustChanged(pickerChannel)
+  setChannelEpgOverride(pickerChannel.playlistId, pickerChannel.id, tvgId)
   pickDialog?.close?.()
 })
 
@@ -464,9 +464,9 @@ pickDialog?.addEventListener("click", (event) => {
   if (event.target === pickDialog) pickDialog.close()
 })
 pickClearBtn?.addEventListener("click", () => {
-  if (pickerChannelId == null || !activePlaylistId) return
-  flagJustChanged(pickerChannelId)
-  clearChannelEpgOverride(activePlaylistId, pickerChannelId)
+  if (!pickerChannel) return
+  flagJustChanged(pickerChannel)
+  clearChannelEpgOverride(pickerChannel.playlistId, pickerChannel.id)
   pickDialog?.close?.()
 })
 
@@ -486,8 +486,8 @@ document.addEventListener("xt:active-changed", () => {
   cachedChannels = []
   cachedChannelsNorm = []
   filteredChannels = []
-  channelById = new Map()
-  pickerChannelId = null
+  channelByKey = new Map()
+  pickerChannel = null
 })
 document.addEventListener(LOCALE_EVENT, () => {
   if (mapDialog?.open) renderMapList()

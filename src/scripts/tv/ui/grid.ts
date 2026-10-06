@@ -4,9 +4,17 @@
 
 import { rowWindow, rowOf } from "@/scripts/lib/tv-grid-filter"
 import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
-import { registerFocusSection, keepFocusedInView, resetKeepInView, remPx, refreshKeepInView } from "@/scripts/tv/focus"
+import {
+  registerFocusSection,
+  keepFocusedInView,
+  resetKeepInView,
+  remPx,
+  refreshKeepInView,
+  invalidateKeepInViewLayout,
+} from "@/scripts/tv/focus"
 import { motionAllowed, startViewTransitionSafe, TV_EASE, heavyEffectsAllowed, memoryConservative } from "@/scripts/tv/motion"
-import { createCard, keepCardMediaDecoded, type PosterCardItem } from "./card"
+import { createKeyRepeatCoalescer } from "@/scripts/lib/key-repeat-coalescer"
+import { createCard, keepCardMediaDecoded, registerCardLongPress, type PosterCardItem } from "./card"
 
 const OVERSCAN_ROWS_FULL = 2
 // Lite keeps only the visible rows mounted - no extra rows held resident off-screen.
@@ -27,6 +35,9 @@ export interface GridOptions {
   railId: string
   columns?: number
   emptyMessage?: string
+  /** Fires once per mounted card - callers that need to decorate cards (e.g. language chips)
+   * hook this instead of running a MutationObserver over the whole grid subtree. */
+  onCardMounted?(cardEl: HTMLElement): void
 }
 
 /** Card items are built per mounted row, so a 20k-row catalog never materializes 20k of them. */
@@ -62,6 +73,9 @@ function entryKeyOf(source: GridSource, index: number): string {
   const item = source.itemAt(index)
   return `${item.kind}:${item.id}`
 }
+
+// key -> index, built once per GridSource identity and shared by nameSurvivorCards/findIndexByKey.
+const sourceKeyIndexCache = new WeakMap<GridSource, Map<string, number>>()
 
 function cardSignatureOf(item: PosterCardItem): string {
   return [item.href, item.name, item.meta, item.posterUrl ?? "", item.progressPercent ?? ""].join("")
@@ -102,6 +116,8 @@ export function createGrid(options: GridOptions): GridHandle {
     restrict: "self-first",
   })
   const unregisterKeepInView = keepFocusedInView(scroller, "y", () => remPx(SCROLL_OFFSET_REM))
+  // One delegated long-press listener set for the whole track instead of one per card.
+  const cardLongPress = registerCardLongPress(track)
 
   let source: GridSource = EMPTY_GRID_SOURCE
   const fixedColumns = options.columns || 0
@@ -200,6 +216,7 @@ export function createGrid(options: GridOptions): GridHandle {
       }
       card.dataset.gridIndex = String(index)
       rowEl.appendChild(card)
+      options.onCardMounted?.(card)
     }
     return rowEl
   }
@@ -262,22 +279,30 @@ export function createGrid(options: GridOptions): GridHandle {
     return Number.isFinite(index) ? index : null
   }
 
-  // Scans outward from `nearIndex`: a survivor usually lands at or near its old slot, and every
-  // probe builds a key string, so a 180k-row catalog makes a front-to-back scan expensive.
-  function findIndexByKey(targetSource: GridSource, key: string, nearIndex: number): number | null {
-    const total = targetSource.count
-    if (total <= 0) return null
-    const start = Math.max(0, Math.min(nearIndex, total - 1))
-    if (entryKeyOf(targetSource, start) === key) return start
-    for (let offset = 1; offset < total; offset++) {
-      const before = start - offset
-      const after = start + offset
-      if (before < 0 && after >= total) break
-      if (before >= 0 && entryKeyOf(targetSource, before) === key) return before
-      if (after < total && entryKeyOf(targetSource, after) === key) return after
-    }
-    return null
+  // Built once per source (cached by object identity) so a 180k-row catalog is scanned a
+  // single time per reconcile pass instead of once per findIndexByKey/nameSurvivorCards call.
+  function keyIndexMapFor(targetSource: GridSource): Map<string, number> {
+    let map = sourceKeyIndexCache.get(targetSource)
+    if (map) return map
+    map = new Map()
+    for (let index = 0; index < targetSource.count; index++) map.set(entryKeyOf(targetSource, index), index)
+    sourceKeyIndexCache.set(targetSource, map)
+    return map
   }
+
+  function findIndexByKey(targetSource: GridSource, key: string, _nearIndex: number): number | null {
+    if (targetSource.count <= 0) return null
+    return keyIndexMapFor(targetSource).get(key) ?? null
+  }
+
+  // Accumulates same-burst key-repeat moves so a held Down/PageDown only touches the DOM
+  // once per frame instead of once per keydown; the callback re-reads the DOM index at
+  // flush time since it may differ from what was on screen when the burst started.
+  const keyRepeat = createKeyRepeatCoalescer((delta) => {
+    if (!source.count) return
+    const domIndex = currentFocusedIndex() ?? lastFocusedIndex ?? 0
+    focusIndex(Math.max(0, Math.min(source.count - 1, domIndex + delta)))
+  })
 
   function onKeyDown(event: KeyboardEvent): void {
     if (event.ctrlKey || event.metaKey) return
@@ -291,22 +316,25 @@ export function createGrid(options: GridOptions): GridHandle {
     ) {
       return
     }
-    const currentIndex = currentFocusedIndex() ?? lastFocusedIndex
-    if (currentIndex == null || !source.count) return
+    const domIndex = currentFocusedIndex() ?? lastFocusedIndex
+    if (domIndex == null || !source.count) return
+    // Projects where focus is headed once every already-queued move in this burst applies,
+    // so a fast repeat keeps computing the next step from there instead of the stale DOM index.
+    const projected = Math.max(0, Math.min(source.count - 1, domIndex + keyRepeat.pending()))
     const pageSize = columns * visibleRowCount()
-    let next = currentIndex
+    let next = projected
     switch (event.key) {
       case "ArrowDown":
-        next = currentIndex + columns
+        next = projected + columns
         break
       case "ArrowUp":
-        next = currentIndex - columns
+        next = projected - columns
         break
       case "PageDown":
-        next = currentIndex + pageSize
+        next = projected + pageSize
         break
       case "PageUp":
-        next = currentIndex - pageSize
+        next = projected - pageSize
         break
       case "Home":
         next = 0
@@ -316,15 +344,23 @@ export function createGrid(options: GridOptions): GridHandle {
         break
     }
     next = Math.max(0, Math.min(source.count - 1, next))
-    if (next === currentIndex) return
+    if (next === projected) return
     // Bail so spatial nav can move focus out of the grid at this edge.
     const isRowMove = event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "PageDown" || event.key === "PageUp"
-    if (isRowMove && rowOf(next, columns) === rowOf(currentIndex, columns)) return
+    if (isRowMove && rowOf(next, columns) === rowOf(projected, columns)) return
     event.preventDefault()
     event.stopPropagation()
-    focusIndex(next)
+    keyRepeat.push(next - projected)
   }
   scroller.addEventListener("keydown", onKeyDown, true)
+
+  // Capture-phase, ahead of registerCardLongPress's bubble-phase Enter handler on the
+  // track, so a burst's still-batched move is on screen before Enter/long-press reads it.
+  function onEnterKeyDown(event: KeyboardEvent): void {
+    if (event.key !== "Enter") return
+    keyRepeat.flush()
+  }
+  scroller.addEventListener("keydown", onEnterKeyDown, true)
 
   function onFocusIn(event: FocusEvent): void {
     const target = event.target
@@ -370,6 +406,7 @@ export function createGrid(options: GridOptions): GridHandle {
       if (resizeTimer) clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         measureLayoutMetrics()
+        invalidateKeepInViewLayout(scroller)
         if (!source.count) return
         const nextColumns = computeColumns()
         // Cards fill the row width, so even an unchanged column count needs a
@@ -437,15 +474,14 @@ export function createGrid(options: GridOptions): GridHandle {
   function nameSurvivorCards(nextSource: GridSource): HTMLElement[] {
     const cap = heavyEffectsAllowed() ? MAX_NAMED_TRANSITIONS : MAX_NAMED_TRANSITIONS_LITE
     if (cap <= 0 || !motionAllowed() || !mountedRows.size) return []
-    const survivorKeys = new Set<string>()
-    for (let index = 0; index < nextSource.count; index++) survivorKeys.add(entryKeyOf(nextSource, index))
+    const survivorIndexByKey = keyIndexMapFor(nextSource)
 
     const named: HTMLElement[] = []
     for (const rowEl of mountedRows.values()) {
       for (const card of Array.from(rowEl.children) as HTMLElement[]) {
         if (named.length >= cap) return named
         const key = card.dataset.entryKey
-        if (!key || !survivorKeys.has(key)) continue
+        if (!key || !survivorIndexByKey.has(key)) continue
         card.style.viewTransitionName = `tv-card-${sanitizeViewTransitionName(key)}`
         named.push(card)
       }
@@ -501,7 +537,7 @@ export function createGrid(options: GridOptions): GridHandle {
 
     const firstCard = track.querySelector<HTMLElement>("[data-grid-index]")
     if (firstCard) firstCard.dataset.tvAutofocus = ""
-    window.SpatialNavigation?.makeFocusable?.()
+    window.SpatialNavigation?.makeFocusable?.(options.focusSectionId)
     // The rebuild just dropped the focused card to <body>; put focus back where it was.
     if (heldFocus && restoreIndex != null) focusIndex(restoreIndex)
   }
@@ -514,7 +550,7 @@ export function createGrid(options: GridOptions): GridHandle {
     // forces a synchronous layout read while the browser is mid-capture.
     measureLayoutMetrics()
 
-    if (!animate) {
+    if (!animate || !heavyEffectsAllowed()) {
       applyEntries(nextSource, emptyMessage, heldFocus, previousIndex, previousKey)
       return
     }
@@ -533,8 +569,11 @@ export function createGrid(options: GridOptions): GridHandle {
   function destroy(): void {
     clearMountedRows()
     resizeObserver?.disconnect()
+    keyRepeat.cancel()
     scroller.removeEventListener("keydown", onKeyDown, true)
+    scroller.removeEventListener("keydown", onEnterKeyDown, true)
     scroller.removeEventListener("focusin", onFocusIn)
+    cardLongPress.destroy()
     unregisterSection()
     unregisterKeepInView()
     el.remove()

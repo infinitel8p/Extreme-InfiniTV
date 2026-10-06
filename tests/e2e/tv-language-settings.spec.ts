@@ -39,7 +39,7 @@ async function seedTvState(page: Page) {
   await page.context().addInitScript(
     ({ playlistId }) => {
       try {
-        localStorage.setItem("xt_force_tv", "1")
+        localStorage.setItem("xt_ui_mode", "tv")
         localStorage.setItem("xt_receiver_boot", "0")
         localStorage.setItem("xt_locale", "en")
         localStorage.setItem("xt_theme", "dark")
@@ -264,7 +264,9 @@ test.describe("TV language grouping: movies grid + detail variants", () => {
     await expect(variantsRow).toBeVisible()
     await expect(variantsRow.locator("a")).toHaveCount(1)
 
-    await variantsRow.locator("a").click()
+    // Keyboard, not a click: the pointer left over the rail hover-expands it over the pill.
+    await variantsRow.locator("a").focus()
+    await page.keyboard.press("Enter")
     await expect(page).toHaveURL(/id=2/)
     await page.waitForSelector("#tv-detail-language-variants a, #tv-detail-language-variants span")
     await expect(page.locator("#tv-detail-language-variants")).toContainText("German")

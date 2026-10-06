@@ -2,11 +2,13 @@
   // Hub "Because you watched X" strip - rotates through a pool of recent watched seeds.
   import { onMount } from "svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-  import { getActiveEntry } from "@/scripts/lib/creds.js"
+  import { getActiveEntry, getMergedEntries } from "@/scripts/lib/creds.js"
+  import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
   import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import {
     getWatchedSignals,
+    getMergedWatchedSignals,
     isCompleted,
     hasSeriesWatchedOverride,
     getSeriesEpisodeProgress,
@@ -42,7 +44,6 @@
   /** @type {Array<{ kind: "vod"|"series", id: number, name: string, logo: string|null, rating: string, href: string }>} */
   let entries = $state([])
   let displayTitle = $state("")
-  let activePlaylistId = $state("")
   let locale = $state(0)
   const tr = (key, params) => (locale, t(key, params))
 
@@ -108,14 +109,12 @@
     return new Set(resolutions.filter((seriesId) => seriesId != null))
   }
 
-  function buildCard(kind, item) {
-    const href =
-      kind === "vod"
-        ? `/movies/detail?id=${encodeURIComponent(item.id)}`
-        : `/series/detail?id=${encodeURIComponent(item.id)}`
+  function buildCard(kind, item, playlistId) {
+    const href = detailHrefFor(kind, item.id, { playlistId })
     return {
       kind,
       id: Number(item.id),
+      playlistId,
       name: item.name,
       logo: item.logo || null,
       rating: fmtImdbRating(item.rating),
@@ -136,13 +135,19 @@
     const token = ++requestToken
     if (!active) {
       entries = []
-      activePlaylistId = ""
       return
     }
     const playlistId = active._id
-    activePlaylistId = playlistId
+    const mergedEntries = await getMergedEntries()
+    if (token !== requestToken) return
 
-    const pool = pickBecauseSeedPool(getWatchedSignals(playlistId, 20), 5)
+    const pool = pickBecauseSeedPool(
+      getMergedWatchedSignals(
+        mergedEntries.map((entry) => entry._id),
+        20,
+      ),
+      5,
+    )
     if (!pool.length) {
       entries = []
       return
@@ -154,51 +159,58 @@
     }
 
     // Cache the in-flight promise (not just the resolved value) so parallel attempts share one fetch.
-    const catalogPromiseByKind = {}
-    function catalogFor(kind) {
-      if (!(kind in catalogPromiseByKind)) {
-        catalogPromiseByKind[kind] = (async () => {
-          await hydrateCache(playlistId, kind)
-          return getCached(playlistId, kind)?.data || []
+    const catalogPromiseByKey = {}
+    function catalogFor(seedPlaylistId, kind) {
+      const cacheKey = `${seedPlaylistId}:${kind}`
+      if (!(cacheKey in catalogPromiseByKey)) {
+        catalogPromiseByKey[cacheKey] = (async () => {
+          await hydrateCache(seedPlaylistId, kind)
+          return getCached(seedPlaylistId, kind)?.data || []
         })()
       }
-      return catalogPromiseByKind[kind]
+      return catalogPromiseByKey[cacheKey]
     }
 
-    const infoRowsPromiseByKind = {}
-    function infoRowsFor(kind) {
-      if (!(kind in infoRowsPromiseByKind)) {
-        infoRowsPromiseByKind[kind] = (async () => {
+    const infoRowsPromiseByKey = {}
+    function infoRowsFor(seedPlaylistId, kind) {
+      const cacheKey = `${seedPlaylistId}:${kind}`
+      if (!(cacheKey in infoRowsPromiseByKey)) {
+        infoRowsPromiseByKey[cacheKey] = (async () => {
           const prefix = kind === "vod" ? "vod_info_" : "series_info_"
-          const rows = await getCachedByKindPrefix(playlistId, prefix)
+          const rows = await getCachedByKindPrefix(seedPlaylistId, prefix)
           return { rows, prefixLength: prefix.length }
         })()
       }
-      return infoRowsPromiseByKind[kind]
+      return infoRowsPromiseByKey[cacheKey]
     }
 
-    let watchedSeriesIdsPromise = null
-    function watchedSeriesIdsFor(rowsEntry) {
-      if (!watchedSeriesIdsPromise) {
-        watchedSeriesIdsPromise = resolveWatchedSeriesIds(playlistId, rowsEntry.rows, rowsEntry.prefixLength)
+    const watchedSeriesIdsPromiseByPlaylist = {}
+    function watchedSeriesIdsFor(seedPlaylistId, rowsEntry) {
+      if (!(seedPlaylistId in watchedSeriesIdsPromiseByPlaylist)) {
+        watchedSeriesIdsPromiseByPlaylist[seedPlaylistId] = resolveWatchedSeriesIds(
+          seedPlaylistId,
+          rowsEntry.rows,
+          rowsEntry.prefixLength,
+        )
       }
-      return watchedSeriesIdsPromise
+      return watchedSeriesIdsPromiseByPlaylist[seedPlaylistId]
     }
 
     async function attemptSeed(candidateSeed) {
-      const catalog = await catalogFor(candidateSeed.kind)
+      const seedPlaylistId = candidateSeed.playlistId || playlistId
+      const catalog = await catalogFor(seedPlaylistId, candidateSeed.kind)
       if (token !== requestToken) return null
       if (!catalog.length) return []
 
-      const rowsEntry = await infoRowsFor(candidateSeed.kind)
+      const rowsEntry = await infoRowsFor(seedPlaylistId, candidateSeed.kind)
       if (token !== requestToken) return null
       const infoLookup = buildInfoLookup(rowsEntry.rows, rowsEntry.prefixLength, candidateSeed.kind)
 
       let isWatched
       if (candidateSeed.kind === "vod") {
-        isWatched = (id) => isCompleted(playlistId, "vod", id)
+        isWatched = (id) => isCompleted(seedPlaylistId, "vod", id)
       } else {
-        const watchedSeriesIds = await watchedSeriesIdsFor(rowsEntry)
+        const watchedSeriesIds = await watchedSeriesIdsFor(seedPlaylistId, rowsEntry)
         if (token !== requestToken) return null
         isWatched = (id) => watchedSeriesIds.has(Number(id))
       }
@@ -243,7 +255,8 @@
       return
     }
     displayTitle = cleanProviderTitle(shownSeed.name).variants[0] || shownSeed.name
-    entries = shownItems.map((item) => buildCard(shownSeed.kind, item))
+    const shownPlaylistId = shownSeed.playlistId || playlistId
+    entries = shownItems.map((item) => buildCard(shownSeed.kind, item, shownPlaylistId))
   }
 
   onMount(() => {
@@ -264,6 +277,7 @@
     const onLocaleChange = () => { locale++ }
     const handlers = {
       "xt:active-changed": onActiveChanged,
+      "xt:merged-changed": onActiveChanged,
       "xt:catalog-warmed": scheduleReload,
       "xt:progress-changed": scheduleReload,
       [LOCALE_EVENT]: onLocaleChange,
@@ -293,7 +307,7 @@
       use:dragScroll
       class="bw-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as entry, idx (entry.id)}
+      {#each entries as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
         <li class="bw-item shrink-0 snap-start" style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
@@ -303,7 +317,7 @@
               id: entry.id,
               name: entry.name,
               logo: entry.logo,
-              playlistId: activePlaylistId,
+              playlistId: entry.playlistId,
             }}
             class="bw-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line

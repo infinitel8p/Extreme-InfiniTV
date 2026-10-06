@@ -3,7 +3,8 @@
   // Pass `kind` to filter to a single content kind ("live" / "vod" / "series").
   import { onMount } from "svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-  import { getActiveEntry } from "@/scripts/lib/creds.js"
+  import { getMergedEntries } from "@/scripts/lib/creds.js"
+  import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
   import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import {
@@ -16,13 +17,13 @@
   import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
+  import { interleaveByPlaylist } from "@/scripts/lib/grid-filter.ts"
 
   /** @type {{ kind?: "all" | "live" | "vod" | "series" }} */
   let { kind: filterKind = "all" } = $props()
 
   /** @type {Array<{ kind: "live"|"vod"|"series", id: number, name: string, logo: string|null, href: string }>} */
   let entries = $state([])
-  let activePlaylistId = $state("")
   let locale = $state(0)
   // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
   // track it and re-evaluate on LOCALE_EVENT.
@@ -35,13 +36,13 @@
   const viewAllHref = $derived(
     filterKind === "all" ? "/favorites" : `/favorites?kind=${filterKind}`,
   )
-  /** @type {{ live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> } | null} */
-  let lookups = null
-  let lookupsForPlaylistId = ""
+  /** @type {Map<string, { live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> }>} */
+  let lookupsByPlaylist = new Map()
 
   function buildEntry(playlistId, { kind, id }, lookups) {
     const meta = getFavoriteMeta(playlistId, kind, id)
     const item = lookups[kind]?.get(Number(id))
+    if (item?.isHeader) return null
     // Hidden-channel favorites and unresolved custom-playlist channels both
     // miss the live lookup once the catalog is cached - can't tune either.
     const unavailable = kind === "live" && !item && !!lookups.liveCacheAvailable
@@ -65,13 +66,11 @@
     }
     let href = "#"
     if (kind === "live") {
-      href = `/livetv?channel=${encodeURIComponent(id)}`
-    } else if (kind === "vod") {
-      href = `/movies/detail?id=${encodeURIComponent(id)}`
-    } else if (kind === "series") {
-      href = `/series/detail?id=${encodeURIComponent(id)}`
+      href = `/livetv?channel=${encodeURIComponent(id)}&pl=${encodeURIComponent(playlistId)}`
+    } else if (kind === "vod" || kind === "series") {
+      href = detailHrefFor(kind, id, { playlistId })
     }
-    return { kind, id, name, logo, href, unavailable }
+    return { kind, id, playlistId, name, logo, href, unavailable }
   }
 
   function buildLookupsFromCache(playlistId) {
@@ -92,42 +91,55 @@
     }
   }
 
-  function buildEntries(playlistId) {
-    const raw = getGlobalFavorites(playlistId)
-    const filtered = filterKind === "all" ? raw : raw.filter((row) => row.kind === filterKind)
-    return filtered.map((entry) => buildEntry(playlistId, entry, lookups || {})).slice(0, 12)
+  function buildEntries(playlistIds) {
+    const groups = []
+    for (const playlistId of playlistIds) {
+      const out = []
+      const raw = getGlobalFavorites(playlistId)
+      const filtered = filterKind === "all" ? raw : raw.filter((row) => row.kind === filterKind)
+      const playlistLookups = lookupsByPlaylist.get(playlistId) || {}
+      for (const row of filtered) {
+        const built = buildEntry(playlistId, row, playlistLookups)
+        if (built !== null) out.push(built)
+      }
+      groups.push(out)
+    }
+    return interleaveByPlaylist(groups, 12)
   }
 
   let reloadGeneration = 0
 
   async function reload() {
     const generation = ++reloadGeneration
-    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    const [mergedEntries] = await Promise.all([getMergedEntries(), ensurePrefsLoaded()])
     if (generation !== reloadGeneration) return
-    if (!active) {
+    const playlistIds = mergedEntries.map((entry) => entry._id)
+    if (!playlistIds.length) {
       entries = []
-      activePlaylistId = ""
-      lookups = null
-      lookupsForPlaylistId = ""
+      lookupsByPlaylist = new Map()
       return
     }
-    activePlaylistId = active._id
-    if (lookupsForPlaylistId !== active._id || !lookups) {
+    const missing = playlistIds.filter((playlistId) => !lookupsByPlaylist.has(playlistId))
+    if (missing.length) {
       // Paint with whatever's cached in memory now, hydration upgrades after.
-      lookups = buildLookupsFromCache(active._id)
-      lookupsForPlaylistId = active._id
-      void Promise.allSettled([
-        hydrateCache(active._id, "live"),
-        hydrateCache(active._id, "m3u"),
-        hydrateCache(active._id, "vod"),
-        hydrateCache(active._id, "series"),
-      ]).then(() => {
+      for (const playlistId of missing) {
+        lookupsByPlaylist.set(playlistId, buildLookupsFromCache(playlistId))
+      }
+      const hydrations = []
+      for (const playlistId of missing) {
+        for (const cacheKind of ["live", "m3u", "vod", "series"]) {
+          hydrations.push(hydrateCache(playlistId, cacheKind))
+        }
+      }
+      void Promise.allSettled(hydrations).then(() => {
         if (generation !== reloadGeneration) return
-        lookups = buildLookupsFromCache(active._id)
-        entries = buildEntries(active._id)
+        for (const playlistId of missing) {
+          lookupsByPlaylist.set(playlistId, buildLookupsFromCache(playlistId))
+        }
+        entries = buildEntries(playlistIds)
       }).catch(() => {})
     }
-    entries = buildEntries(active._id)
+    entries = buildEntries(playlistIds)
   }
 
   onMount(() => {
@@ -141,8 +153,7 @@
       pendingCatalog = true
       requestAnimationFrame(async () => {
         pendingCatalog = false
-        lookups = null
-        lookupsForPlaylistId = ""
+        lookupsByPlaylist = new Map()
         await reload()
       })
     }
@@ -150,6 +161,7 @@
     const onLocaleChange = () => { locale++ }
     const handlers = {
       "xt:active-changed": onCatalogChanged,
+      "xt:merged-changed": onCatalogChanged,
       "xt:catalog-warmed": onCatalogChanged,
       "xt:favorites-changed": reload,
       "xt:favorites-order-changed": reload,
@@ -188,7 +200,7 @@
       use:dragScroll
       class="fav-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as entry, idx (entry.kind + ":" + entry.id)}
+      {#each entries as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
         <li class="fav-item shrink-0 snap-start" data-kind={entry.kind} style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
@@ -200,7 +212,7 @@
               id: entry.id,
               name: entry.name,
               logo: entry.logo,
-              playlistId: activePlaylistId,
+              playlistId: entry.playlistId,
             }}
             class="fav-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line

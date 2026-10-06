@@ -210,3 +210,26 @@ describe("buildBecauseRow", () => {
     expect(result.map((entry) => entry.id)).toEqual([3, 2])
   })
 })
+
+describe("playlist-aware seeds", () => {
+  it("carries the signal playlistId onto the seed", () => {
+    const pool = pickBecauseSeedPool([
+      { playlistId: "a", kind: "vod", id: 1, name: "Movie", updatedAt: 10 },
+    ])
+    expect(pool[0].playlistId).toBe("a")
+  })
+
+  it("includes playlistId in the seed key", () => {
+    const seed: BecauseSeed = { playlistId: "a", kind: "vod", id: 1, name: "Movie", updatedAt: 1 }
+    expect(seedKey(seed)).toBe("a:vod:1")
+  })
+
+  it("keeps the same id in two playlists as distinct seeds", () => {
+    const pool = pickBecauseSeedPool([
+      { playlistId: "a", kind: "vod", id: 1, name: "Movie A", updatedAt: 10 },
+      { playlistId: "b", kind: "vod", id: 1, name: "Movie B", updatedAt: 20 },
+    ])
+    expect(pool.map((seed) => seed.playlistId)).toEqual(["b", "a"])
+    expect(seedKey(pool[0])).not.toBe(seedKey(pool[1]))
+  })
+})

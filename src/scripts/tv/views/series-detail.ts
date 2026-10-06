@@ -2,7 +2,8 @@
 
 import { nextPaint, markLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
-import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
+import { getActiveEntry, getEntryById, entryToCreds } from "@/scripts/lib/creds.js"
+import { detailHrefFor, readDetailPlaylistParam } from "@/scripts/lib/detail-href.ts"
 import { getCached } from "@/scripts/lib/cache.js"
 import { ensureSeries } from "@/scripts/lib/catalog.js"
 import { requestSeriesInfo } from "@/scripts/lib/series-seasons.ts"
@@ -58,6 +59,7 @@ import { log } from "@/scripts/lib/log"
 import { renderLanguagePills, type GroupingIndexLookup } from "@/scripts/lib/detail-chrome.ts"
 import { getSharedGroupingIndex, isLanguageGroupingExplicitlyEnabled } from "@/scripts/lib/language-groups.ts"
 import { memoryConservative } from "@/scripts/tv/motion"
+import { selectTopK } from "@/scripts/lib/top-k.ts"
 
 const RESUME_MIN_SECONDS = 30
 const SIMILAR_LIMIT = 20
@@ -145,14 +147,33 @@ function languageGroupingAllowed(): boolean {
   return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
 }
 
+// Keyed by catalog array identity (stable across renders of the same load) so the similar-rail
+// filter only ever bucket-scans the whole catalog once, instead of on every detail page visit.
+const categoryBucketCache = new WeakMap<CatalogRow[], Map<string, CatalogRow[]>>()
+
+function categoryBucket(catalog: CatalogRow[], category: string): CatalogRow[] {
+  let byCategory = categoryBucketCache.get(catalog)
+  if (!byCategory) {
+    byCategory = new Map()
+    for (const row of catalog) {
+      const bucket = byCategory.get(row.category)
+      if (bucket) bucket.push(row)
+      else byCategory.set(row.category, [row])
+    }
+    categoryBucketCache.set(catalog, byCategory)
+  }
+  return byCategory.get(category) || []
+}
+
 const view: TvView = {
   prepaint(root: HTMLElement, url: URL): boolean {
     const seriesId = Number(url.searchParams.get("id") || "0")
-    if (!seriesId || !lastKnownPlaylistId) return false
-    const cachedCatalog = (getCached(lastKnownPlaylistId, "series")?.data || []) as CatalogRow[]
+    const prepaintPlaylistId = readDetailPlaylistParam(url.search) || lastKnownPlaylistId
+    if (!seriesId || !prepaintPlaylistId) return false
+    const cachedCatalog = (getCached(prepaintPlaylistId, "series")?.data || []) as CatalogRow[]
     const catalogRow = cachedCatalog.find((row) => Number(row.id) === seriesId)
     if (!catalogRow) return false
-    markLastOpenedEntry({ kind: "series", id: seriesId })
+    markLastOpenedEntry({ kind: "series", id: seriesId, playlistId: prepaintPlaylistId })
     const chrome = createDetailChrome(root)
     chrome.setSkeleton(false)
     chrome.setHero(stubHero(catalogRow))
@@ -160,6 +181,7 @@ const view: TvView = {
   },
   mount(root: HTMLElement, ctx: TvViewContext) {
     const seriesId = Number(ctx.url.searchParams.get("id") || "0")
+    const requestedPlaylistId = readDetailPlaylistParam(ctx.url.search)
     const deepLinkSeason = parseDeepLinkNumber(ctx.url.searchParams.get("season"))
     const deepLinkEpisode = parseDeepLinkNumber(ctx.url.searchParams.get("episode"))
 
@@ -202,6 +224,9 @@ const view: TvView = {
     const unregisterKeepInView = keepFocusedInView(episodesScroller, "y", () => remPx(EPISODES_VERTICAL_OFFSET_REM))
 
     let destroyed = false
+    // One controller for the whole mount: aborted on teardown so an in-flight enrichment
+    // chain never applies its result to a view that's already gone.
+    const abortController = new AbortController()
     let activePlaylistId = ""
     let creds: Creds = { host: "", port: "", user: "", pass: "" }
     let series: CatalogRow | null = null
@@ -667,6 +692,7 @@ const view: TvView = {
           name: series.name,
           year: parseInt(String(series.year), 10) || null,
           providerTmdbId,
+          signal: abortController.signal,
         })
         if (requestId !== enrichRequestId) return
         resolvedTmdbId = details?.tmdbId ?? null
@@ -713,17 +739,22 @@ const view: TvView = {
       }
       if (destroyed) return
       renderLanguageVariants(catalog)
-      const candidates = catalog
-        .filter((row) => row.id !== currentSeries.id && (!currentSeries.category || row.category === currentSeries.category))
-        .sort((left, right) => ratingSortValue(right.rating) - ratingSortValue(left.rating))
-        .slice(0, SIMILAR_LIMIT)
+      const pool = currentSeries.category ? categoryBucket(catalog, currentSeries.category) : catalog
+      const candidates = selectTopK(
+        pool.filter((row) => row.id !== currentSeries.id),
+        SIMILAR_LIMIT,
+        (left, right) => ratingSortValue(right.rating) - ratingSortValue(left.rating)
+      )
 
       const items: PosterCardItem[] = candidates.map((row) => ({
         railId: SIMILAR_FOCUS_SECTION_ID,
         kind: "series",
         id: row.id,
         name: row.name,
-        href: `/tv/series/detail?id=${encodeURIComponent(String(row.id))}`,
+        href: detailHrefFor("series", row.id, {
+          tv: true,
+          playlistId: requestedPlaylistId ? activePlaylistId : undefined,
+        }),
         posterUrl: row.logo,
         meta: formatCardMeta(row.year, row.rating),
         ariaLabel: t("tv.aria.open", { name: row.name }),
@@ -789,9 +820,7 @@ const view: TvView = {
         })
         return
       }
-      markLastOpenedEntry({ kind: "series", id: seriesId })
-
-      const active = await getActiveEntry()
+      const active = (requestedPlaylistId && (await getEntryById(requestedPlaylistId))) || (await getActiveEntry())
       if (destroyed) return
       if (!active) {
         chrome.setSkeleton(false)
@@ -808,8 +837,9 @@ const view: TvView = {
 
       activePlaylistId = active._id
       lastKnownPlaylistId = activePlaylistId
+      markLastOpenedEntry({ kind: "series", id: seriesId, playlistId: activePlaylistId })
       await ensurePrefsLoaded()
-      creds = await loadCreds()
+      creds = entryToCreds(active)
       if (destroyed) return
 
       const cachedCatalog = (getCached(activePlaylistId, "series")?.data || []) as CatalogRow[]
@@ -859,6 +889,7 @@ const view: TvView = {
 
     return () => {
       destroyed = true
+      abortController.abort()
       document.removeEventListener("xt:favorites-changed", onFavoritesChanged)
       document.removeEventListener("xt:watchlist-changed", onWatchlistChanged)
       document.removeEventListener("xt:progress-changed", onProgressChanged)
