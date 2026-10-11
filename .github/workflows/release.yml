@@ -357,6 +357,8 @@ jobs:
               `| Linux portable (ARM64, any distro) | ${fileLink(`Extreme InfiniTV_${version}_aarch64.AppImage`)} |`,
               `| Android sideload (APK) | ${fileLink(`Extreme InfiniTV_${version}.apk`)} |`,
               '',
+              'Linux builds need glibc 2.39 or newer (Ubuntu 24.04, Debian 13, Fedora 40 or later). On Raspberry Pi OS Bookworm use the Snap.',
+              '',
               '<details><summary>What about the <code>.sig</code> files, <code>latest.json</code> and the macOS <code>.app.tar.gz</code>?</summary>',
               '',
               'You can ignore them.',
@@ -435,7 +437,7 @@ jobs:
             args: "--target universal-apple-darwin"
             rust-targets: "aarch64-apple-darwin x86_64-apple-darwin"
             sidecar-asset: ffmpeg-universal-apple-darwin
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             args: ""
             rust-targets: ""
             sidecar-asset: ffmpeg-x86_64-unknown-linux-gnu
@@ -444,7 +446,7 @@ jobs:
             rust-targets: ""
             sidecar-asset: ffmpeg-aarch64-pc-windows-msvc.exe
             mpv-sidecar-asset: mpv-aarch64-pc-windows-msvc.exe
-          - os: ubuntu-22.04-arm
+          - os: ubuntu-24.04-arm
             args: ""
             rust-targets: ""
             sidecar-asset: ffmpeg-aarch64-unknown-linux-gnu

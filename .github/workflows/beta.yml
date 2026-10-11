@@ -168,11 +168,11 @@ jobs:
             rust-targets: ""
             sidecar-asset: ffmpeg-x86_64-pc-windows-msvc.exe
             mpv-sidecar-asset: mpv-x86_64-pc-windows-msvc.exe
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             args: "--bundles appimage,deb,rpm"
             rust-targets: ""
             sidecar-asset: ffmpeg-x86_64-unknown-linux-gnu
-          - os: ubuntu-22.04-arm
+          - os: ubuntu-24.04-arm
             args: "--bundles appimage,deb,rpm"
             rust-targets: ""
             sidecar-asset: ffmpeg-aarch64-unknown-linux-gnu

@@ -140,6 +140,8 @@
 | Android TV / Fire TV | [AFTVnews Downloader](https://www.aftvnews.com/downloader/) (see below), or Play Store on supported devices | Manual / Play Store |
 | Web preview | Build with `pnpm build` and serve `dist/` (no auto-update, no native features) | Manual |
 
+Linux builds (deb / rpm / AppImage) need glibc 2.39 or newer: Ubuntu 24.04, Debian 13, Fedora 40 or later. Raspberry Pi OS Bookworm users should use the Snap.
+
 ### Android TV / Fire TV
 
 Sideload with the [AFTVnews Downloader](https://www.aftvnews.com/downloader/) app. Open it, enter one of the codes below in the URL field, and install:
