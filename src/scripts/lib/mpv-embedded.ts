@@ -320,6 +320,12 @@ export function classifyMpvNetworkError(detail: string | null): string | null {
 
 const HTTP_STATUS_PREFIX_PATTERN = /^HTTP_STATUS:(\d{3}):/
 
+export function classifySessionLoss(detail: string): "exited" | "hung" | null {
+  if (detail.startsWith("NOT_FOUND:no mpv session") || detail.startsWith("IPC:mpv connection closed")) return "exited"
+  if (detail.startsWith("TIMEOUT:")) return "hung"
+  return null
+}
+
 /** Reads the status code off a `HTTP_STATUS:<code>:<detail>` prefixed detail. */
 export function parseHttpStatusPrefix(detail: string | null): number | null {
   if (!detail) return null
@@ -693,6 +699,8 @@ export async function createMpvEmbeddedHandle(
   let localVolume = 1
   let lastErrorDetail: string | null = null
   let disposed = false
+  let sessionDead = false
+  let sessionRestart: Promise<boolean> | null = null
   let currentMediaTitle: string | null = null
   let currentAudioDelay = 0
   let currentSubtitleStyle: MpvSubtitleStyle = parseSubtitleStyle(readPersistedSubtitleStyle())
@@ -838,15 +846,28 @@ export async function createMpvEmbeddedHandle(
     liveStallTimer = setInterval(tickLiveStallWatchdog, 1000)
   }
 
+  function noteSessionLoss(err: unknown, failedSessionId: string): void {
+    if (failedSessionId !== sessionId) return
+    const loss = classifySessionLoss(err instanceof Error ? err.message : String(err))
+    if (!loss) return
+    sessionDead = true
+    if (loss === "hung") void invoke("mpv_embed_shutdown").catch(() => {})
+  }
+
   function reloadLastLoadRequest(): void {
     if (!lastLoadRequest || disposed) return
     pauseState = false
-    void invoke("mpv_embed_load", {
-      sessionId,
-      url: lastLoadRequest.url,
-      options: lastLoadRequest.loadOptions,
-    }).catch((err: unknown) => {
+    const request = lastLoadRequest
+    const generation = loadGeneration
+    let loadSessionId = sessionId
+    void (async () => {
+      if (!(await ensureSession())) return
+      if (generation !== loadGeneration || disposed) return
+      loadSessionId = sessionId
+      await invoke("mpv_embed_load", { sessionId, url: request.url, options: request.loadOptions })
+    })().catch((err: unknown) => {
       log.warn("[xt:mpv-embed] reload failed:", err)
+      noteSessionLoss(err, loadSessionId)
     })
   }
 
@@ -974,6 +995,12 @@ export async function createMpvEmbeddedHandle(
 
   function handleMpvExited(payload: MpvExitedEventPayload): void {
     if (payload.sessionId !== sessionId) return
+    sessionDead = true
+    lastPlaybackRestartAt = null
+    if (liveEofStableTimer != null) {
+      clearTimeout(liveEofStableTimer)
+      liveEofStableTimer = null
+    }
     lastErrorDetail = payload.detail || (payload.code != null ? `mpv exited (code ${payload.code})` : "mpv exited")
     emitter.emit("error")
     emitEngineEvent("fatal", lastErrorDetail)
@@ -1189,13 +1216,71 @@ export async function createMpvEmbeddedHandle(
     )
   }
 
-  try {
-    const status = (await invoke("mpv_embed_status")) as MpvEmbedStatusSurface
-    const seededState = shouldSeedSurfaceState(status, sessionId)
-    // The first surface report can fire before this listener exists.
-    if (seededState) handleMpvSurface({ sessionId, state: seededState, bounds: null, pip: null })
-  } catch (err) {
-    log.warn("[xt:mpv-embed] mpv_embed_status seed failed:", err)
+  async function seedSurfaceState(): Promise<void> {
+    try {
+      const status = (await invoke("mpv_embed_status")) as MpvEmbedStatusSurface
+      const seededState = shouldSeedSurfaceState(status, sessionId)
+      // The first surface report can fire before this listener exists.
+      if (seededState) handleMpvSurface({ sessionId, state: seededState, bounds: null, pip: null })
+    } catch (err) {
+      log.warn("[xt:mpv-embed] mpv_embed_status seed failed:", err)
+    }
+  }
+  await seedSurfaceState()
+
+  // mpv aborts on corrupt streams; the handle must outlive the process.
+  function ensureSession(): Promise<boolean> {
+    if (disposed) return Promise.resolve(false)
+    if (!sessionDead) return Promise.resolve(true)
+    if (sessionRestart) return sessionRestart
+    sessionRestart = (async () => {
+      const previousSessionId = sessionId
+      try {
+        const freshBounds = cssRectToPhysicalBounds(
+          cssRectOf(container),
+          window.devicePixelRatio || 1,
+          NATIVE_BOUNDS_INFLATE_CSS_PX,
+        )
+        const startResult = (await invoke("mpv_embed_start", {
+          bounds: freshBounds,
+          config: getMpvStartConfig(),
+        })) as MpvEmbedStartResult
+        if (!startResult?.sessionId) throw new Error("mpv_embed_start returned an unexpected shape")
+        if (disposed) {
+          void invoke("mpv_embed_stop", { sessionId: startResult.sessionId }).catch(() => {})
+          return false
+        }
+        sessionId = startResult.sessionId
+        sessionDead = false
+        props = {}
+        pauseState = false
+        lastPlaybackRestartAt = null
+        resetBoundsCache()
+        const root = document.documentElement
+        if (root.getAttribute("data-native-video-owner") === previousSessionId) {
+          root.setAttribute("data-native-video-owner", sessionId)
+        }
+        log.warn("[xt:mpv-embed] session restarted after exit", { previousSessionId, sessionId })
+        nativeState = "hidden"
+        await seedSurfaceState()
+        if (disposed) {
+          void invoke("mpv_embed_stop", { sessionId }).catch(() => {})
+          return false
+        }
+        pushBounds()
+        void setProperty("volume", Math.round(localVolume * 100))
+        void setProperty("mute", localMuted)
+        applySubtitleStyleProperties(currentSubtitleStyle)
+        void setProperty("audio-delay", currentAudioDelay)
+        return true
+      } catch (err) {
+        log.warn("[xt:mpv-embed] session restart failed:", err)
+        return false
+      }
+    })().finally(() => {
+      sessionRestart = null
+    })
+    return sessionRestart
   }
 
   // Fullscreen resizes the container without a scroll or resize event on it.
@@ -1461,15 +1546,32 @@ export async function createMpvEmbeddedHandle(
       trackMemoryLoadGeneration = generation
       const requestedSrc = opts.src
       srcLoadInFlight = true
+      let loadSessionId = sessionId
       void (async () => {
         // mpv does its own HTTP; only the userinfo-carrying external wrap applies here.
         const playbackUrl = await wrapForDnsProxyExternal(requestedSrc)
         if (generation !== loadGeneration) return
         lastLoadRequest = { url: playbackUrl, loadOptions }
-        await invoke("mpv_embed_load", { sessionId, url: playbackUrl, options: loadOptions })
+        if (!(await ensureSession())) {
+          if (generation !== loadGeneration || disposed) return
+          throw new Error("mpv restart failed")
+        }
+        if (generation !== loadGeneration) return
+        loadSessionId = sessionId
+        try {
+          await invoke("mpv_embed_load", { sessionId, url: playbackUrl, options: loadOptions })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          if (classifySessionLoss(message) !== "exited") throw err
+          noteSessionLoss(err, loadSessionId)
+          if (!(await ensureSession()) || generation !== loadGeneration || disposed) throw err
+          loadSessionId = sessionId
+          await invoke("mpv_embed_load", { sessionId, url: playbackUrl, options: loadOptions })
+        }
       })()
         .catch((err: unknown) => {
           log.warn("[xt:mpv-embed] mpv_embed_load failed:", err)
+          noteSessionLoss(err, loadSessionId)
           lastErrorDetail = err instanceof Error ? err.message : String(err)
           emitter.emit("error")
         })

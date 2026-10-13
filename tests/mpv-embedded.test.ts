@@ -24,6 +24,7 @@ import {
   clampAudioDelaySeconds,
   recordingFileName,
   decideMpvTrackMemoryRestore,
+  classifySessionLoss,
 } from "../src/scripts/lib/mpv-embedded"
 import { rememberAudioTrack, rememberSubtitleTrack, type TrackMemoryContext } from "../src/scripts/lib/track-memory"
 import { clearForPlaylist } from "../src/scripts/lib/preferences.js"
@@ -719,5 +720,19 @@ describe("decideMpvTrackMemoryRestore", () => {
     rememberSubtitleTrack(ctx, null)
     const subtitleTracks = [{ id: 3, lang: "en", title: null }]
     expect(decideMpvTrackMemoryRestore(ctx, [], subtitleTracks)).toEqual({ audioId: null, subtitleId: null })
+  })
+})
+
+describe("classifySessionLoss", () => {
+  it("flags a dropped session as exited", () => {
+    expect(classifySessionLoss("NOT_FOUND:no mpv session 'abc'")).toBe("exited")
+    expect(classifySessionLoss("IPC:mpv connection closed")).toBe("exited")
+  })
+  it("flags a reply timeout as hung", () => {
+    expect(classifySessionLoss("TIMEOUT:mpv did not reply")).toBe("hung")
+  })
+  it("ignores unrelated errors", () => {
+    expect(classifySessionLoss("OTHER:loadfile failed")).toBeNull()
+    expect(classifySessionLoss("")).toBeNull()
   })
 })
