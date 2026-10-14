@@ -58,6 +58,13 @@ export interface AndroidNativeEvent {
   }
 }
 
+export interface NativeSubtitle {
+  url: string
+  language: string
+  label: string
+  mime?: "application/x-subrip" | "text/vtt"
+}
+
 export interface VodLaunchOptions {
   contentKey: string
   url: string
@@ -68,6 +75,7 @@ export interface VodLaunchOptions {
   startMs?: number
   dns?: string | null
   tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
+  subtitles?: NativeSubtitle[]
 }
 
 export interface LiveLaunchOptions {
@@ -139,6 +147,7 @@ export function launchAndroidNativeVod(opts: VodLaunchOptions): boolean {
       opts.tracks?.audioLang ?? null,
       opts.tracks?.subLang ?? null,
       opts.tracks ? !opts.tracks.subOff : false,
+      JSON.stringify(opts.subtitles ?? []),
     )
   } catch (err) {
     log.error("[xt:android-video] native VOD launch failed:", redactUrl(opts.url), err)
@@ -289,6 +298,7 @@ export interface NativeVodProgressOptions {
   posterUrl?: string
   startMs?: number
   dns?: string | null
+  subtitles?: NativeSubtitle[]
   progressExtras?: Record<string, unknown>
   onCompleted?: () => void
 }
@@ -330,6 +340,7 @@ export function launchAndroidNativeVodWithProgress(
     startMs: opts.startMs,
     dns: opts.dns,
     tracks,
+    subtitles: opts.subtitles,
   })
   if (!launched) unsubscribe()
   return launched

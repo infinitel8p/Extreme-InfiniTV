@@ -24,6 +24,7 @@ interface AndroidVideoBridge {
     audioLang: string | null,
     subLang: string | null,
     subEnabled: boolean,
+    subtitlesJson: string,
   ) => boolean
   launchLive?: (
     contentKey: string,

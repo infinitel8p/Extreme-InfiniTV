@@ -87,6 +87,10 @@ pub struct ReuseConfig {
     pub slang: Option<String>,
     #[serde(default, rename = "subOff")]
     pub sub_off: bool,
+    #[serde(default, rename = "mediaTitle")]
+    pub media_title: Option<String>,
+    #[serde(default, rename = "subFiles")]
+    pub sub_files: Vec<String>,
 }
 
 impl ExternalPlayerState {
@@ -721,6 +725,8 @@ fn build_mpv_loadfile(
     alang: Option<&str>,
     slang: Option<&str>,
     sub_off: bool,
+    media_title: Option<&str>,
+    sub_files: &[String],
     use_index_form: bool,
 ) -> Vec<u8> {
     let mut opts: Vec<String> = Vec::new();
@@ -738,6 +744,12 @@ fn build_mpv_loadfile(
     }
     if sub_off {
         opts.push("sid=no".to_string());
+    }
+    if let Some(title) = media_title.filter(|s| !s.is_empty()) {
+        opts.push(format!("force-media-title=%{}%{}", title.len(), title));
+    }
+    for file in sub_files.iter().filter(|file| !file.is_empty()) {
+        opts.push(format!("sub-file=%{}%{}", file.len(), file));
     }
     let cmd = if opts.is_empty() {
         json!({ "command": ["loadfile", url, "replace"] })
@@ -828,13 +840,18 @@ fn send_mpv_loadfile(
     alang: Option<&str>,
     slang: Option<&str>,
     sub_off: bool,
+    media_title: Option<&str>,
+    sub_files: &[String],
 ) -> Result<(), String> {
     let has_options = ua.filter(|s| !s.is_empty()).is_some()
         || referer.filter(|s| !s.is_empty()).is_some()
         || alang.filter(|s| !s.is_empty()).is_some()
         || slang.filter(|s| !s.is_empty()).is_some()
-        || sub_off;
-    let new_form_payload = build_mpv_loadfile(url, ua, referer, alang, slang, sub_off, true);
+        || sub_off
+        || media_title.filter(|s| !s.is_empty()).is_some()
+        || sub_files.iter().any(|file| !file.is_empty());
+    let new_form_payload =
+        build_mpv_loadfile(url, ua, referer, alang, slang, sub_off, media_title, sub_files, true);
     let unpause = build_mpv_unpause();
 
     #[cfg(unix)]
@@ -843,7 +860,9 @@ fn send_mpv_loadfile(
         let reply = write_and_read_reply(&mut stream, &new_form_payload)?;
         if let Some(err) = first_mpv_error(&reply) {
             if has_options && err == "invalid parameter" {
-                let old_form_payload = build_mpv_loadfile(url, ua, referer, alang, slang, sub_off, false);
+                let old_form_payload = build_mpv_loadfile(
+                    url, ua, referer, alang, slang, sub_off, media_title, sub_files, false,
+                );
                 let retry_reply = write_and_read_reply(&mut stream, &old_form_payload)?;
                 if let Some(retry_err) = first_mpv_error(&retry_reply) {
                     return Err(format!("IPC:mpv replied {retry_err}"));
@@ -862,7 +881,9 @@ fn send_mpv_loadfile(
         let reply = write_and_read_reply(&mut pipe, &new_form_payload)?;
         if let Some(err) = first_mpv_error(&reply) {
             if has_options && err == "invalid parameter" {
-                let old_form_payload = build_mpv_loadfile(url, ua, referer, alang, slang, sub_off, false);
+                let old_form_payload = build_mpv_loadfile(
+                    url, ua, referer, alang, slang, sub_off, media_title, sub_files, false,
+                );
                 let retry_reply = write_and_read_reply(&mut pipe, &old_form_payload)?;
                 if let Some(retry_err) = first_mpv_error(&retry_reply) {
                     return Err(format!("IPC:mpv replied {retry_err}"));
@@ -1537,6 +1558,8 @@ async fn launch_mode(
                     reuse.alang.as_deref(),
                     reuse.slang.as_deref(),
                     reuse.sub_off,
+                    reuse.media_title.as_deref(),
+                    &reuse.sub_files,
                 ) {
                     Ok(()) => {
                         watch_for_exit(app.clone(), &state, &kind, slot.pid);
@@ -1759,6 +1782,8 @@ mod tests {
             None,
             None,
             false,
+            None,
+            &[],
             true,
         );
         let s = String::from_utf8(bytes).unwrap();
@@ -1773,7 +1798,7 @@ mod tests {
     fn build_mpv_loadfile_preserves_comma_in_user_agent() {
         let ua = "Mozilla/5.0 (X11; Linux x86_64), Gecko/2010";
         let referer = "https://r.test/, with comma";
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some(ua), Some(referer), None, None, false, false);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some(ua), Some(referer), None, None, false, None, &[], false);
         let line = String::from_utf8(bytes).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
@@ -1794,7 +1819,7 @@ mod tests {
 
     #[test]
     fn build_mpv_loadfile_uses_index_form_when_requested() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, None, None, false, true);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, None, None, false, None, &[], true);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();
@@ -1805,7 +1830,7 @@ mod tests {
 
     #[test]
     fn build_mpv_loadfile_uses_legacy_form_when_not_requested() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, None, None, false, false);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, None, None, false, None, &[], false);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();
@@ -1822,6 +1847,8 @@ mod tests {
             Some("eng"),
             Some("ger"),
             true,
+            None,
+            &[],
             false,
         );
         let parsed: serde_json::Value =
@@ -1833,8 +1860,31 @@ mod tests {
     }
 
     #[test]
+    fn build_mpv_loadfile_includes_media_title_and_sub_files() {
+        let sub_files = vec!["C:/subs/a,b.srt".to_string(), "C:/subs/c.srt".to_string()];
+        let bytes = build_mpv_loadfile(
+            "https://e.test/x.m3u8",
+            None,
+            None,
+            None,
+            None,
+            false,
+            Some("Movie (2020)"),
+            &sub_files,
+            false,
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
+        let opts = parsed["command"][3].as_str().unwrap();
+        assert!(opts.contains("force-media-title=%12%Movie (2020)"));
+        assert!(opts.contains("sub-file=%15%C:/subs/a,b.srt"));
+        assert!(opts.find("a,b.srt").unwrap() < opts.find("c.srt").unwrap());
+        assert!(opts.contains("sub-file=%13%C:/subs/c.srt"));
+    }
+
+    #[test]
     fn build_mpv_loadfile_omits_alang_slang_sub_off_when_unset() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, None, None, false, false);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, None, None, false, None, &[], false);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();
@@ -1900,7 +1950,7 @@ mod tests {
 
     #[test]
     fn build_mpv_loadfile_uses_three_arg_form_when_no_options() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, None, None, false, true);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, None, None, false, None, &[], true);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();

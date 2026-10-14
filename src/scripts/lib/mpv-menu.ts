@@ -42,7 +42,11 @@ export type MpvMenuKind =
 export interface MpvMenuAudioModel {
   tracks: MpvMenuTrack[]
 }
-export interface MpvMenuSubtitlesModel {
+export interface MpvMenuSubtitleExtras {
+  subtitleCandidates?: Array<{ id: string; label: string }>
+  subtitleSearch?: boolean
+}
+export interface MpvMenuSubtitlesModel extends MpvMenuSubtitleExtras {
   tracks: MpvMenuTrack[]
 }
 export interface MpvMenuSpeedModel {
@@ -54,7 +58,7 @@ export interface MpvMenuDelayModel {
 export interface MpvMenuSubtitleStyleModel {
   style: MpvMenuSubtitleStyleValue
 }
-export interface MpvMenuRootModel {
+export interface MpvMenuRootModel extends MpvMenuSubtitleExtras {
   audioTracks: MpvMenuTrack[]
   subtitleTracks: MpvMenuTrack[]
   currentRate: number
@@ -67,6 +71,8 @@ export type MpvMenuPick =
   | { kind: "audio"; id: number }
   | { kind: "subtitle"; id: number | null }
   | { kind: "subtitle-file" }
+  | { kind: "subtitle-candidate"; id: string }
+  | { kind: "subtitle-search" }
   | { kind: "speed"; rate: number }
   | { kind: "subtitle-delay-step"; deltaMs: number }
   | { kind: "subtitle-delay-reset" }
@@ -103,7 +109,11 @@ function audioChoiceItems(tracks: MpvMenuTrack[], register: Register): MenuItem[
   }))
 }
 
-function subtitleChoiceItems(tracks: MpvMenuTrack[], register: Register): MenuItem[] {
+function subtitleChoiceItems(
+  tracks: MpvMenuTrack[],
+  register: Register,
+  extras: MpvMenuSubtitleExtras = {},
+): MenuItem[] {
   const anyActive = tracks.some((track) => track.active)
   const items: MenuItem[] = [
     {
@@ -119,9 +129,17 @@ function subtitleChoiceItems(tracks: MpvMenuTrack[], register: Register): MenuIt
       checked: track.active,
       id: register({ kind: "subtitle", id: track.id }),
     })),
+    ...(extras.subtitleCandidates ?? []).map((candidate) => ({
+      kind: "item" as const,
+      title: candidate.label,
+      id: register({ kind: "subtitle-candidate", id: candidate.id }),
+    })),
   ]
   items.push({ kind: "separator" })
   items.push({ kind: "item", title: t("player.subtitles.loadFile"), id: register({ kind: "subtitle-file" }) })
+  if (extras.subtitleSearch) {
+    items.push({ kind: "item", title: t("player.subtitles.search"), id: register({ kind: "subtitle-search" }) })
+  }
   return items
 }
 
@@ -221,7 +239,7 @@ function buildRootItems(model: MpvMenuRootModel, register: Register): MenuItem[]
     items.push({ kind: "submenu", title: t("player.audio"), submenu: audioChoiceItems(model.audioTracks, register) })
   }
   // Subtitles submenu always shows: it's the only way to reach "Load subtitle file…" with zero tracks.
-  items.push({ kind: "submenu", title: t("player.subtitles"), submenu: subtitleChoiceItems(model.subtitleTracks, register) })
+  items.push({ kind: "submenu", title: t("player.subtitles"), submenu: subtitleChoiceItems(model.subtitleTracks, register, model) })
   items.push({ kind: "submenu", title: t("player.controls.speed"), submenu: speedChoiceItems(model.currentRate, register) })
   items.push({
     kind: "submenu",
@@ -268,7 +286,7 @@ export function buildMpvMenu(
       items = [...titleSection(t("player.audio")), ...audioChoiceItems((model as MpvMenuAudioModel).tracks, register)]
       break
     case "subtitles":
-      items = [...titleSection(t("player.subtitles")), ...subtitleChoiceItems((model as MpvMenuSubtitlesModel).tracks, register)]
+      items = [...titleSection(t("player.subtitles")), ...subtitleChoiceItems((model as MpvMenuSubtitlesModel).tracks, register, model as MpvMenuSubtitlesModel)]
       break
     case "speed":
       items = [...titleSection(t("player.controls.speed")), ...speedChoiceItems((model as MpvMenuSpeedModel).currentRate, register)]

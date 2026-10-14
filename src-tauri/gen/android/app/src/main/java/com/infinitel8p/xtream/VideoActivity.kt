@@ -4,6 +4,7 @@ import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -82,6 +83,7 @@ class VideoActivity : AppCompatActivity() {
     const val EXTRA_AUDIO_LANG = "audioLang"
     const val EXTRA_SUB_LANG = "subLang"
     const val EXTRA_SUB_ENABLED = "subEnabled"
+    const val EXTRA_SUBTITLES = "subtitles"
     const val EXTRA_INITIAL_CHANNEL_ID = "initialChannelId"
     const val EXTRA_TV_OVERSCAN_PERCENT = "tvOverscanPercent"
     const val EXTRA_TV_ACCENT = "tvAccentColor"
@@ -149,6 +151,7 @@ class VideoActivity : AppCompatActivity() {
   private var audioLangPref: String = ""
   private var subLangPref: String = ""
   private var subEnabledPref: Boolean = false
+  private var sideloadedSubtitles: List<MediaItem.SubtitleConfiguration> = emptyList()
   private var tvOverscanPercent: Int = 0
   private var accentColor: Int = 0
   private var displayMode: Int = AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -439,6 +442,7 @@ class VideoActivity : AppCompatActivity() {
     audioLangPref = intent.getStringExtra(EXTRA_AUDIO_LANG) ?: ""
     subLangPref = intent.getStringExtra(EXTRA_SUB_LANG) ?: ""
     subEnabledPref = intent.getBooleanExtra(EXTRA_SUB_ENABLED, false)
+    sideloadedSubtitles = parseSideloadedSubtitles(intent.getStringExtra(EXTRA_SUBTITLES))
     applyTvOverscanPadding(intent.getIntExtra(EXTRA_TV_OVERSCAN_PERCENT, 0))
     accentColor = intent.getIntExtra(EXTRA_TV_ACCENT, 0)
     applyAccentColor()
@@ -667,7 +671,10 @@ class VideoActivity : AppCompatActivity() {
     val paramsBuilder = player.trackSelectionParameters.buildUpon()
     if (mode == MODE_VOD) {
       if (audioLangPref.isNotEmpty()) paramsBuilder.setPreferredAudioLanguage(audioLangPref)
-      if (subEnabledPref) {
+      if (sideloadedSubtitles.isNotEmpty()) {
+        paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+        sideloadedSubtitles.first().language?.let { paramsBuilder.setPreferredTextLanguage(it) }
+      } else if (subEnabledPref) {
         paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
         if (subLangPref.isNotEmpty()) paramsBuilder.setPreferredTextLanguage(subLangPref)
       } else {
@@ -751,7 +758,9 @@ class VideoActivity : AppCompatActivity() {
 
     when (mode) {
       MODE_VOD -> {
-        val item = buildMediaItem(intent.getStringExtra(EXTRA_URL) ?: "", initialTitle, posterUrl)
+        val item = buildMediaItem(
+          intent.getStringExtra(EXTRA_URL) ?: "", initialTitle, posterUrl, sideloadedSubtitles,
+        )
         player.setMediaItem(item, resumeMs)
         player.prepare()
         player.playWhenReady = true
@@ -828,8 +837,41 @@ class VideoActivity : AppCompatActivity() {
     return DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory)
   }
 
-  private fun buildMediaItem(url: String, title: String, poster: String): MediaItem {
+  private fun parseSideloadedSubtitles(json: String?): List<MediaItem.SubtitleConfiguration> {
+    if (json.isNullOrBlank()) return emptyList()
+    return try {
+      val array = JSONArray(json)
+      val out = ArrayList<MediaItem.SubtitleConfiguration>()
+      for (i in 0 until array.length()) {
+        val entry = array.optJSONObject(i) ?: continue
+        val subUrl = entry.optString("url")
+        if (subUrl.isBlank()) continue
+        val language = entry.optString("language").ifBlank { null }
+        val label = entry.optString("label").ifBlank { null }
+        val mime = entry.optString("mime").ifBlank { MimeTypes.APPLICATION_SUBRIP }
+        out.add(
+          MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
+            .setMimeType(mime)
+            .setLanguage(language)
+            .setLabel(label)
+            .setSelectionFlags(0)
+            .build(),
+        )
+      }
+      out
+    } catch (_: Throwable) {
+      emptyList()
+    }
+  }
+
+  private fun buildMediaItem(
+    url: String,
+    title: String,
+    poster: String,
+    subtitles: List<MediaItem.SubtitleConfiguration> = emptyList(),
+  ): MediaItem {
     val builder = MediaItem.Builder().setUri(url)
+    if (subtitles.isNotEmpty()) builder.setSubtitleConfigurations(subtitles)
     val metaBuilder = MediaMetadata.Builder()
       .setTitle(title.ifBlank { null })
     if (poster.isNotBlank()) {

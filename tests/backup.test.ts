@@ -40,6 +40,9 @@ let settingsState: any = {
   playerReuse: { mpv: false, vlc: false },
   tmdbKey: "",
   tmdbEnabled: false,
+  subsLangDefault: "",
+  subsLangBackup: "",
+  subsAutoSearch: false,
   tvdbEnabled: true,
   perfMode: false,
   accent: "fuchsia",
@@ -90,6 +93,11 @@ vi.mock("@/scripts/lib/app-settings.js", () => ({
   setTmdbApiKey: (key: string) => { settingsState.tmdbKey = key },
   getTmdbEnabled: () => settingsState.tmdbEnabled,
   setTmdbEnabled: (enabled: boolean) => { settingsState.tmdbEnabled = enabled },
+  setSubtitleLangDefault: (lang: string) => { settingsState.subsLangDefault = lang },
+  getSubtitleLangBackup: () => settingsState.subsLangBackup,
+  setSubtitleLangBackup: (lang: string) => { settingsState.subsLangBackup = lang },
+  getSubtitleAutoSearch: () => settingsState.subsAutoSearch,
+  setSubtitleAutoSearch: (on: boolean) => { settingsState.subsAutoSearch = on },
   getTvdbEnabled: () => settingsState.tvdbEnabled,
   setTvdbEnabled: (enabled: boolean) => { settingsState.tvdbEnabled = enabled },
   getPerfMode: () => settingsState.perfMode,
@@ -245,6 +253,9 @@ beforeEach(() => {
     playerReuse: { mpv: false, vlc: false },
     tmdbKey: "",
     tmdbEnabled: false,
+    subsLangDefault: "",
+    subsLangBackup: "",
+    subsAutoSearch: false,
     tvdbEnabled: true,
     perfMode: false,
     accent: "fuchsia",
@@ -284,6 +295,13 @@ beforeEach(() => {
   }
 })
 
+class SubsMemoryStorage {
+  private store = new Map<string, string>()
+  getItem(key: string) { return this.store.has(key) ? this.store.get(key)! : null }
+  setItem(key: string, value: string) { this.store.set(key, String(value)) }
+  removeItem(key: string) { this.store.delete(key) }
+}
+
 describe("exportAll", () => {
   it("includes custom-playlist docs alongside local-m3u text, keyed by entry id", async () => {
     localContentStore.set("loc-1", "#EXTM3U\n")
@@ -320,6 +338,35 @@ describe("exportAll", () => {
 
     expect(snapshot.appSettings.tmdbKey).toBe("abc123")
     expect(snapshot.appSettings.tmdbEnabled).toBe(true)
+  })
+
+  it("includes the subtitle language, backup language and auto-search flag", async () => {
+    const storage = new SubsMemoryStorage()
+    storage.setItem("xt_subs_lang_default", "de")
+    vi.stubGlobal("localStorage", storage as unknown as Storage)
+    try {
+      settingsState.subsLangBackup = "en"
+      settingsState.subsAutoSearch = true
+
+      const snapshot = (await exportAll()) as any
+
+      expect(snapshot.appSettings.subsLangDefault).toBe("de")
+      expect(snapshot.appSettings.subsLangBackup).toBe("en")
+      expect(snapshot.appSettings.subsAutoSearch).toBe(true)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("exports an empty default subtitle language when none is stored", async () => {
+    vi.stubGlobal("localStorage", new SubsMemoryStorage() as unknown as Storage)
+    try {
+      const snapshot = (await exportAll()) as any
+
+      expect(snapshot.appSettings.subsLangDefault).toBe("")
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("includes the TVDb enabled flag", async () => {
@@ -413,6 +460,28 @@ describe("importAll", () => {
     expect(settingsState.tmdbKey).toBe("abc123")
     expect(settingsState.tmdbEnabled).toBe(true)
     expect(summary.appSettings).toBeGreaterThan(0)
+  })
+
+  it("round-trips the subtitle language settings through export then import", async () => {
+    const storage = new SubsMemoryStorage()
+    storage.setItem("xt_subs_lang_default", "fr")
+    vi.stubGlobal("localStorage", storage as unknown as Storage)
+    try {
+      settingsState.subsLangBackup = "es"
+      settingsState.subsAutoSearch = true
+      const snapshot = await exportAll()
+      settingsState.subsLangDefault = ""
+      settingsState.subsLangBackup = ""
+      settingsState.subsAutoSearch = false
+
+      await importAll(snapshot)
+
+      expect(settingsState.subsLangDefault).toBe("fr")
+      expect(settingsState.subsLangBackup).toBe("es")
+      expect(settingsState.subsAutoSearch).toBe(true)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("round-trips the TVDb enabled flag through export then import", async () => {

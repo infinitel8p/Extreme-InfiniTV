@@ -32,7 +32,16 @@ import type { CatchupRequestChannel } from "@/scripts/lib/catchup-resolve.ts"
 import { buildMovieStreamUrl, buildSeriesStreamUrl, buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { markCompleted, pushRecent, setProgress, getTrackPrefs } from "@/scripts/lib/preferences.js"
 import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
-import { getPlayerBackend, getReceiverEngine } from "@/scripts/lib/app-settings.js"
+import { getPlayerBackend, getReceiverEngine, getSubtitleAutoSearch } from "@/scripts/lib/app-settings.js"
+import { opensubtitlesAvailable } from "@/scripts/lib/opensubtitles.ts"
+import type { SubtitleSearchContext } from "@/scripts/lib/opensubtitles-params.ts"
+import {
+  attachSubtitleSearch,
+  resolveExternalSubtitleFiles,
+  seedSubtitleTrackPrefs,
+  subtitlePickKey,
+  type SubtitleSearchController,
+} from "@/scripts/lib/subtitle-fetch.ts"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
 import { registerBackInterceptor } from "@/scripts/lib/back-handler"
 import { setKeepScreenOn } from "@/scripts/lib/keep-screen-on"
@@ -103,6 +112,7 @@ export interface TvPlayVodInput {
   containerExt?: string | null
   resumeSeconds?: number
   durationSeconds?: number
+  subtitleContext?: SubtitleSearchContext
 }
 
 export interface TvPlayEpisodeInput {
@@ -116,6 +126,7 @@ export interface TvPlayEpisodeInput {
   logo?: string | null
   containerExt?: string | null
   resumeSeconds?: number
+  subtitleContext?: SubtitleSearchContext
 }
 
 export interface TvPlayCatchupInput {
@@ -196,6 +207,12 @@ let retryReenableTimer: ReturnType<typeof setTimeout> | null = null
 let cursorHideTimer: ReturnType<typeof setTimeout> | null = null
 let playbackOptionsSheet: ActionSheetHandle | null = null
 let playbackOptionsCleanup: (() => void) | null = null
+let subtitleController: SubtitleSearchController | null = null
+
+function disposeSubtitleSearch(): void {
+  subtitleController?.dispose()
+  subtitleController = null
+}
 
 const PLAYBACK_RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const
 const SELECTED_MARK = "✓ "
@@ -301,6 +318,7 @@ function cancelStartingPlayback(): void {
   currentEvents = null
   activeProgressTarget = null
   activeLiveTarget = null
+  disposeSubtitleSearch()
   embeddedPresentationActive = false
   currentIsLive = false
   cancelZap()
@@ -362,8 +380,16 @@ function seekVodBy(deltaSeconds: number): void {
   seekVodTo(currentPositionSeconds + deltaSeconds, deltaSeconds)
 }
 
-function buildPlaybackOptionsItems(controls: PlaybackControls): ActionSheetItem[] {
+function buildPlaybackOptionsItems(controls: PlaybackControls | null): ActionSheetItem[] {
   const items: ActionSheetItem[] = []
+  const searchController = subtitleController
+  if (searchController && opensubtitlesAvailable()) {
+    items.push({
+      label: t("player.subtitles.search"),
+      onSelect: () => { void searchController.openDialog() },
+    })
+  }
+  if (!controls) return items
 
   const audioTracks = controls.listAudioTracks()
   if (audioTracks.length) {
@@ -405,7 +431,7 @@ function buildPlaybackOptionsItems(controls: PlaybackControls): ActionSheetItem[
   return items
 }
 
-function openPlaybackOptionsSheet(controls: PlaybackControls): void {
+function openPlaybackOptionsSheet(controls: PlaybackControls | null): void {
   if (!playbackOptionsSheet) playbackOptionsSheet = createActionSheet("tv-playback-options")
   const sheet = playbackOptionsSheet
   playbackOptionsCleanup?.()
@@ -413,7 +439,7 @@ function openPlaybackOptionsSheet(controls: PlaybackControls): void {
   const render = () => sheet.open(t("tv.playbackOptions.title"), buildPlaybackOptionsItems(controls))
   render()
 
-  const unsubscribeTracks = controls.onTracksChanged(render)
+  const unsubscribeTracks = controls ? controls.onTracksChanged(render) : () => {}
   const unsubscribeClose = sheet.onClose(() => {
     unsubscribeTracks()
     unsubscribeClose()
@@ -449,7 +475,7 @@ function handleKeydown(event: KeyboardEvent): void {
 
   if (!zapDigits && (key === "ContextMenu" || key === "Menu" || key === "o" || key === "O")) {
     const controls = activeEngine?.getPlaybackControls?.() ?? null
-    if (controls) {
+    if (controls || subtitleController) {
       event.preventDefault()
       event.stopImmediatePropagation()
       openPlaybackOptionsSheet(controls)
@@ -698,6 +724,7 @@ function handleSessionEnded(): void {
   activeEngine = null
   activeProgressTarget = null
   activeLiveTarget = null
+  disposeSubtitleSearch()
   embeddedPresentationActive = false
   currentIsLive = false
   currentPlaybackState = "idle"
@@ -788,6 +815,11 @@ async function guardPlayback(action: () => Promise<boolean>): Promise<boolean> {
   }
 }
 
+interface SubtitleSessionInput {
+  context: SubtitleSearchContext
+  pickKey: string
+}
+
 interface ExternalTrackContext {
   playlistId: string
   contentKind: "vod" | "episode"
@@ -804,6 +836,7 @@ interface StartSessionInput {
   allowExternal?: boolean
   /** Feeds the mpv external-progress recorder; unset for live/catch-up. */
   externalTrackContext?: ExternalTrackContext
+  subtitle?: SubtitleSessionInput
 }
 
 function setExternalBackHintVisible(visible: boolean): void {
@@ -838,6 +871,7 @@ function teardownExternalSession(stopProcess: boolean): void {
   currentEvents = null
   activeProgressTarget = null
   activeLiveTarget = null
+  disposeSubtitleSearch()
   restoreFocusAfterPlayback()
   events?.onEnded?.()
 }
@@ -867,16 +901,24 @@ async function tryStartExternalPlayback(
   const trackPrefs = trackContext
     ? getTrackPrefs(trackContext.playlistId, trackContext.contentKind, trackContext.contentId)
     : null
+  const subtitleFiles = trackContext
+    ? await resolveExternalSubtitleFiles(
+        subtitlePickKey(trackContext.playlistId, trackContext.contentKind, trackContext.contentId)
+      )
+    : []
+  const rememberedTracks = trackPrefs
+    ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+    : null
   let launchResult: { sessionId: string | null; src: string }
   try {
     launchResult = await getExternalLauncher(backend).launch(descriptor.src, {
       userAgent: descriptor.headers?.userAgent ?? null,
       referer: descriptor.headers?.referer ?? null,
       resumeSeconds: descriptor.resumeSeconds,
-      tracks: trackPrefs
-        ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
-        : null,
+      tracks: trackContext ? seedSubtitleTrackPrefs(rememberedTracks) : rememberedTracks,
       isLive: descriptor.isLive,
+      title: descriptor.title,
+      subtitleFiles: subtitleFiles.length ? subtitleFiles : undefined,
     })
   } catch (err) {
     surfaceLaunchErrorFallback(err, backend, "[xt:tv-playback]")
@@ -947,6 +989,7 @@ async function runStartSession(descriptor: CastDescriptorV1, session: StartSessi
     void stopExternalPlayback(previousExternalKind).catch(() => {})
   }
   cancelZap()
+  disposeSubtitleSearch()
   playbackOptionsSheet?.close()
   currentEvents = session.events
   activeProgressTarget = session.progressTarget ?? null
@@ -972,6 +1015,14 @@ async function runStartSession(descriptor: CastDescriptorV1, session: StartSessi
     // Launch failed - fall through to the normal embedded/native path below.
   }
 
+  const subtitleSession = session.subtitle ?? null
+  const playOptions: ReceiverPlayOptions | undefined = subtitleSession
+    ? {
+        ...session.playOptions,
+        subtitleLookup: { context: subtitleSession.context, pickKey: subtitleSession.pickKey },
+        onSubtitleSearch: () => { void subtitleController?.openDialog() },
+      }
+    : session.playOptions
   const preference = getReceiverEngine() as ReceiverEnginePreference
   // The embedded engine only unhides the host once artplayer/hls.js have mounted, which is seconds
   // on a TV: reveal up front so the tune shows its loading state and banner right away.
@@ -1013,7 +1064,7 @@ async function runStartSession(descriptor: CastDescriptorV1, session: StartSessi
         }
         return success
       },
-      playOptions: session.playOptions,
+      playOptions,
       onFallback: () => {
         if (!isStalePlayAttempt(generation)) {
           log.warn("[xt:tv-playback] native playback unavailable, falling back to embedded playback")
@@ -1025,7 +1076,16 @@ async function runStartSession(descriptor: CastDescriptorV1, session: StartSessi
     log.warn("[xt:tv-playback] play failed:", err)
   }
   if (isStalePlayAttempt(generation)) return false
-  if (started) return true
+  if (started) {
+    const embeddedHandle = isEmbeddedActive() ? ((activeEngine as ReceiverEngine | null)?.getHandle?.() ?? null) : null
+    if (subtitleSession && embeddedHandle && opensubtitlesAvailable()) {
+      subtitleController = attachSubtitleSearch(embeddedHandle, subtitleSession.context, {
+        pickKey: subtitleSession.pickKey,
+        autoSearch: getSubtitleAutoSearch(),
+      })
+    }
+    return true
+  }
 
   // Not stale, so a leftover startingEngine (e.g. from a throw) is ours to clear.
   const danglingEngine = startingEngine as ReceiverEngine | null
@@ -1035,6 +1095,7 @@ async function runStartSession(descriptor: CastDescriptorV1, session: StartSessi
   currentEvents = null
   activeProgressTarget = null
   activeLiveTarget = null
+  disposeSubtitleSearch()
   embeddedPresentationActive = false
   osd?.hideAll()
   const failDom = ensureDom()
@@ -1307,6 +1368,9 @@ export async function playVod(input: TvPlayVodInput, events: TvPlaybackEvents = 
       events,
       progressTarget,
       playOptions: { trackMemory: { playlistId: input.playlistId, kind: "vod", id: String(input.movieId) } },
+      subtitle: input.subtitleContext
+        ? { context: input.subtitleContext, pickKey: subtitlePickKey(input.playlistId, "vod", input.movieId) }
+        : undefined,
       externalTrackContext: {
         playlistId: input.playlistId,
         contentKind: "vod",
@@ -1360,6 +1424,12 @@ export async function playEpisode(input: TvPlayEpisodeInput, events: TvPlaybackE
       events,
       progressTarget,
       playOptions: { trackMemory: { playlistId: input.playlistId, kind: "episode", id: String(input.episodeId) } },
+      subtitle: input.subtitleContext
+        ? {
+            context: input.subtitleContext,
+            pickKey: subtitlePickKey(input.playlistId, "episode", input.episodeId),
+          }
+        : undefined,
       externalTrackContext: {
         playlistId: input.playlistId,
         contentKind: "episode",

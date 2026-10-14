@@ -26,7 +26,8 @@ import {
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
 import { parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
-import { resolveTitleEnrichment } from "@/scripts/lib/enrichment.ts"
+import { resolveTitleEnrichmentDetailed } from "@/scripts/lib/enrichment.ts"
+import { cleanSubtitleTitle } from "@/scripts/lib/subtitle-fetch.ts"
 import { fillHeroGaps, type DetailHeroFields } from "@/scripts/tv/detail-enrich.ts"
 import {
   LANGUAGE_GROUPING_EVENT,
@@ -186,6 +187,7 @@ const view: TvView = {
     let heroDurationText = ""
     let heroRatingText = ""
     let heroYearText = ""
+    let resolvedTmdbId: number | null = null
     let enrichRequestId = 0
     let focusedPrimaryOnce = false
     let lastLanguageVariantsCatalog: CatalogRow[] = []
@@ -230,6 +232,18 @@ const view: TvView = {
       })
     }
 
+    function buildSubtitleContext() {
+      if (!movie) return undefined
+      const cleaned = cleanSubtitleTitle(movie.name)
+      const yearMatch = (heroYearText || String(movie.year || "")).match(/\d{4}/)
+      return {
+        kind: "movie" as const,
+        title: cleaned.title,
+        year: yearMatch ? Number(yearMatch[0]) : cleaned.year,
+        tmdbId: resolvedTmdbId ?? movie.tmdb ?? null,
+      }
+    }
+
     async function startPlayback(resumeSeconds: number): Promise<void> {
       if (!movie || !activePlaylistId) return
       await playVod(
@@ -241,6 +255,7 @@ const view: TvView = {
           containerExt,
           resumeSeconds,
           durationSeconds: knownDurationSeconds() || undefined,
+          subtitleContext: buildSubtitleContext(),
         },
         {
           onEnded: () => renderActions(),
@@ -423,7 +438,7 @@ const view: TvView = {
       const info = data?.info || data?.movie_data || {}
       const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData) ?? movie.tmdb ?? null
       try {
-        const enrichment = await resolveTitleEnrichment({
+        const details = await resolveTitleEnrichmentDetailed({
           kind: "movie",
           playlistId: activePlaylistId,
           itemId: String(movie.id),
@@ -432,7 +447,10 @@ const view: TvView = {
           providerTmdbId,
           signal: abortController.signal,
         })
-        if (requestId !== enrichRequestId || !enrichment) return
+        if (requestId !== enrichRequestId) return
+        resolvedTmdbId = details?.tmdbId ?? resolvedTmdbId
+        const enrichment = details?.enrichment ?? null
+        if (!enrichment) return
         applyHeroFields(fillHeroGaps(currentHeroFields(), enrichment))
         if (!movie.logo && enrichment.posterUrl) movie.logo = enrichment.posterUrl
         renderHero()

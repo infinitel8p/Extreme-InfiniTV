@@ -14,7 +14,10 @@ import {
   createVideoJsTrackRegistrar,
   createHlsSubtitleSource,
   attachArtplayerHlsSubtitleControl,
+  type SubtitleManager,
 } from "@/scripts/lib/subtitle-tracks.js"
+import { parseSubtitleText } from "@/scripts/lib/subtitle-parse.ts"
+import type { SubtitleCue } from "@/scripts/lib/mp4-subtitles.js"
 import {
   createHlsAudioSource,
   createShakaAudioSource,
@@ -138,8 +141,10 @@ export interface VjsLikeHandle {
   /** mpv-embedded only: embedded subtitle tracks; "off" has no selected entry. */
   listSubtitleTracks?(): { id: number; label: string; selected: boolean }[]
   selectAudioTrack?(id: number): Promise<void>
-  /** null selects "off" (mpv `sid` "no"). */
+  /** mpv-embedded: mpv track id; other backends: external track id. null turns subtitles off. */
   selectSubtitleTrack?(id: number | null): Promise<void>
+  addSubtitleTrack?(track: { label: string; language: string; load: () => Promise<{ cues?: SubtitleCue[]; text?: string }> }): Promise<number>
+  removeSubtitleTracks?(): void
 }
 
 export interface ExternalLaunchOptions {
@@ -148,6 +153,8 @@ export interface ExternalLaunchOptions {
   resumeSeconds?: number
   tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
   isLive?: boolean
+  title?: string | null
+  subtitleFiles?: string[]
 }
 
 export interface ExternalLauncher {
@@ -178,6 +185,7 @@ export interface MountOptions {
   referer?: string | null
   /** mpv-embedded only: mounts its own control bar. Defaults to true. */
   mpvControls?: boolean
+  onSubtitleSearch?: () => void
 }
 
 export const isTauri =
@@ -316,6 +324,20 @@ export interface ArgvInput {
   resumeMinSeconds?: number
   tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
   isLive?: boolean
+  title?: string | null
+  subtitleFiles?: string[]
+}
+
+export function resolveReuseSubOff(options: { tracks?: { subOff: boolean } | null; subtitleFiles?: string[] }): boolean {
+  return (options.tracks?.subOff ?? false) && cleanPaths(options.subtitleFiles).length === 0
+}
+
+function cleanTitle(title: string | null | undefined): string {
+  return (title ?? "").replace(/[\0\r\n]+/g, " ").trim()
+}
+
+function cleanPaths(paths: string[] | undefined): string[] {
+  return (paths ?? []).filter((path) => path && !/[\0\r\n]/.test(path))
 }
 
 export function buildMpvArgs(input: ArgvInput): string[] {
@@ -331,8 +353,12 @@ export function buildMpvArgs(input: ArgvInput): string[] {
     out.push(`--start=${Math.floor(resume)}`)
   }
   if (input.tracks?.audioLang) out.push(`--alang=${input.tracks.audioLang}`)
-  if (input.tracks?.subOff) out.push("--sid=no")
+  const subtitleFiles = cleanPaths(input.subtitleFiles)
+  if (input.tracks?.subOff && !subtitleFiles.length) out.push("--sid=no")
   else if (input.tracks?.subLang) out.push(`--slang=${input.tracks.subLang}`)
+  for (const file of subtitleFiles) out.push(`--sub-file=${file}`)
+  const title = cleanTitle(input.title)
+  if (title) out.push(`--force-media-title=${title}`)
   for (const arg of input.extraArgs || []) {
     if (arg && arg.trim()) out.push(arg)
   }
@@ -357,6 +383,10 @@ export function buildVlcArgs(input: ArgvInput): string[] {
   if (input.tracks?.audioLang) out.push(`--audio-language=${input.tracks.audioLang}`)
   if (input.tracks?.subOff) out.push("--no-spu")
   else if (input.tracks?.subLang) out.push(`--sub-language=${input.tracks.subLang}`)
+  const [firstSubtitleFile] = cleanPaths(input.subtitleFiles)
+  if (firstSubtitleFile) out.push(`--sub-file=${firstSubtitleFile}`)
+  const title = cleanTitle(input.title)
+  if (title) out.push(`--meta-title=${title}`)
   for (const arg of input.extraArgs || []) {
     if (arg && arg.trim()) out.push(arg)
   }
@@ -441,6 +471,8 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
         extraArgs: getPlayerExtraArgs(kind),
         tracks: options.tracks ?? null,
         isLive: options.isLive ?? false,
+        title: options.title ?? null,
+        subtitleFiles: options.subtitleFiles,
       })
       const reuse = {
         kind,
@@ -448,7 +480,9 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
         url: playbackSrc,
         alang: options.tracks?.audioLang ?? null,
         slang: options.tracks?.subLang ?? null,
-        subOff: options.tracks?.subOff ?? false,
+        subOff: resolveReuseSubOff(options),
+        mediaTitle: cleanTitle(options.title) || null,
+        subFiles: cleanPaths(options.subtitleFiles),
       }
       try {
         const result = (await invoke("launch_external_player", {
@@ -2010,6 +2044,32 @@ async function attachMpegts(
 
 type SubtitleTrackInfo = { index: number; label: string; language: string }
 
+function createExternalSubtitleApi(manager: SubtitleManager) {
+  return {
+    async addSubtitleTrack(track: { label: string; language: string; load: () => Promise<{ cues?: SubtitleCue[]; text?: string }> }): Promise<number> {
+      return manager.addExternalTrack({
+        label: track.label,
+        language: track.language,
+        load: async () => {
+          const loaded = await track.load()
+          return loaded.cues ?? parseSubtitleText(loaded.text ?? "")
+        },
+      })
+    },
+    removeSubtitleTracks(): void {
+      manager.removeExternalTracks()
+    },
+    async selectSubtitleTrack(id: number | null): Promise<void> {
+      if (id === null) {
+        manager.select(-1)
+        return
+      }
+      await manager.ready()
+      manager.selectExternal(id)
+    },
+  }
+}
+
 // Wires track-memory restore/persist into a mount's subtitle manager callbacks.
 export function createSubtitleTrackMemoryHooks(
   getContext: () => TrackMemoryContext | null,
@@ -2475,6 +2535,7 @@ async function mountVideoJs(
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
     },
+    ...createExternalSubtitleApi(subtitleManager),
     engineStats() {
       return telemetry.snapshot()
     },
@@ -2952,6 +3013,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
     },
+    ...createExternalSubtitleApi(subtitleManager),
     engineStats() {
       return telemetry.snapshot()
     },
@@ -3333,6 +3395,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
     },
+    ...createExternalSubtitleApi(subtitleManager),
     engineStats() {
       return telemetry.snapshot()
     },
@@ -3416,6 +3479,7 @@ export async function mountPlayer(
       networkTimeoutSeconds: getNetworkTimeoutSeconds(),
       videoElement: videoEl,
       controls: options.mpvControls,
+      onSubtitleSearch: options.onSubtitleSearch,
     })
     if (handle) {
       wireMonoAudioDisposalMpv(handle)

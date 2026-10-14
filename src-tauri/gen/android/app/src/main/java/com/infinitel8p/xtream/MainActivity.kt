@@ -1469,6 +1469,24 @@ class AndroidVideoBridge(
     audioLang: String?,
     subLang: String?,
     subEnabled: Boolean,
+  ): Boolean = launchVod(
+    contentKey, url, ua, referer, title, posterUrl, startMs, dns, audioLang, subLang, subEnabled, "[]",
+  )
+
+  @JavascriptInterface
+  fun launchVod(
+    contentKey: String,
+    url: String,
+    ua: String,
+    referer: String,
+    title: String,
+    posterUrl: String,
+    startMs: Long,
+    dns: String,
+    audioLang: String?,
+    subLang: String?,
+    subEnabled: Boolean,
+    subtitlesJson: String,
   ): Boolean {
     return tryLaunch(VideoActivity.MODE_VOD) { intent ->
       intent.putExtra(VideoActivity.EXTRA_URL, url)
@@ -1482,6 +1500,7 @@ class AndroidVideoBridge(
       intent.putExtra(VideoActivity.EXTRA_AUDIO_LANG, audioLang ?: "")
       intent.putExtra(VideoActivity.EXTRA_SUB_LANG, subLang ?: "")
       intent.putExtra(VideoActivity.EXTRA_SUB_ENABLED, subEnabled)
+      intent.putExtra(VideoActivity.EXTRA_SUBTITLES, subtitlesJson)
     }
   }
 

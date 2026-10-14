@@ -37,6 +37,11 @@ import {
   setPlayerReuseInstance,
   getTmdbApiKey,
   setTmdbApiKey,
+  setSubtitleLangDefault,
+  getSubtitleLangBackup,
+  setSubtitleLangBackup,
+  getSubtitleAutoSearch,
+  setSubtitleAutoSearch,
   getTmdbEnabled,
   setTmdbEnabled,
   getTvdbEnabled,
@@ -280,6 +285,9 @@ export async function exportAll() {
         vlc: getPlayerReuseInstance("vlc"),
       },
       tmdbKey: getTmdbApiKey(),
+      subsLangDefault: readRawLS("xt_subs_lang_default") || "",
+      subsLangBackup: getSubtitleLangBackup(),
+      subsAutoSearch: getSubtitleAutoSearch(),
       tmdbEnabled: getTmdbEnabled(),
       tvdbEnabled: getTvdbEnabled(),
       display: {
@@ -483,6 +491,18 @@ export async function importAll(blob, options = {}) {
     }
     if (typeof b.appSettings.tmdbKey === "string") {
       setTmdbApiKey(b.appSettings.tmdbKey)
+      summary.appSettings++
+    }
+    if (typeof b.appSettings.subsLangDefault === "string") {
+      setSubtitleLangDefault(b.appSettings.subsLangDefault)
+      summary.appSettings++
+    }
+    if (typeof b.appSettings.subsLangBackup === "string") {
+      setSubtitleLangBackup(b.appSettings.subsLangBackup)
+      summary.appSettings++
+    }
+    if (typeof b.appSettings.subsAutoSearch === "boolean") {
+      setSubtitleAutoSearch(b.appSettings.subsAutoSearch)
       summary.appSettings++
     }
     if (typeof b.appSettings.tmdbEnabled === "boolean") {

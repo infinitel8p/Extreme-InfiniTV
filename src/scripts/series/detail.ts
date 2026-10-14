@@ -70,6 +70,7 @@ import {
   isTmdbActive,
   getContentLanguage,
   getUserAgent,
+  getSubtitleAutoSearch,
   VIDEO_SCALE_EVENT,
   getPlayerPath,
   getExternalPlayerPref,
@@ -80,6 +81,14 @@ import {
 } from "@/scripts/lib/app-settings.js"
 import { fetchSeasonEnrichment, peekCachedSeasonEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
 import { resolveTitleEnrichmentDetailed, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
+import { opensubtitlesAvailable } from "@/scripts/lib/opensubtitles.ts"
+import {
+  attachSubtitleSearch,
+  cleanSubtitleTitle,
+  resolveExternalSubtitleFiles,
+  seedSubtitleTrackPrefs,
+  subtitlePickKey,
+} from "@/scripts/lib/subtitle-fetch.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { providerSeasonsFromEpisodeMap } from "@/scripts/lib/tmdb-season-map.ts"
 import { enrichmentNeedsFill, fetchTvdbSeason, parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
@@ -1561,6 +1570,7 @@ async function ensureEmbeddedPlayer(backend) {
     aspectRatio: "16:9",
     pictureInPictureToggle: !hasNativePipBridge,
     userAgent: getUserAgent() || null,
+    onSubtitleSearch: () => { void openSubtitleSearch() },
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
@@ -1729,6 +1739,7 @@ async function playEpisode(episode, options = {}) {
   }
 
   currentEpisode = episode
+  syncSubsSearchButton()
   externalBtnHandle?.refresh()
   playTvBtnHandle?.refresh()
 
@@ -1747,6 +1758,7 @@ async function playEpisode(episode, options = {}) {
   if (detailPlaylistId) {
     const nativeDns = (await getPlaylistDnsOverride(detailPlaylistId))?.raw ?? null
     if (requestId !== playRequestId) return
+    const subtitleContext = buildSubtitleContext(episode)
     const launched = await tryAndroidNativeVodPlayback({
       playlistId: detailPlaylistId,
       kind: "episode",
@@ -1758,6 +1770,7 @@ async function playEpisode(episode, options = {}) {
       startMs: Math.max(0, resumePos) * 1000,
       ua: getUserAgent() || undefined,
       dns: nativeDns,
+      subtitleLookup: { context: subtitleContext, pickKey: currentSubtitlePickKey(episode) },
       progressExtras: progressExtrasFor(episode),
       isStale: () => requestId !== playRequestId,
       onCompleted: () => {
@@ -1821,6 +1834,7 @@ async function playEpisode(episode, options = {}) {
       setupStatsButton()
       setupHealthButton()
       subtitleDelayController.setup()
+      setupSubtitleSearch(player, episode)
       // mpv-only signals the generic remux-failure classifier below doesn't recognize.
       player.one?.("error", async () => {
         const errorDetail = player.codecInfo?.()?.errorDetail
@@ -1910,11 +1924,16 @@ async function launchExternalPlayback(backend, src, resumeSeconds, episode) {
     duration: 2000,
   })
   const trackPrefs = detailPlaylistId ? getTrackPrefs(detailPlaylistId, "episode", episode.id) : null
+  const subtitleFiles = await resolveExternalSubtitleFiles(currentSubtitlePickKey(episode))
   const result = await launcher.launch(src, {
     resumeSeconds,
-    tracks: trackPrefs
-      ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
-      : null,
+    title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}`,
+    tracks: seedSubtitleTrackPrefs(
+      trackPrefs
+        ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+        : null
+    ),
+    subtitleFiles: subtitleFiles.length ? subtitleFiles : undefined,
   })
   if (result.sessionId && detailPlaylistId && backend === "mpv") {
     beginExternalSession({
@@ -1942,6 +1961,67 @@ const subtitleDelayController = createSubtitleDelayController({
 
 document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))
 
+// ----------------------------
+// Subtitle search
+// ----------------------------
+const subsSearchBtn = document.getElementById("subs-search-btn")
+let subtitleSearchController = null
+let subtitleSearchEpisode = null
+
+function buildSubtitleContext(episode) {
+  if (!series || !episode) return null
+  const cleaned = cleanSubtitleTitle(series.name)
+  const seasonNumber = Number(episode.season || currentSeason) || null
+  const episodeNumber = Number(episode.episode_num) || null
+  const parentTmdbId = resolvedTmdbId || Number(series.tmdb) || null
+  return {
+    kind: "episode",
+    title: cleaned.title,
+    season: seasonNumber,
+    episode: episodeNumber,
+    parentTmdbId,
+  }
+}
+
+function currentSubtitlePickKey(episode) {
+  return detailPlaylistId && episode ? subtitlePickKey(detailPlaylistId, "episode", episode.id) : undefined
+}
+
+function disposeSubtitleSearch() {
+  subtitleSearchController?.dispose()
+  subtitleSearchController = null
+  subtitleSearchEpisode = null
+}
+
+function setupSubtitleSearch(player, episode) {
+  disposeSubtitleSearch()
+  player.removeSubtitleTracks?.()
+  const context = buildSubtitleContext(episode)
+  if (!context || !opensubtitlesAvailable()) return
+  subtitleSearchEpisode = episode
+  subtitleSearchController = attachSubtitleSearch(player, context, {
+    pickKey: currentSubtitlePickKey(episode),
+    autoSearch: getSubtitleAutoSearch(),
+  })
+}
+
+function syncSubsSearchButton() {
+  if (subsSearchBtn) subsSearchBtn.hidden = !(currentEpisode && opensubtitlesAvailable())
+}
+
+async function openSubtitleSearch() {
+  if (subtitleSearchController && subtitleSearchEpisode === currentEpisode) {
+    await subtitleSearchController.openDialog()
+    return
+  }
+  const context = buildSubtitleContext(currentEpisode)
+  if (!context) return
+  const { openSubtitleSearchDialog } = await import("@/scripts/lib/subtitle-search-dialog.ts")
+  await openSubtitleSearchDialog({ context, pickKey: currentSubtitlePickKey(currentEpisode), onPick: async () => {} })
+}
+
+subsSearchBtn?.addEventListener("click", () => { void openSubtitleSearch() })
+
 const externalBtnHandle = setupExternalPlayerButton(
   /** @type {HTMLButtonElement|null} */ (document.getElementById("series-detail-open-external")),
   {
@@ -1964,6 +2044,7 @@ const externalBtnHandle = setupExternalPlayerButton(
       const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
       return [seriesName, sxe, episodeTitle].filter(Boolean).join(" · ") || null
     },
+    getSubtitlePickKey: () => currentSubtitlePickKey(currentEpisode) ?? null,
     getTrackPrefs() {
       if (!detailPlaylistId || !currentEpisode) return null
       const prefs = getTrackPrefs(detailPlaylistId, "episode", currentEpisode.id)
@@ -2072,6 +2153,7 @@ window.addEventListener("pagehide", () => {
     vjs?.pause?.()
     vjs?.dispose?.()
     retirePreviousPlayback()
+    disposeSubtitleSearch()
     subtitleDelayController.teardown()
   } catch {}
   clearAmbient(ambientEl)

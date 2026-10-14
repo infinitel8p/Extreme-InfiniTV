@@ -42,6 +42,7 @@ import {
   IconRestore,
   IconLicense,
   IconMovie,
+  IconLanguage,
   IconEye,
   IconEyeOff,
   IconActivity,
@@ -80,6 +81,7 @@ const navStructure: NavSection[] = [
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
     { id: "card-casting",          labelKey: "settings.casting.title", label: "Casting", conditional: true },
     { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "Metadata enrichment" },
+    { id: "card-subtitles",        labelKey: "settings.subtitles.title", label: "Subtitles" },
     { id: "row-verbose-log",       labelKey: "settings.verboseLog.title", label: "Verbose logging", conditional: true },
     { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
@@ -1541,6 +1543,122 @@ const navStructure: NavSection[] = [
           </p>
         </div>
 
+        <!-- Surface: Subtitles -->
+        <div id="card-subtitles" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
+            <span class="icon-mark">
+              <IconLanguage aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.subtitles.title" class="text-base font-semibold">Subtitles</h3>
+          </div>
+          <p data-i18n="settings.subtitles.helper" class="settings-surface__helper text-xs text-fg-3">
+            Subtitle languages and OpenSubtitles search for movies and series.
+          </p>
+          <div class="settings-rows">
+
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.subtitles.langDefault" class="text-sm font-medium leading-snug">Default subtitle language</h3>
+              </div>
+              <div class="settings-row__control">
+                <select id="settings-subs-lang-default" class="field-input"></select>
+              </div>
+            </div>
+
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.subtitles.langBackup" class="text-sm font-medium leading-snug">Backup subtitle language</h3>
+              </div>
+              <div class="settings-row__control">
+                <select id="settings-subs-lang-backup" class="field-input"></select>
+              </div>
+            </div>
+
+            <div data-settings-item data-subs-opensubs class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.subtitles.autoSearch" class="text-sm font-medium leading-snug">Search automatically when playback starts</h3>
+                <p data-i18n="settings.subtitles.autoSearchHelper" class="text-xs text-fg-3">
+                  Looks up subtitles in your default and backup language and adds matches to the player's subtitle menu. Nothing is enabled until you pick one.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-subs-auto"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Search automatically when playback starts"
+                  data-i18n-attr="aria-label:settings.subtitles.autoSearch">
+                  <button type="button" data-subs-auto="on"  aria-pressed="false" data-i18n="settings.tmdb.on"  class="subs-auto-btn btn">On</button>
+                  <button type="button" data-subs-auto="off" aria-pressed="false" data-i18n="settings.tmdb.off" class="subs-auto-btn btn">Off</button>
+                </div>
+              </div>
+            </div>
+
+            <div data-settings-item data-subs-opensubs class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.subtitles.account" class="text-sm font-medium leading-snug">OpenSubtitles account</h3>
+                <p data-i18n="settings.subtitles.accountHelper" class="text-xs text-fg-3">
+                  Optional. Without an account 5 subtitle downloads per day are allowed; a free account raises that.
+                </p>
+              </div>
+              <div class="settings-row__control w-full @2xl:w-96 flex-col items-stretch gap-1">
+                <form id="settings-subs-signin" class="flex flex-col gap-2">
+                  <input
+                    id="settings-subs-username"
+                    type="text"
+                    autocomplete="username"
+                    spellcheck="false"
+                    placeholder="Username"
+                    aria-label="Username"
+                    data-i18n-attr="placeholder:settings.subtitles.username;aria-label:settings.subtitles.username"
+                    class="field-input min-w-0"
+                  />
+                  <div class="flex gap-2">
+                    <input
+                      id="settings-subs-password"
+                      type="password"
+                      autocomplete="current-password"
+                      placeholder="Password"
+                      aria-label="Password"
+                      data-i18n-attr="placeholder:settings.subtitles.password;aria-label:settings.subtitles.password"
+                      class="field-input flex-1 min-w-0"
+                    />
+                    <button id="settings-subs-signin-btn" type="submit" class="btn flex-none w-auto justify-center">
+                      <span data-i18n="settings.subtitles.signIn">Sign in</span>
+                    </button>
+                  </div>
+                </form>
+                <div id="settings-subs-signedin" class="hidden items-center gap-2">
+                  <div class="flex-1 min-w-0">
+                    <p id="settings-subs-signedin-name" class="text-sm truncate"></p>
+                    <p id="settings-subs-quota" class="text-xs text-fg-3 empty:hidden"></p>
+                  </div>
+                  <button id="settings-subs-signout-btn" type="button" class="btn flex-none w-auto justify-center">
+                    <span data-i18n="settings.subtitles.signOut">Sign out</span>
+                  </button>
+                </div>
+                <span
+                  id="settings-subs-msg"
+                  aria-live="polite"
+                  class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
+            </div>
+
+          </div>
+          <p
+            id="settings-subs-not-configured"
+            data-i18n="settings.subtitles.notConfigured"
+            class="hidden text-xs text-fg-3 px-5 sm:px-6 pb-3">
+            This build has no OpenSubtitles key; subtitle search is unavailable.
+          </p>
+          <p
+            id="settings-subs-credit"
+            data-i18n-html="settings.subtitles.credit"
+            class="text-2xs text-fg-3 px-5 sm:px-6 pb-5 sm:pb-6 -mt-1">
+            Subtitles provided by <a href="https://www.opensubtitles.com" target="_blank" rel="noopener noreferrer" data-external class="underline">OpenSubtitles.com</a>
+          </p>
+        </div>
+
         <!-- Network log: developer-mode only, unhidden by the script below -->
         <details id="card-net-log" data-settings-item class="changelog-outer settings-surface icon-mark-host group hidden scroll-mt-6 lg:scroll-mt-20">
           <summary class="settings-surface__header cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden pb-5 sm:pb-6">
@@ -2598,6 +2716,23 @@ const navStructure: NavSection[] = [
       setTvdbEnabled,
     } from "@/scripts/lib/app-settings.js"
     import { validateTmdbKey } from "@/scripts/lib/tmdb.ts"
+    import {
+      getSubtitleLangBackup,
+      setSubtitleLangDefault,
+      setSubtitleLangBackup,
+      getSubtitleAutoSearch,
+      setSubtitleAutoSearch,
+      getOpenSubtitlesSession,
+      SUBTITLE_SETTINGS_EVENT,
+    } from "@/scripts/lib/app-settings.js"
+    import {
+      opensubtitlesAvailable,
+      loginOpenSubtitles,
+      logoutOpenSubtitles,
+      fetchOpenSubtitlesUserInfo,
+      OpenSubtitlesError,
+    } from "@/scripts/lib/opensubtitles.ts"
+    import { SUBTITLE_LANGUAGES, subtitleLanguageName } from "@/scripts/lib/subtitle-languages.ts"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
     import { bindBackupRestore, restoreBackupText } from "@/scripts/lib/restore-backup.js"
     import {
@@ -5341,6 +5476,174 @@ const navStructure: NavSection[] = [
       } finally {
         setLoading(tmdbTestBtn, false)
       }
+    })
+
+    // -------------------------------------------------------------------
+    // Subtitles
+    // -------------------------------------------------------------------
+    const subsLangDefaultSelect = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("settings-subs-lang-default")
+    )
+    const subsLangBackupSelect = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("settings-subs-lang-backup")
+    )
+    const subsAutoGroup = document.getElementById("settings-subs-auto")
+    const subsSignInForm = document.getElementById("settings-subs-signin")
+    const subsUsernameInput = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("settings-subs-username")
+    )
+    const subsPasswordInput = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("settings-subs-password")
+    )
+    const subsSignInBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-subs-signin-btn")
+    )
+    const subsSignOutBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-subs-signout-btn")
+    )
+    const subsSignedInEl = document.getElementById("settings-subs-signedin")
+    const subsSignedInNameEl = document.getElementById("settings-subs-signedin-name")
+    const subsQuotaEl = document.getElementById("settings-subs-quota")
+    const subsMsgEl = document.getElementById("settings-subs-msg")
+
+    function readStoredSubtitleLang(key) {
+      try {
+        return localStorage.getItem(key) || ""
+      } catch {
+        return ""
+      }
+    }
+
+    function fillSubsLangSelect(select, firstLabel, selectedValue) {
+      if (!select) return
+      select.replaceChildren()
+      const firstOption = document.createElement("option")
+      firstOption.value = ""
+      firstOption.textContent = firstLabel
+      select.append(firstOption)
+      const locale = getActiveLocale()
+      for (const language of SUBTITLE_LANGUAGES) {
+        const option = document.createElement("option")
+        option.value = language.code
+        option.textContent = subtitleLanguageName(language.code, locale)
+        select.append(option)
+      }
+      select.value = selectedValue
+    }
+
+    function populateSubsLangSelects() {
+      fillSubsLangSelect(
+        subsLangDefaultSelect,
+        t("settings.subtitles.followApp"),
+        readStoredSubtitleLang("xt_subs_lang_default"),
+      )
+      fillSubsLangSelect(subsLangBackupSelect, t("settings.subtitles.none"), getSubtitleLangBackup())
+    }
+
+    populateSubsLangSelects()
+    document.addEventListener(LOCALE_EVENT, populateSubsLangSelects)
+
+    subsLangDefaultSelect?.addEventListener("change", () => {
+      setSubtitleLangDefault(subsLangDefaultSelect.value)
+      populateSubsLangSelects()
+    })
+    subsLangBackupSelect?.addEventListener("change", () => {
+      setSubtitleLangBackup(subsLangBackupSelect.value)
+    })
+
+    function syncSubsAuto() {
+      if (!subsAutoGroup) return
+      const enabled = getSubtitleAutoSearch()
+      for (const btn of subsAutoGroup.querySelectorAll(".subs-auto-btn")) {
+        const isOn = btn.getAttribute("data-subs-auto") === "on"
+        btn.setAttribute("aria-pressed", isOn === enabled ? "true" : "false")
+      }
+    }
+    syncSubsAuto()
+
+    subsAutoGroup?.addEventListener("click", (event) => {
+      const btn = /** @type {HTMLElement} */ (event.target).closest(".subs-auto-btn")
+      if (!btn) return
+      setSubtitleAutoSearch(btn.getAttribute("data-subs-auto") === "on")
+      syncSubsAuto()
+    })
+
+    async function syncSubsAccount() {
+      const session = getOpenSubtitlesSession()
+      subsSignInForm?.classList.toggle("hidden", Boolean(session))
+      subsSignedInEl?.classList.toggle("hidden", !session)
+      subsSignedInEl?.classList.toggle("flex", Boolean(session))
+      if (subsQuotaEl) subsQuotaEl.textContent = ""
+      if (!session) return
+      if (subsSignedInNameEl) {
+        subsSignedInNameEl.textContent = t("settings.subtitles.signedInAs", { name: session.username })
+      }
+      try {
+        const info = await fetchOpenSubtitlesUserInfo()
+        if (!getOpenSubtitlesSession() || !subsQuotaEl) return
+        if (info.remainingDownloads == null || info.allowedDownloads == null) return
+        subsQuotaEl.textContent = t("settings.subtitles.quota", {
+          remaining: info.remainingDownloads,
+          allowed: info.allowedDownloads,
+        })
+      } catch {
+        if (subsQuotaEl) subsQuotaEl.textContent = ""
+      }
+    }
+
+    document.addEventListener(SUBTITLE_SETTINGS_EVENT, (event) => {
+      if (/** @type {CustomEvent} */ (event).detail?.key === "session" && opensubtitlesAvailable()) {
+        void syncSubsAccount()
+      }
+    })
+
+    if (!opensubtitlesAvailable()) {
+      for (const row of document.querySelectorAll("[data-subs-opensubs]")) row.classList.add("hidden")
+      document.getElementById("settings-subs-not-configured")?.classList.remove("hidden")
+    } else {
+      syncSubsAccount()
+    }
+
+    subsSignInForm?.addEventListener("submit", async (event) => {
+      event.preventDefault()
+      const username = (subsUsernameInput?.value || "").trim()
+      const password = subsPasswordInput?.value || ""
+      if (!username || !password) return
+      setLoading(subsSignInBtn, true)
+      try {
+        await loginOpenSubtitles(username, password)
+        await syncSubsAccount()
+      } catch (error) {
+        const code = error instanceof OpenSubtitlesError ? error.code : "unknown"
+        const key =
+          code === "unauthorized"
+            ? "settings.subtitles.loginFail"
+            : code === "throttled"
+              ? "settings.subtitles.loginThrottled"
+              : "settings.subtitles.loginError"
+        flashMsg(subsMsgEl, t(key))
+      } finally {
+        if (subsPasswordInput) subsPasswordInput.value = ""
+        setLoading(subsSignInBtn, false)
+      }
+    })
+
+    subsSignOutBtn?.addEventListener("click", async () => {
+      setLoading(subsSignOutBtn, true)
+      try {
+        await logoutOpenSubtitles()
+      } finally {
+        setLoading(subsSignOutBtn, false)
+        await syncSubsAccount()
+      }
+    })
+
+    document.getElementById("settings-subs-credit")?.addEventListener("click", (event) => {
+      const anchor = /** @type {HTMLElement} */ (event.target).closest("a")
+      const href = anchor?.getAttribute("href") || ""
+      if (!/^https?:\/\//i.test(href)) return
+      event.preventDefault()
+      openExternal(href)
     })
 
     // -------------------------------------------------------------------

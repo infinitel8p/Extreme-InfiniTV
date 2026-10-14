@@ -4,6 +4,8 @@ import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
 import { compareVersions } from "@/scripts/lib/version-compare.ts"
 import { normalizeDnsInput } from "@/scripts/lib/dns-config.ts"
+import { getActiveLocale } from "@/scripts/lib/i18n.ts"
+import { toOpenSubtitlesLanguage } from "@/scripts/lib/opensubtitles-params.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -52,6 +54,10 @@ const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
 const KEY_SEARCH_VIEW = "xt_search_view"
 const KEY_DNS = "xt_dns"
+const KEY_SUBS_LANG_DEFAULT = "xt_subs_lang_default"
+const KEY_SUBS_LANG_BACKUP = "xt_subs_lang_backup"
+const KEY_SUBS_AUTO_SEARCH = "xt_subs_auto_search"
+const KEY_OPENSUBS_SESSION = "xt_opensubs_session"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -1295,4 +1301,61 @@ export function isTmdbActive() {
 
 export function isEnrichmentActive() {
   return getTvdbEnabled() || isTmdbActive()
+}
+
+export const SUBTITLE_SETTINGS_EVENT = "xt:subtitle-settings-changed"
+
+function emitSubtitleSettings(key) {
+  document.dispatchEvent(new CustomEvent(SUBTITLE_SETTINGS_EVENT, { detail: { key } }))
+}
+
+export function getSubtitleLangDefault() {
+  return readLS(KEY_SUBS_LANG_DEFAULT, "") || toOpenSubtitlesLanguage(getActiveLocale())
+}
+
+export function setSubtitleLangDefault(lang) {
+  writeLS(KEY_SUBS_LANG_DEFAULT, toOpenSubtitlesLanguage(lang || ""))
+  emitSubtitleSettings("langDefault")
+}
+
+export function getSubtitleLangBackup() {
+  const stored = readLS(KEY_SUBS_LANG_BACKUP, "")
+  if (stored === "none") return ""
+  if (stored) return stored
+  return getSubtitleLangDefault() === "en" ? "" : "en"
+}
+
+export function setSubtitleLangBackup(lang) {
+  const normalized = toOpenSubtitlesLanguage(lang || "")
+  writeLS(KEY_SUBS_LANG_BACKUP, normalized || "none")
+  emitSubtitleSettings("langBackup")
+}
+
+export function getSubtitleAutoSearch() {
+  return readLS(KEY_SUBS_AUTO_SEARCH, "") === "1"
+}
+
+export function setSubtitleAutoSearch(enabled) {
+  writeLS(KEY_SUBS_AUTO_SEARCH, enabled ? "1" : "")
+  emitSubtitleSettings("autoSearch")
+}
+
+export function getOpenSubtitlesSession() {
+  const raw = readLS(KEY_OPENSUBS_SESSION, "")
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed.token === "string" && parsed.token ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+export function setOpenSubtitlesSession(session) {
+  writeLS(KEY_OPENSUBS_SESSION, session ? JSON.stringify(session) : "")
+  emitSubtitleSettings("session")
+}
+
+export function clearOpenSubtitlesSession() {
+  setOpenSubtitlesSession(null)
 }

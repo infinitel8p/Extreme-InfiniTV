@@ -34,6 +34,20 @@ On Android and the web, the built-in player can't read subtitles out of an MKV f
   The automatic fix for MKV needs FFmpeg. If it's not available, playback falls back to an external-player prompt instead of a silent or broken player - check **Settings > Watching > Playback** for FFmpeg status.
 </Callout>
 
+## Subtitles from OpenSubtitles
+
+When a file has no subtitles of its own, the player can search [OpenSubtitles.com](https://www.opensubtitles.com) for one. Use **Search subtitles...** in the player's subtitle menu, or let the app do it for you. Matches are added to the menu and nothing turns on until you pick one.
+
+Set it up in **Settings > Network > Subtitles**:
+
+- **Default subtitle language** and **Backup subtitle language** - the languages searched first. The default follows your app's language unless you pick one. These also set the preferred subtitle language when a movie or episode opens in MPV or VLC.
+- **Search automatically when playback starts** - off by default. When on, the app looks up subtitles in both languages as soon as playback begins.
+- **OpenSubtitles account** - optional. Without an account you get 5 subtitle downloads per day; a free OpenSubtitles account raises that limit. Once signed in, Settings shows how many downloads you have left today.
+
+If you hit the daily limit, the player tells you when it resets. Builds without an OpenSubtitles key hide the search options and keep only the language settings.
+
+Subtitles provided by OpenSubtitles.com.
+
 ## Adjusting subtitle timing
 
 If subtitles run a beat early or late, look for the **Subtitle delay** button next to the player controls on a movie or episode page - it shows up once a subtitle track is on. Nudge the timing earlier or later in 0.1 second steps, or hit **Reset** to go back to zero. From a keyboard, you can nudge without opening the dialog at all - see [Keyboard + D-pad](./keyboard-and-d-pad/).

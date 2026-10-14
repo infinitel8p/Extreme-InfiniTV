@@ -41,6 +41,7 @@ describe("launchAndroidNativeVod", () => {
       audioLang: string | null,
       subLang: string | null,
       subEnabled: boolean,
+      subtitlesJson: string,
     ) => boolean
     const launchVod = vi.fn<LaunchVodFn>(() => true)
     ;(window as any).AndroidVideo = {
@@ -73,6 +74,7 @@ describe("launchAndroidNativeVod", () => {
       "de",
       "en",
       true,
+      "[]",
     )
   })
 

@@ -4,7 +4,9 @@ import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import {
   androidNativePlayerAvailable,
   launchAndroidNativeVodWithProgress,
+  type NativeSubtitle,
 } from "@/scripts/lib/android-video-launcher.ts"
+import type { SubtitleSearchContext } from "@/scripts/lib/opensubtitles-params.ts"
 
 export interface AndroidNativeVodInput {
   playlistId: string
@@ -18,6 +20,8 @@ export interface AndroidNativeVodInput {
   ua?: string
   referer?: string
   dns?: string | null
+  subtitles?: NativeSubtitle[]
+  subtitleLookup?: { context: SubtitleSearchContext; pickKey?: string }
   progressExtras?: Record<string, unknown>
   onCompleted?: () => void
   isStale?: () => boolean
@@ -33,6 +37,12 @@ export async function tryAndroidNativeVodPlayback(
 
   const localUri = await getAndroidLocalUri(input.remoteUrl)
   if (input.isStale?.()) return true
+  let subtitles = input.subtitles
+  if (!subtitles && input.subtitleLookup) {
+    const { resolveNativeSubtitles } = await import("@/scripts/lib/subtitle-fetch.ts")
+    subtitles = await resolveNativeSubtitles(input.subtitleLookup.context, input.subtitleLookup.pickKey)
+    if (input.isStale?.()) return true
+  }
   const launched = launchAndroidNativeVodWithProgress({
     playlistId: input.playlistId,
     contentKey: input.contentKey,
@@ -45,6 +55,7 @@ export async function tryAndroidNativeVodPlayback(
     posterUrl: input.posterUrl,
     startMs: input.startMs,
     dns: input.dns,
+    subtitles,
     progressExtras: input.progressExtras,
     onCompleted: input.onCompleted,
   })

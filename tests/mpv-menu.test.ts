@@ -67,6 +67,27 @@ describe("buildMpvMenu subtitles", () => {
   })
 })
 
+describe("buildMpvMenu subtitle candidates and search", () => {
+  it("lists candidates after the tracks and the search action after Load subtitle file", () => {
+    const { items, picks } = buildMpvMenu("subtitles", {
+      tracks: [{ id: 1, label: "English", active: false }],
+      subtitleCandidates: [{ id: "c1", label: "German - release" }],
+      subtitleSearch: true,
+    })
+    expect(items[4]).toMatchObject({ kind: "item", title: "German - release" })
+    expect(picks.get(items[4].id!)).toEqual({ kind: "subtitle-candidate", id: "c1" })
+    expect(items[5]).toEqual({ kind: "separator" })
+    expect(items[6].title).toBe("Load subtitle file…")
+    expect(items[7].title).toBe("Search subtitles…")
+    expect(picks.get(items[7].id!)).toEqual({ kind: "subtitle-search" })
+  })
+
+  it("omits the search item unless enabled", () => {
+    const { items } = buildMpvMenu("subtitles", { tracks: [] })
+    expect(items).toHaveLength(5)
+  })
+})
+
 describe("buildMpvMenu speed", () => {
   it("offers one radio per playback rate, checked on the current rate", () => {
     const { items } = buildMpvMenu("speed", { currentRate: 1.5 })

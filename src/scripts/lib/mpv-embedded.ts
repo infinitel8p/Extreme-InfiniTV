@@ -23,6 +23,8 @@ import type {
 } from "@/scripts/lib/mpv-embedded-surface.js"
 import type { VjsLikeHandle, PlaybackCodecInfo } from "@/scripts/lib/player-runtime.js"
 import type { EngineEvent, EngineStats } from "@/scripts/lib/player-telemetry.js"
+import type { SubtitleCue } from "@/scripts/lib/mp4-subtitles.js"
+import { cuesToSrt } from "@/scripts/lib/subtitle-parse.ts"
 import { chooseAudioTrackId, chooseSubtitleTrackId, rememberAudioTrack, rememberSubtitleTrack } from "@/scripts/lib/track-memory.js"
 import type { TrackMemoryContext } from "@/scripts/lib/track-memory.js"
 
@@ -56,6 +58,7 @@ export interface MpvEmbeddedCreateOptions {
   videoElement?: HTMLVideoElement | null
   /** Mounts mpv-controls.ts's own control bar. Defaults to true; false when the caller owns input. */
   controls?: boolean
+  onSubtitleSearch?: () => void
 }
 
 export interface MpvProps {
@@ -1348,6 +1351,45 @@ export async function createMpvEmbeddedHandle(
     }
   }
 
+  const CANDIDATE_ID_BASE = 1_000_000
+  interface SubtitleCandidate {
+    pseudoId: number
+    label: string
+    language: string
+    load: () => Promise<{ cues?: SubtitleCue[]; text?: string }>
+  }
+  let subtitleCandidates: SubtitleCandidate[] = []
+  const loadedCandidateLabels = new Map<number, string>()
+  let candidateSequence = 0
+  const loadingPseudoIds = new Set<number>()
+
+  async function loadSubtitleCandidate(pseudoId: number): Promise<void> {
+    const candidate = subtitleCandidates.find((entry) => entry.pseudoId === pseudoId)
+    if (!candidate) {
+      const loadedLabel = loadedCandidateLabels.get(pseudoId)
+      const raw = mpvTrackCandidates(props.trackList, "sub").find((entry) => entry.title === loadedLabel)
+      if (raw) await setProperty("sid", raw.id)
+      return
+    }
+    if (loadingPseudoIds.has(pseudoId)) return
+    loadingPseudoIds.add(pseudoId)
+    try {
+      const loaded = await candidate.load()
+      const text = loaded.text ?? cuesToSrt(loaded.cues ?? [])
+      const { writeSubtitleTempFile } = await import("@/scripts/lib/subtitle-fetch.ts")
+      const path = await writeSubtitleTempFile(candidate.label, text)
+      await invoke("mpv_embed_command", { sessionId, args: ["sub-add", path, "select", candidate.label, candidate.language] })
+      subtitleCandidates = subtitleCandidates.filter((entry) => entry !== candidate)
+      loadedCandidateLabels.set(pseudoId, candidate.label)
+    } catch (err) {
+      log.warn("[xt:mpv-embed] subtitle candidate load failed:", err)
+      const { describeSubtitleError } = await import("@/scripts/lib/subtitle-fetch.ts")
+      toastError(describeSubtitleError(err))
+    } finally {
+      loadingPseudoIds.delete(pseudoId)
+    }
+  }
+
   function applySubtitleTrackSelection(pickedId: number | null): Promise<void> {
     if (pickedId == null) {
       rememberSubtitleTrack(currentTrackMemory, null)
@@ -1367,7 +1409,11 @@ export async function createMpvEmbeddedHandle(
       return buildMpvMenu("audio", { tracks: tracks.map((track) => ({ id: Number(track.id), label: track.label, active: track.active })) })
     }
     if (kind === "subtitles") {
-      return buildMpvMenu("subtitles", { tracks: parseMpvSubtitleTracks(props.trackList, props.sid, getActiveLocale()) })
+      return buildMpvMenu("subtitles", {
+        tracks: parseMpvSubtitleTracks(props.trackList, props.sid, getActiveLocale()),
+        subtitleCandidates: subtitleCandidateMenuEntries(),
+        subtitleSearch: Boolean(options.onSubtitleSearch),
+      })
     }
     if (kind === "speed") {
       return buildMpvMenu("speed", { currentRate: typeof props.speed === "number" ? props.speed : 1 })
@@ -1392,7 +1438,13 @@ export async function createMpvEmbeddedHandle(
       subtitleDelaySeconds: typeof props.subDelay === "number" ? props.subDelay : 0,
       audioDelaySeconds: currentAudioDelay,
       subtitleStyle: currentSubtitleStyle,
+      subtitleCandidates: subtitleCandidateMenuEntries(),
+      subtitleSearch: Boolean(options.onSubtitleSearch),
     })
+  }
+
+  function subtitleCandidateMenuEntries(): Array<{ id: string; label: string }> {
+    return subtitleCandidates.map((candidate) => ({ id: String(candidate.pseudoId), label: candidate.label }))
   }
 
   function resetSubtitleDelay(): void {
@@ -1411,6 +1463,12 @@ export async function createMpvEmbeddedHandle(
         break
       case "subtitle-file":
         void loadExternalSubtitleFile()
+        break
+      case "subtitle-candidate":
+        void loadSubtitleCandidate(Number(pick.id))
+        break
+      case "subtitle-search":
+        options.onSubtitleSearch?.()
         break
       case "speed":
         void setProperty("speed", clampPlaybackRate(pick.rate))
@@ -1683,7 +1741,20 @@ export async function createMpvEmbeddedHandle(
       await applyAudioTrackSelection(id)
     },
     async selectSubtitleTrack(id) {
+      if (id != null && id >= CANDIDATE_ID_BASE) {
+        await loadSubtitleCandidate(id)
+        return
+      }
       await applySubtitleTrackSelection(id)
+    },
+    async addSubtitleTrack(track) {
+      candidateSequence += 1
+      const pseudoId = CANDIDATE_ID_BASE + candidateSequence
+      subtitleCandidates.push({ pseudoId, label: track.label, language: track.language, load: track.load })
+      return pseudoId
+    },
+    removeSubtitleTracks() {
+      subtitleCandidates = []
     },
     on: emitter.on,
     off: emitter.off,

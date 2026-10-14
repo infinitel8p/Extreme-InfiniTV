@@ -254,7 +254,7 @@ export function getProviderStats() {
 export async function providerFetch(url, init = {}) {
   // fetch() rejects URLs with embedded credentials; move them to a header.
   const { url: requestUrl, authorization } = splitUrlAuth(String(url))
-  const ua = getUserAgent()
+  const ua = init.userAgent || getUserAgent()
   // The net log always shows the real (unwrapped) URL, never the DNS-proxy loopback form.
   const u = redactUrl(requestUrl).slice(0, 200)
   const { url: effectiveUrl, server: dnsServer } = await resolveDnsRoutedUrl(requestUrl, init.dns)
@@ -274,6 +274,7 @@ export async function providerFetch(url, init = {}) {
   delete callInit.forceTauri
   delete callInit.logKind
   delete callInit.dns
+  delete callInit.userAgent
   if (authorization) {
     const mergedHeaders = new Headers(callInit.headers || {})
     if (!mergedHeaders.has("Authorization")) {

@@ -30,6 +30,7 @@ import {
 } from "@/scripts/lib/downloads.js"
 import { parseProviderTmdbId, type TvdbSeasonRef } from "@/scripts/lib/tvdb-proxy.ts"
 import { resolveTitleEnrichmentDetailed } from "@/scripts/lib/enrichment.ts"
+import { cleanSubtitleTitle } from "@/scripts/lib/subtitle-fetch.ts"
 import type { TvdbEpisode } from "@/scripts/lib/tvdb-contract"
 import {
   fillHeroGaps,
@@ -301,6 +302,13 @@ const view: TvView = {
           logo: series.logo,
           containerExt: entry.containerExt,
           resumeSeconds,
+          subtitleContext: {
+            kind: "episode",
+            title: cleanSubtitleTitle(series.name).title,
+            season: entry.season,
+            episode: entry.episodeNum,
+            parentTmdbId: resolvedTmdbId ?? series.tmdb ?? null,
+          },
         },
         { onEnded: () => void refreshNextUp() }
       )

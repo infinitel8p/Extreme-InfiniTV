@@ -39,6 +39,9 @@ concurrency:
   group: beta-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PUBLIC_OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+
 jobs:
   create-beta-release:
     runs-on: ubuntu-latest

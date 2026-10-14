@@ -7,6 +7,7 @@ vi.mock("@/scripts/lib/track-memory.ts", () => ({
 
 import {
   buildMpvArgs,
+  resolveReuseSubOff,
   buildVlcArgs,
   buildArgsFor,
   classifyError,
@@ -208,6 +209,49 @@ describe("buildMpvArgs", () => {
   it("omits track flags when tracks is absent", () => {
     const args = buildMpvArgs({ src: SRC })
     expect(args.some((arg) => arg.startsWith("--alang=") || arg.startsWith("--slang=") || arg === "--sid=no")).toBe(false)
+  })
+})
+
+describe("buildMpvArgs title and subtitle files", () => {
+  it("adds the title and strips control characters", () => {
+    const args = buildMpvArgs({ src: SRC, title: "Movie\n(2020)\r" })
+    expect(args).toContain("--force-media-title=Movie (2020)")
+    expect(args.at(-1)).toBe(SRC)
+  })
+
+  it("omits the title when absent or blank", () => {
+    expect(buildMpvArgs({ src: SRC }).some((arg) => arg.startsWith("--force-media-title="))).toBe(false)
+    expect(buildMpvArgs({ src: SRC, title: "  " }).some((arg) => arg.startsWith("--force-media-title="))).toBe(false)
+  })
+
+  it("emits one --sub-file per file in order, before extra args", () => {
+    const args = buildMpvArgs({ src: SRC, subtitleFiles: ["a.srt", "b.srt"], extraArgs: ["--foo"] })
+    expect(args.indexOf("--sub-file=a.srt")).toBeLessThan(args.indexOf("--sub-file=b.srt"))
+    expect(args.indexOf("--sub-file=b.srt")).toBeLessThan(args.indexOf("--foo"))
+  })
+
+  it("suppresses --sid=no when a sub file is present", () => {
+    const args = buildMpvArgs({
+      src: SRC,
+      subtitleFiles: ["a.srt"],
+      tracks: { audioLang: null, subLang: null, subOff: true },
+    })
+    expect(args).not.toContain("--sid=no")
+    expect(args).toContain("--sub-file=a.srt")
+  })
+})
+
+describe("buildVlcArgs title and subtitle files", () => {
+  it("adds --meta-title and only the first sub file", () => {
+    const args = buildVlcArgs({ src: SRC, title: "Show\nS1E1", subtitleFiles: ["a.srt", "b.srt"] })
+    expect(args).toContain("--meta-title=Show S1E1")
+    expect(args).toContain("--sub-file=a.srt")
+    expect(args).not.toContain("--sub-file=b.srt")
+  })
+
+  it("omits both when absent", () => {
+    const args = buildVlcArgs({ src: SRC })
+    expect(args.some((arg) => arg.startsWith("--meta-title=") || arg.startsWith("--sub-file="))).toBe(false)
   })
 })
 
@@ -572,5 +616,20 @@ describe("createSubtitleTrackMemoryHooks", () => {
     hooks.resetForLoad()
     hooks.onTracksReady(TRACKS, -1)
     expect(selectCalls).toEqual([1, 1])
+  })
+})
+
+describe("resolveReuseSubOff", () => {
+  it("keeps subOff without sideloaded files", () => {
+    expect(resolveReuseSubOff({ tracks: { subOff: true } })).toBe(true)
+    expect(resolveReuseSubOff({ tracks: { subOff: true }, subtitleFiles: ["", "a\nb"] })).toBe(true)
+  })
+
+  it("drops subOff when a subtitle file is attached", () => {
+    expect(resolveReuseSubOff({ tracks: { subOff: true }, subtitleFiles: ["a.srt"] })).toBe(false)
+  })
+
+  it("is false without tracks", () => {
+    expect(resolveReuseSubOff({})).toBe(false)
   })
 })

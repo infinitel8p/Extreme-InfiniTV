@@ -10,6 +10,8 @@ import {
   type VjsLikeHandle,
 } from "@/scripts/lib/player-runtime"
 import { getPlayerBackend } from "@/scripts/lib/app-settings.js"
+import { opensubtitlesAvailable } from "@/scripts/lib/opensubtitles.ts"
+import type { SubtitleSearchContext } from "@/scripts/lib/opensubtitles-params.ts"
 import type { CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import type { PlaybackControls } from "@/scripts/receiver/engine-select"
 import { t } from "@/scripts/lib/i18n.js"
@@ -34,6 +36,7 @@ import {
   subscribeAndroidNativeEvents,
   tracksLaunchOptionsFor,
   type AndroidNativeEvent,
+  type NativeSubtitle,
 } from "@/scripts/lib/android-video-launcher.js"
 import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
 import {
@@ -79,6 +82,8 @@ export interface ReceiverLiveContext {
 export interface ReceiverPlayOptions {
   liveContext?: ReceiverLiveContext
   trackMemory?: TrackMemoryContext | null
+  subtitleLookup?: { context: SubtitleSearchContext; pickKey?: string }
+  onSubtitleSearch?: () => void
 }
 
 export interface ReceiverEngine {
@@ -88,6 +93,8 @@ export interface ReceiverEngine {
   teardown(): void
   /** Non-null only when the mounted engine exposes track/speed controls (embedded mpv). */
   getPlaybackControls?(): PlaybackControls | null
+  /** The live embedded handle; null for engines without one (native Android). */
+  getHandle?(): VjsLikeHandle | null
 }
 
 export interface EmbeddedReceiverEngine extends ReceiverEngine {
@@ -240,6 +247,7 @@ export function createEmbeddedReceiverEngine(
   // Guards a stale async handleError from clobbering a newer session.
   let playGeneration = 0
   let pendingResumeCleanup: (() => void) | null = null
+  let subtitleSearchHandler: (() => void) | null = null
 
   let titleHideTimer: ReturnType<typeof setTimeout> | null = null
   let errorHideTimer: ReturnType<typeof setTimeout> | null = null
@@ -620,7 +628,11 @@ export function createEmbeddedReceiverEngine(
     const mpvOptions = backend === "mpv-embedded"
       ? { userAgent: wantedUserAgent, referer: wantedReferer, mpvControls: !engineOptions.localInput }
       : {}
-    const result = await mountPlayer(dom.videoEl, backend, { autoplay: true, ...mpvOptions })
+    const result = await mountPlayer(dom.videoEl, backend, {
+      autoplay: true,
+      ...mpvOptions,
+      onSubtitleSearch: opensubtitlesAvailable() ? () => subtitleSearchHandler?.() : undefined,
+    })
     if (result.kind !== "embedded") {
       log.warn("[xt:receiver] mountPlayer returned an external backend; receiver requires embedded playback")
       return null
@@ -648,6 +660,7 @@ export function createEmbeddedReceiverEngine(
       currentIsLive = descriptor.isLive
       // Seeded from the sender's metadata so the first report already carries a range.
       knownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
+      subtitleSearchHandler = options?.onSubtitleSearch ?? null
 
       report({ state: "loading", positionSeconds: 0 })
       showLoading(true, descriptor.title)
@@ -761,6 +774,10 @@ export function createEmbeddedReceiverEngine(
 
     getPlaybackControls(): PlaybackControls | null {
       return adaptPlaybackControls(activeHandle)
+    },
+
+    getHandle(): VjsLikeHandle | null {
+      return activeHandle
     },
 
     showError(messageKey: string, technical?: string | null): void {
@@ -992,6 +1009,11 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
 
   return {
     async play(descriptor: CastDescriptorV1, options?: ReceiverPlayOptions): Promise<boolean> {
+      let nativeSubtitles: NativeSubtitle[] = []
+      if (!descriptor.isLive && options?.subtitleLookup) {
+        const { resolveNativeSubtitles } = await import("@/scripts/lib/subtitle-fetch.ts")
+        nativeSubtitles = await resolveNativeSubtitles(options.subtitleLookup.context, options.subtitleLookup.pickKey)
+      }
       isLive = descriptor.isLive
       activeSrc = descriptor.src
       activeUserAgent = descriptor.headers?.userAgent ?? null
@@ -1062,6 +1084,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
             startMs: Math.max(0, Math.floor((descriptor.resumeSeconds || 0) * 1000)),
             dns,
             tracks: tracksLaunchOptionsFor(activeTrackMemory),
+            subtitles: nativeSubtitles.length ? nativeSubtitles : undefined,
           })
 
       if (!launched) {

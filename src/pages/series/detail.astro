@@ -9,6 +9,7 @@ import {
   IconDeviceTv,
   IconAspectRatio,
   IconClockEdit,
+  IconBadgeCc,
   IconChartBar,
   IconActivityHeartbeat,
   IconX,
@@ -173,6 +174,16 @@ import {
             class="btn">
             <IconActivityHeartbeat aria-hidden="true" stroke={2} class="btn-icon" />
             <span data-i18n="stream.health.menu">Stream health log</span>
+          </button>
+          <button
+            id="subs-search-btn"
+            type="button"
+            hidden
+            aria-label="Search subtitles…"
+            data-i18n-attr="aria-label:player.subtitles.search;title:player.subtitles.search"
+            class="btn">
+            <IconBadgeCc aria-hidden="true" stroke={2} class="btn-icon" />
+            <span data-i18n="player.subtitles.search">Search subtitles…</span>
           </button>
           <button
             id="series-subtitle-delay-btn"

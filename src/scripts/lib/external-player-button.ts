@@ -41,6 +41,7 @@ import { pickExternalPlayer } from "@/scripts/lib/external-player-choice-dialog.
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
+import { resolveExternalSubtitleFiles, seedSubtitleTrackPrefs } from "@/scripts/lib/subtitle-fetch.ts"
 
 type ButtonKind = ExternalPlayerKind | AndroidHandoffKind
 
@@ -51,6 +52,7 @@ export interface EscapeHatchHooks {
   getTitle?(): string | null | undefined
   /** Remembered audio/sub language for this title, fed into the mpv/vlc launch args. */
   getTrackPrefs?(): { audioLang: string | null; subLang: string | null; subOff: boolean } | null
+  getSubtitlePickKey?(): string | null
   /** Identifies the item for the external-progress recorder; mpv only. */
   getProgressTarget?(): {
     playlistId: string
@@ -309,8 +311,13 @@ export function setupExternalPlayerButton(
       userAgent: headers?.userAgent ?? null,
       referer: headers?.referer ?? null,
       resumeSeconds: hooks.getResumeSeconds?.() ?? 0,
-      tracks: hooks.getTrackPrefs?.() ?? null,
+      tracks: hooks.getSubtitlePickKey
+        ? seedSubtitleTrackPrefs(hooks.getTrackPrefs?.() ?? null)
+        : (hooks.getTrackPrefs?.() ?? null),
+      title,
     }
+    const subtitleFiles = await resolveExternalSubtitleFiles(hooks.getSubtitlePickKey?.() ?? undefined)
+    if (subtitleFiles.length) opts.subtitleFiles = subtitleFiles
     toast({
       title:
         t("settings.playback.launching", { player: desktopKind.toUpperCase() }) ||

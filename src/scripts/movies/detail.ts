@@ -67,9 +67,18 @@ import {
   isTmdbActive,
   getContentLanguage,
   getUserAgent,
+  getSubtitleAutoSearch,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
-import { resolveTitleEnrichment, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
+import { resolveTitleEnrichmentDetailed, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
+import { opensubtitlesAvailable } from "@/scripts/lib/opensubtitles.ts"
+import {
+  attachSubtitleSearch,
+  cleanSubtitleTitle,
+  resolveExternalSubtitleFiles,
+  seedSubtitleTrackPrefs,
+  subtitlePickKey,
+} from "@/scripts/lib/subtitle-fetch.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { enrichmentNeedsFill, parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
@@ -180,6 +189,7 @@ let earlyEnrichmentHandled = false
 let earlyEnrichmentNeedsFill = false
 let earlyEnrichmentPopulatedSimilar = false
 let providerPlotApplied = false
+let resolvedMovieTmdbId = null
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
@@ -573,7 +583,7 @@ async function enrichMovieDetailFromTmdb(requestId) {
   const info = data?.info || data?.movie_data || {}
   const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData)
 
-  const enrichment = await resolveTitleEnrichment({
+  const enrichmentDetails = await resolveTitleEnrichmentDetailed({
     kind: "movie",
     playlistId: detailPlaylistId,
     itemId: String(movie.id),
@@ -582,6 +592,8 @@ async function enrichMovieDetailFromTmdb(requestId) {
     providerTmdbId,
   })
   if (requestId !== enrichRequestId) return false
+  resolvedMovieTmdbId = enrichmentDetails?.tmdbId ?? resolvedMovieTmdbId
+  const enrichment = enrichmentDetails?.enrichment ?? null
   if (!enrichment) {
     settleHero()
     return false
@@ -862,6 +874,7 @@ async function ensureEmbeddedPlayer(backend) {
     aspectRatio: "16:9",
     pictureInPictureToggle: !hasNativePipBridge,
     userAgent: getUserAgent() || null,
+    onSubtitleSearch: () => { void openSubtitleSearch() },
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
@@ -986,6 +999,7 @@ async function startPlayback(options = {}) {
   if (detailPlaylistId) {
     const nativeDns = (await getPlaylistDnsOverride(detailPlaylistId))?.raw ?? null
     if (requestId !== playRequestId) return
+    const subtitleContext = buildSubtitleContext()
     const launched = await tryAndroidNativeVodPlayback({
       playlistId: detailPlaylistId,
       kind: "vod",
@@ -997,6 +1011,7 @@ async function startPlayback(options = {}) {
       startMs: Math.max(0, resumePos) * 1000,
       ua: getUserAgent() || undefined,
       dns: nativeDns,
+      subtitleLookup: subtitleContext ? { context: subtitleContext, pickKey: currentSubtitlePickKey() } : undefined,
       progressExtras: { name: movie.name, logo: movie.logo || null },
       isStale: () => requestId !== playRequestId,
     })
@@ -1055,6 +1070,7 @@ async function startPlayback(options = {}) {
       setupStatsButton()
       setupHealthButton()
       subtitleDelayController.setup()
+      setupSubtitleSearch(player)
       // mpv-only signals the generic remux-failure classifier below doesn't recognize.
       player.one?.("error", async () => {
         const errorDetail = player.codecInfo?.()?.errorDetail
@@ -1142,11 +1158,16 @@ async function launchExternalPlayback(backend, src, resumeSeconds, movieId) {
     duration: 2000,
   })
   const trackPrefs = detailPlaylistId ? getTrackPrefs(detailPlaylistId, "vod", movieId) : null
+  const subtitleFiles = await resolveExternalSubtitleFiles(currentSubtitlePickKey())
   const result = await launcher.launch(src, {
     resumeSeconds,
-    tracks: trackPrefs
-      ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
-      : null,
+    title: movie?.name ? (movie.year ? `${movie.name} (${movie.year})` : movie.name) : null,
+    tracks: seedSubtitleTrackPrefs(
+      trackPrefs
+        ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+        : null
+    ),
+    subtitleFiles: subtitleFiles.length ? subtitleFiles : undefined,
   })
   if (result.sessionId && detailPlaylistId && backend === "mpv") {
     beginExternalSession({
@@ -1174,6 +1195,67 @@ const subtitleDelayController = createSubtitleDelayController({
 
 document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))
 
+// ----------------------------
+// Subtitle search
+// ----------------------------
+const subsSearchBtn = document.getElementById("subs-search-btn")
+let subtitleSearchController = null
+
+function yearFromText(value) {
+  const match = String(value ?? "").match(/\b(\d{4})\b/)
+  return match ? Number(match[1]) : null
+}
+
+function buildSubtitleContext() {
+  if (!movie) return null
+  const cleaned = cleanSubtitleTitle(movie.name)
+  const movieData = vodInfoRaw?.movie_data || vodInfoRaw?.info || {}
+  const info = vodInfoRaw?.info || vodInfoRaw?.movie_data || {}
+  const year =
+    yearFromText(movieData.releasedate || movieData.year || info.releasedate || info.year) ??
+    yearFromText(movie.year) ??
+    cleaned.year
+  const tmdbId = Number(movie.tmdb) || resolvedMovieTmdbId || parseProviderTmdbId(info) || null
+  return { kind: "movie", title: cleaned.title, year, tmdbId }
+}
+
+function currentSubtitlePickKey() {
+  return detailPlaylistId && movie ? subtitlePickKey(detailPlaylistId, "vod", movie.id) : undefined
+}
+
+function disposeSubtitleSearch() {
+  subtitleSearchController?.dispose()
+  subtitleSearchController = null
+}
+
+function setupSubtitleSearch(player) {
+  disposeSubtitleSearch()
+  player.removeSubtitleTracks?.()
+  const context = buildSubtitleContext()
+  if (!context || !opensubtitlesAvailable()) return
+  subtitleSearchController = attachSubtitleSearch(player, context, {
+    pickKey: currentSubtitlePickKey(),
+    autoSearch: getSubtitleAutoSearch(),
+  })
+}
+
+function syncSubsSearchButton() {
+  if (subsSearchBtn) subsSearchBtn.hidden = !(movie && opensubtitlesAvailable())
+}
+
+async function openSubtitleSearch() {
+  if (subtitleSearchController) {
+    await subtitleSearchController.openDialog()
+    return
+  }
+  const context = buildSubtitleContext()
+  if (!context) return
+  const { openSubtitleSearchDialog } = await import("@/scripts/lib/subtitle-search-dialog.ts")
+  await openSubtitleSearchDialog({ context, pickKey: currentSubtitlePickKey(), onPick: async () => {} })
+}
+
+subsSearchBtn?.addEventListener("click", () => { void openSubtitleSearch() })
+
 playBtn?.addEventListener("click", startPlayback)
 
 restartBtn?.addEventListener("click", () => {
@@ -1197,6 +1279,7 @@ const externalBtnHandle = setupExternalPlayerButton(
     getTitle() {
       return movie?.name || null
     },
+    getSubtitlePickKey: () => currentSubtitlePickKey() ?? null,
     getTrackPrefs() {
       if (!detailPlaylistId || !movie) return null
       const prefs = getTrackPrefs(detailPlaylistId, "vod", movie.id)
@@ -1294,6 +1377,7 @@ window.addEventListener("pagehide", () => {
     vjs?.pause?.()
     vjs?.dispose?.()
     retirePreviousPlayback()
+    disposeSubtitleSearch()
     subtitleDelayController.teardown()
   } catch {}
   clearAmbient(ambientEl)
@@ -1588,6 +1672,7 @@ async function boot() {
   syncFavButton()
   syncWatchButton()
   syncResumeUI()
+  syncSubsSearchButton()
   renderLanguagePills(list?.data || [])
 
   if (dl?.url) {
@@ -1599,7 +1684,7 @@ async function boot() {
 
   // Both probes are network-free (hydrate + memory read) and run under one bound,
   // so a cold IDB read can never delay first paint past the shared timeout.
-  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyTitleEnrichment(
+  const { enrichment: earlyEnrichment, tmdbId: earlyTmdbId, providerInfo: earlyProviderInfo } = await peekEarlyTitleEnrichment(
     "movie",
     detailPlaylistId,
     String(movie.id),
@@ -1615,6 +1700,7 @@ async function boot() {
   }
 
   if (earlyEnrichment) {
+    resolvedMovieTmdbId = earlyTmdbId ?? resolvedMovieTmdbId
     applyEnrichmentPatch(earlyEnrichment)
     settleHero()
     earlyEnrichmentHandled = true

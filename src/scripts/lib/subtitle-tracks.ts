@@ -18,6 +18,13 @@ export interface SubtitleRegistrar {
   addTrack(label: string, language: string): TextTrack | null
   removeAllTracks(): void
   trackListTarget(): EventTarget | null
+  removeTrack?(track: TextTrack): void
+}
+
+export interface ExternalSubtitleTrack {
+  label: string
+  language: string
+  load: () => Promise<SubtitleCue[]>
 }
 
 export interface SubtitleManagerOptions {
@@ -35,7 +42,16 @@ export interface SubtitleManager {
   select(index: number): void
   /** Shifts cue times by delta; delta 0 probes the offset without shifting. */
   nudgeDelay(deltaSeconds: number): number | null
+  addExternalTrack(track: ExternalSubtitleTrack): number
+  selectExternal(id: number): boolean
+  removeExternalTracks(): void
+  ready(): Promise<void>
   detach(): void
+}
+
+interface ExternalDef extends ExternalSubtitleTrack {
+  id: number
+  cues: SubtitleCue[] | null
 }
 
 interface PushCueState {
@@ -46,8 +62,9 @@ interface PushCueState {
 }
 
 interface ManagedTrack {
-  kind: "mp4" | "push"
+  kind: "mp4" | "push" | "external"
   trackId: number
+  externalDef?: ExternalDef
   textTrack: TextTrack
   loaded: boolean
   loading: boolean
@@ -97,8 +114,13 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
   let offsetSeconds = 0
   // Gates onSelectionChanged so the manager's own initial auto-selection is never persisted as a viewer pick.
   let tracksReadyFired = false
+  let externalDefs: ExternalDef[] = []
+  let externalSequence = 0
+  let embeddedPending = false
+  let readyWaiters: Array<() => void> = []
 
   function trackKeyOf(managed: ManagedTrack): string {
+    if (managed.kind === "external") return `ext:${managed.trackId}`
     return managed.kind === "push" ? `push:${managed.pushState?.trackNumber}` : `mp4:${managed.trackId}`
   }
 
@@ -182,6 +204,10 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
 
   function startExtraction(index: number): void {
     const managed = managedTracks[index]
+    if (managed?.kind === "external") {
+      startExternal(managed)
+      return
+    }
     if (!managed || managed.kind !== "mp4" || !session) return
     if (managed.loaded || (managed.loading && activeExtractionIndex === index)) return
     if (typeof (window as any).VTTCue === "undefined") {
@@ -217,6 +243,113 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
           toastError(t("player.subtitles.error"))
         }
       })
+  }
+
+  function startExternal(managed: ManagedTrack): void {
+    const definition = managed.externalDef
+    if (!definition || managed.loaded || managed.loading) return
+    if (definition.cues) {
+      addCues(managed.textTrack, definition.cues)
+      managed.loaded = true
+      return
+    }
+    managed.loading = true
+    definition
+      .load()
+      .then((cues) => {
+        definition.cues = cues
+        managed.loading = false
+        if (!managedTracks.includes(managed)) return
+        addCues(managed.textTrack, cues)
+        managed.loaded = true
+      })
+      .catch((err) => {
+        managed.loading = false
+        log.warn("[xt:subtitles] external subtitle load failed:", err)
+        toastError(t("player.subtitles.error"))
+      })
+  }
+
+  function listManagedTracks(): { index: number; label: string; language: string }[] {
+    return managedTracks.map((managed, index) => ({
+      index,
+      label: managed.textTrack.label,
+      language: managed.textTrack.language,
+    }))
+  }
+
+  function notifyTracksChanged(): void {
+    const showingIndex = managedTracks.findIndex((managed) => managed.textTrack.mode === "showing")
+    onTracksReady?.(listManagedTracks(), showingIndex)
+    tracksReadyFired = true
+  }
+
+  function resolveReadyWaiters(): void {
+    const waiters = readyWaiters
+    readyWaiters = []
+    for (const resolveWaiter of waiters) resolveWaiter()
+  }
+
+  function registerExternal(definition: ExternalDef): number {
+    const textTrack = registrar.addTrack(definition.label, definition.language)
+    if (!textTrack) return -1
+    textTrack.mode = "disabled"
+    if (!trackListTarget) {
+      trackListTarget = registrar.trackListTarget()
+      trackListTarget?.addEventListener("change", onTrackListChange)
+    }
+    managedTracks.push({
+      kind: "external",
+      trackId: definition.id,
+      externalDef: definition,
+      textTrack,
+      loaded: false,
+      loading: false,
+    })
+    return managedTracks.length - 1
+  }
+
+  function completeTrackRegistration(embeddedReady: { index: number; label: string; language: string }[]): void {
+    embeddedPending = false
+    for (const definition of externalDefs) registerExternal(definition)
+    const selectedIndex = resolveInitialSelection(embeddedReady)
+    if (managedTracks.length) onTracksReady?.(listManagedTracks(), selectedIndex)
+    tracksReadyFired = true
+    resolveReadyWaiters()
+  }
+
+  function addExternalTrack(track: ExternalSubtitleTrack): number {
+    externalSequence += 1
+    const definition: ExternalDef = { ...track, id: externalSequence, cues: null }
+    externalDefs.push(definition)
+    if (embeddedPending) return definition.id
+    if (registerExternal(definition) >= 0) notifyTracksChanged()
+    return definition.id
+  }
+
+  function selectExternal(id: number): boolean {
+    const index = managedTracks.findIndex((managed) => managed.kind === "external" && managed.trackId === id)
+    if (index < 0) return false
+    select(index)
+    return true
+  }
+
+  function removeExternalTracks(): void {
+    const hadExternals = externalDefs.length > 0
+    externalDefs = []
+    const kept: ManagedTrack[] = []
+    for (const managed of managedTracks) {
+      if (managed.kind !== "external") {
+        kept.push(managed)
+        continue
+      }
+      managed.textTrack.mode = "disabled"
+      registrar.removeTrack?.(managed.textTrack)
+    }
+    const removedAny = kept.length !== managedTracks.length
+    managedTracks = kept
+    if (removedAny) rememberShowingTrack()
+    if (hadExternals && !embeddedPending) notifyTracksChanged()
   }
 
   function flushPushCues(managed: ManagedTrack): void {
@@ -276,7 +409,11 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     mkvSession
       .tracks()
       .then((tracks) => {
-        if (currentSourceUrl !== sourceUrl || signal.aborted || !tracks.length) return
+        if (currentSourceUrl !== sourceUrl || signal.aborted) return
+        if (!tracks.length) {
+          completeTrackRegistration([])
+          return
+        }
 
         trackListTarget = registrar.trackListTarget()
         trackListTarget?.addEventListener("change", onTrackListChange)
@@ -305,9 +442,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
           })
           readyTracks.push({ index, label: labeledTrack.label, language: labeledTrack.language })
         })
-        const selectedIndex = resolveInitialSelection(readyTracks)
-        if (readyTracks.length) onTracksReady?.(readyTracks, selectedIndex)
-        tracksReadyFired = true
+        completeTrackRegistration(readyTracks)
 
         mkvSession.onCues((trackNumber, cues) => {
           if (currentSourceUrl !== sourceUrl || signal.aborted) return
@@ -319,6 +454,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
       })
       .catch((err) => {
         log.warn("[xt:subtitles] mkv session tracks() failed:", err)
+        if (currentSourceUrl === sourceUrl && !signal.aborted) completeTrackRegistration([])
       })
   }
 
@@ -338,6 +474,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     offsetSeconds = 0
     tracksReadyFired = false
     teardownTracks()
+    embeddedPending = false
     // Same mkvSession can return on remux remount; don't stop a tee still in use.
     const incomingMkvSession = mkvSession ?? null
     if (activeMkvSession && activeMkvSession !== incomingMkvSession) {
@@ -353,6 +490,14 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     }
     selectionSourceIdentity = incomingIdentity
 
+    const mp4SourceUrl = sourceUrl && isMp4SubtitleCapableUrl(sourceUrl, mimeType ?? null) ? sourceUrl : null
+    if (!incomingMkvSession && !mp4SourceUrl) {
+      if (externalDefs.length) completeTrackRegistration([])
+      else resolveReadyWaiters()
+      return
+    }
+    embeddedPending = true
+
     if (incomingMkvSession) {
       const controller = new AbortController()
       sourceController = controller
@@ -360,13 +505,15 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
       return
     }
 
-    if (!sourceUrl || !isMp4SubtitleCapableUrl(sourceUrl, mimeType ?? null)) return
-
     const controller = new AbortController()
     sourceController = controller
-    openMp4SubtitleSession(sourceUrl, { signal: controller.signal })
+    openMp4SubtitleSession(mp4SourceUrl!, { signal: controller.signal })
       .then((openedSession) => {
-        if (currentSourceUrl !== sourceUrl || controller.signal.aborted || !openedSession) return
+        if (currentSourceUrl !== sourceUrl || controller.signal.aborted) return
+        if (!openedSession) {
+          completeTrackRegistration([])
+          return
+        }
         session = openedSession
         trackListTarget = registrar.trackListTarget()
         trackListTarget?.addEventListener("change", onTrackListChange)
@@ -379,13 +526,12 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
           managedTracks.push({ kind: "mp4", trackId: trackInfo.trackId, textTrack, loaded: false, loading: false })
           readyTracks.push({ index, label: trackInfo.label, language: trackInfo.language })
         }
-        const selectedIndex = resolveInitialSelection(readyTracks)
-        if (readyTracks.length) onTracksReady?.(readyTracks, selectedIndex)
-        tracksReadyFired = true
+        completeTrackRegistration(readyTracks)
       })
       .catch((err) => {
         if (err?.name === "AbortError") return
         log.warn("[xt:subtitles] failed to open subtitle session:", err)
+        if (currentSourceUrl === sourceUrl && !controller.signal.aborted) completeTrackRegistration([])
       })
   }
 
@@ -420,6 +566,9 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     hasMadeSubtitleSelection = false
     offsetSeconds = 0
     tracksReadyFired = false
+    externalDefs = []
+    embeddedPending = false
+    resolveReadyWaiters()
     if (activeMkvSession) {
       try { activeMkvSession.stop() } catch (err) { log.warn("[xt:subtitles] mkv session stop() failed:", err) }
       activeMkvSession = null
@@ -427,7 +576,12 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     teardownTracks()
   }
 
-  return { setSource, select, nudgeDelay, detach }
+  function ready(): Promise<void> {
+    if (!embeddedPending) return Promise.resolve()
+    return new Promise((resolve) => readyWaiters.push(resolve))
+  }
+
+  return { setSource, select, nudgeDelay, addExternalTrack, selectExternal, removeExternalTracks, ready, detach }
 }
 
 // No removeTextTrack API exists, so removed native tracks are drained and pooled for reuse.
@@ -474,6 +628,16 @@ export function createNativeTrackRegistrar(
     trackListTarget() {
       return getVideo()?.textTracks ?? null
     },
+    removeTrack(track) {
+      const position = managed.indexOf(track)
+      if (position < 0) return
+      managed.splice(position, 1)
+      drainCues(track)
+      const key = poolKey(track.language, track.label)
+      const bucket = pool.get(key) ?? []
+      bucket.push(track)
+      pool.set(key, bucket)
+    },
   }
 }
 
@@ -499,6 +663,12 @@ export function createVideoJsTrackRegistrar(player: any): SubtitleRegistrar {
     },
     trackListTarget() {
       return (player.textTracks?.() ?? null) as EventTarget | null
+    },
+    removeTrack(track) {
+      const position = elements.findIndex((element) => element.track === track)
+      if (position < 0) return
+      const [element] = elements.splice(position, 1)
+      try { player.removeRemoteTextTrack(element) } catch {}
     },
   }
 }
