@@ -11,8 +11,8 @@ confinement: strict
 
 # Bind the staged webkit2gtk-4.1 so the app runs the same build the deb was tested with.
 layout:
-  /usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.1:
-    bind: $SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.1
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1:
+    bind: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1
 
 parts:
   extreme-infinitv:
@@ -46,7 +46,7 @@ parts:
       sed -i -e "s|Icon=extreme-infinitv|Icon=\${SNAP}/usr/share/icons/hicolor/128x128/apps/extreme-infinitv.png|g" \
         "$CRAFT_PART_INSTALL/usr/share/applications/Extreme InfiniTV.desktop"
       # gst-libav needs these sonames; update-alternatives never runs in a build.
-      libdir="$CRAFT_PART_INSTALL/usr/lib/$CRAFT_ARCH_TRIPLET"
+      libdir="$CRAFT_PART_INSTALL/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR"
       if [ -e "$libdir/blas/libblas.so.3" ]; then
         ln -sf blas/libblas.so.3 "$libdir/libblas.so.3"
       fi
