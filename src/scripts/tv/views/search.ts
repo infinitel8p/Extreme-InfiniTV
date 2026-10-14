@@ -1,7 +1,10 @@
 // TV search: one input feeding three ranked rails (channels, movies, series).
 import { nextPaint, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
-import { getActiveEntry } from "@/scripts/lib/creds.js"
+import { getActiveEntry, getMergedEntries } from "@/scripts/lib/creds.js"
+import { readMergedRows } from "@/scripts/lib/merged-catalog.ts"
+import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
+import { remountOnMergedChange } from "@/scripts/tv/merged-remount"
 import {
   ensureLoaded as ensurePrefsLoaded,
   getRecentSearches,
@@ -19,6 +22,7 @@ import { getActiveLocale } from "@/scripts/lib/i18n"
 import { getLanguageGroupingEnabled, getContentLanguage, LANGUAGE_GROUPING_EVENT, CONTENT_LANGUAGE_EVENT } from "@/scripts/lib/app-settings.js"
 import {
   getSharedGroupingIndex,
+  buildGroupingIndexesByPlaylist,
   collapseIntoDisplayGroups,
   isLanguageGroupingExplicitlyEnabled,
   type CatalogGroupingIndex,
@@ -53,6 +57,7 @@ interface CatalogRow {
   year?: string | number | null
   norm?: string
   tmdb?: number | null
+  playlistId?: string
 }
 
 interface ChipInfoRecord {
@@ -66,8 +71,9 @@ interface ChipInfoRecord {
 function collapseRankedMatches<T extends CatalogRow & { norm: string }>(
   matches: T[],
   resolveGroupingIndex: () => CatalogGroupingIndex,
-  preferredTags: string[]
-): { rows: T[]; chipInfoById: Map<number, ChipInfoRecord> } {
+  preferredTags: string[],
+  chipKeyOf: (row: T) => string = (row) => String(Number(row.id))
+): { rows: T[]; chipInfoById: Map<string, ChipInfoRecord> } {
   if (!languageGroupingAllowed()) return { rows: matches, chipInfoById: new Map() }
   const groupingIndex = resolveGroupingIndex()
   const groups = collapseIntoDisplayGroups(
@@ -76,10 +82,11 @@ function collapseRankedMatches<T extends CatalogRow & { norm: string }>(
     preferredTags
   )
   const rows = groups.map((group) => matches.find((row) => Number(row.id) === group.displayEntry.id) || group.displayEntry) as T[]
-  const chipInfoById = new Map<number, ChipInfoRecord>()
+  const chipInfoById = new Map<string, ChipInfoRecord>()
   for (const group of groups) {
     if (group.tags.length < 2 && group.globalEntryIds.length < 2) continue
-    chipInfoById.set(group.displayEntry.id, {
+    const displayRow = matches.find((row) => Number(row.id) === group.displayEntry.id)
+    chipInfoById.set(displayRow ? chipKeyOf(displayRow) : String(group.displayEntry.id), {
       tags: group.tags,
       variantCount: group.globalEntryIds.length,
       displayTag: groupingIndex.tagByEntryId.get(group.displayEntry.id) ?? null,
@@ -89,11 +96,11 @@ function collapseRankedMatches<T extends CatalogRow & { norm: string }>(
 }
 
 // Result rails render synchronously (no row-windowing), so decorating after setItems is a one-shot pass.
-function decorateRailChips(rail: RailHandle, items: CardItem[], chipInfoById: Map<number, ChipInfoRecord>): void {
+function decorateRailChips(rail: RailHandle, items: CardItem[], chipInfoById: Map<string, ChipInfoRecord>): void {
   const cards = rail.el.querySelectorAll<HTMLElement>("[data-focus-key]")
   cards.forEach((card, index) => {
     const item = items[index]
-    const info = item && chipInfoById.get(Number(item.id))
+    const info = item && chipInfoById.get(String(item.id))
     if (!info) return
     const posterWrap = card.querySelector<HTMLElement>("[data-poster-wrap]")
     if (!posterWrap) return
@@ -122,15 +129,59 @@ function toTvLiveChannel(row: LiveRow & { norm: string }): TvLiveChannel {
     referer: row.referer ?? null,
     tvgId: row.tvgId ?? null,
     tvgShift: row.tvgShift ?? null,
+    ...(row.playlistId ? { playlistId: row.playlistId } : {}),
   }
+}
+
+const mergedGroupingMemo = new WeakMap<object, Map<string, CatalogGroupingIndex>>()
+
+function mergedGroupingIndexes(rows: Array<CatalogRow & { playlistId?: string }>): Map<string, CatalogGroupingIndex> {
+  let indexes = mergedGroupingMemo.get(rows)
+  if (!indexes) {
+    indexes = buildGroupingIndexesByPlaylist(rows as Array<CatalogRow & { id: number; playlistId?: string }>)
+    mergedGroupingMemo.set(rows, indexes)
+  }
+  return indexes
+}
+
+function collapseMergedRankedMatches<T extends CatalogRow & { norm: string }>(
+  matches: T[],
+  rows: T[],
+  preferredTags: string[]
+): { rows: T[]; chipInfoById: Map<string, ChipInfoRecord> } {
+  if (!languageGroupingAllowed()) return { rows: matches, chipInfoById: new Map() }
+  const positionByRow = new Map<T, number>()
+  const bucketsByPlaylist = new Map<string, T[]>()
+  matches.forEach((row, position) => {
+    positionByRow.set(row, position)
+    const playlistId = row.playlistId ?? ""
+    const bucket = bucketsByPlaylist.get(playlistId)
+    if (bucket) bucket.push(row)
+    else bucketsByPlaylist.set(playlistId, [row])
+  })
+  const collapsedRows: T[] = []
+  const chipInfoById = new Map<string, ChipInfoRecord>()
+  for (const [playlistId, bucket] of bucketsByPlaylist) {
+    const collapsed = collapseRankedMatches(
+      bucket,
+      () => mergedGroupingIndexes(rows).get(playlistId) ?? getSharedGroupingIndex([]),
+      preferredTags,
+      (row) => `${row.playlistId}:${Number(row.id)}`
+    )
+    for (const row of collapsed.rows) collapsedRows.push(row)
+    for (const [key, info] of collapsed.chipInfoById) chipInfoById.set(key, info)
+  }
+  collapsedRows.sort((first, second) => (positionByRow.get(first) ?? 0) - (positionByRow.get(second) ?? 0))
+  return { rows: collapsedRows, chipInfoById }
 }
 
 // Cached rows already carry `norm`; fill the odd gap in place rather than copying a whole catalog.
 function withNorms<T extends { name?: string; category?: string | null; norm?: string }>(
-  rows: T[]
+  rows: T[],
+  nameOnly = false
 ): Array<T & { norm: string }> {
   for (const row of rows) {
-    if (!row.norm) row.norm = normalize(`${row.name || ""} ${row.category || ""}`)
+    if (!row.norm) row.norm = nameOnly ? normalize(row.name || "") : normalize(`${row.name || ""} ${row.category || ""}`)
   }
   return rows as Array<T & { norm: string }>
 }
@@ -213,6 +264,8 @@ const view: TvView = {
 
     let destroyed = false
     let activePlaylistId = ""
+    let mergedPlaylistIds: string[] = []
+    let isMerged = false
     let channels: Array<LiveRow & { norm: string }> = []
     let movies: Array<CatalogRow & { norm: string }> = []
     let series: Array<CatalogRow & { norm: string }> = []
@@ -277,7 +330,7 @@ const view: TvView = {
       return {
         railId: "tv-search-channels",
         kind: "live",
-        id: channel.id,
+        id: isMerged ? `${channel.playlistId}:${channel.id}` : channel.id,
         name,
         logoUrl: channel.logo || null,
         nowTitle: channel.category || kindLabel("live"),
@@ -286,7 +339,7 @@ const view: TvView = {
           commitCurrentSearch()
           void playLive(
             {
-              playlistId: activePlaylistId,
+              playlistId: channel.playlistId ?? activePlaylistId,
               channel: toTvLiveChannel(channel),
               siblings: siblings.map(toTvLiveChannel),
             },
@@ -299,14 +352,11 @@ const view: TvView = {
     function toPosterCardItem(row: CatalogRow & { norm: string }, kind: "vod" | "series"): PosterCardItem {
       const fallbackKey = kind === "vod" ? "list.movieFallback" : "list.seriesFallback"
       const name = row.name || t(fallbackKey, { id: row.id })
-      const href =
-        kind === "vod"
-          ? `/tv/movies/detail?id=${encodeURIComponent(String(row.id))}`
-          : `/tv/series/detail?id=${encodeURIComponent(String(row.id))}`
+      const href = detailHrefFor(kind, row.id, { tv: true, playlistId: isMerged ? row.playlistId : undefined })
       return {
         railId: kind === "vod" ? "tv-search-movies" : "tv-search-series",
         kind,
-        id: row.id,
+        id: isMerged ? `${row.playlistId}:${row.id}` : row.id,
         name,
         href,
         posterUrl: row.logo || null,
@@ -350,7 +400,7 @@ const view: TvView = {
 
       const generation = ++searchGeneration
       const preferredTags = effectivePreferredTags(getContentLanguage(), getActiveLocale())
-      const catalogPrefix = `search:${activePlaylistId}`
+      const catalogPrefix = `search:${mergedPlaylistIds.join("+")}`
       const resolvedKinds = new Set<"live" | "vod" | "series">()
       let totalMatches = 0
 
@@ -374,7 +424,9 @@ const view: TvView = {
       searchCatalog(`${catalogPrefix}:vod`, movies, trimmed, RESULT_CAP).then((indexes) => {
         if (generation !== searchGeneration || indexes === null) return
         const rankedMovies = Array.from(indexes, (index) => movies[index])
-        const movieCollapsed = collapseRankedMatches(rankedMovies, () => getSharedGroupingIndex(movies), preferredTags)
+        const movieCollapsed = isMerged
+          ? collapseMergedRankedMatches(rankedMovies, movies, preferredTags)
+          : collapseRankedMatches(rankedMovies, () => getSharedGroupingIndex(movies), preferredTags)
         const movieItems = movieCollapsed.rows.map((movie) => toPosterCardItem(movie, "vod"))
         moviesRail!.setItems(movieItems)
         decorateRailChips(moviesRail!, movieItems, movieCollapsed.chipInfoById)
@@ -384,7 +436,9 @@ const view: TvView = {
       searchCatalog(`${catalogPrefix}:series`, series, trimmed, RESULT_CAP).then((indexes) => {
         if (generation !== searchGeneration || indexes === null) return
         const rankedSeries = Array.from(indexes, (index) => series[index])
-        const seriesCollapsed = collapseRankedMatches(rankedSeries, () => getSharedGroupingIndex(series), preferredTags)
+        const seriesCollapsed = isMerged
+          ? collapseMergedRankedMatches(rankedSeries, series, preferredTags)
+          : collapseRankedMatches(rankedSeries, () => getSharedGroupingIndex(series), preferredTags)
         const seriesItems = seriesCollapsed.rows.map((row) => toPosterCardItem(row, "series"))
         seriesRail!.setItems(seriesItems)
         decorateRailChips(seriesRail!, seriesItems, seriesCollapsed.chipInfoById)
@@ -426,7 +480,14 @@ const view: TvView = {
     }
 
     function rebuildIndex(): void {
-      channels = withNorms(readCachedLiveChannels(activePlaylistId) as LiveRow[])
+      if (isMerged) {
+        channels = withNorms(readMergedRows("live").rows as LiveRow[], true)
+        movies = withNorms(readMergedRows("vod").rows as CatalogRow[])
+        series = withNorms(readMergedRows("series").rows as CatalogRow[])
+        indexReady = true
+        return
+      }
+      channels = withNorms(readCachedLiveChannels(activePlaylistId) as LiveRow[], true)
       movies = withNorms((getCached(activePlaylistId, "vod")?.data || []) as CatalogRow[])
       series = withNorms((getCached(activePlaylistId, "series")?.data || []) as CatalogRow[])
       indexReady = true
@@ -443,7 +504,10 @@ const view: TvView = {
       const warmNext = (): void => {
         const rows = pending.shift()
         if (destroyed || !rows) return
-        if (rows.length) getSharedGroupingIndex(rows)
+        if (rows.length) {
+          if (isMerged) mergedGroupingIndexes(rows)
+          else getSharedGroupingIndex(rows)
+        }
         schedule(warmNext)
       }
       schedule(warmNext)
@@ -455,7 +519,7 @@ const view: TvView = {
       warmupRequested = true
       isWarming = true
       import("@/scripts/lib/catalog.js")
-        .then((mod) => mod.warmupActive(activePlaylistId))
+        .then((mod) => (isMerged ? mod.warmupMerged() : mod.warmupActive(activePlaylistId)))
         .catch(() => {})
     }
 
@@ -525,9 +589,11 @@ const view: TvView = {
     }
 
     async function onActiveChanged(): Promise<void> {
-      const active = await getActiveEntry()
+      const [active, mergedEntries] = await Promise.all([getActiveEntry(), getMergedEntries()])
       if (destroyed) return
       activePlaylistId = active?._id || ""
+      mergedPlaylistIds = mergedEntries.length ? mergedEntries.map((entry: any) => entry._id) : activePlaylistId ? [activePlaylistId] : []
+      isMerged = mergedPlaylistIds.length >= 2
       refreshRecentSearches()
       rebuildIndex()
       void runSearch(inputEl.value)
@@ -537,13 +603,15 @@ const view: TvView = {
       const initialQuery = ctx.url.searchParams.get("q") || ""
       inputEl.value = initialQuery
 
-      const active = await getActiveEntry()
+      const [active, mergedEntries] = await Promise.all([getActiveEntry(), getMergedEntries()])
       if (destroyed) return
       if (!active) {
         renderCentered(t("list.noPlaylistSelected"), "/tv/login", t("playlist.addCta"))
         return
       }
       activePlaylistId = active._id
+      mergedPlaylistIds = mergedEntries.length ? mergedEntries.map((entry: any) => entry._id) : [activePlaylistId]
+      isMerged = mergedPlaylistIds.length >= 2
 
       createRails()
       updateStaticText()
@@ -557,12 +625,14 @@ const view: TvView = {
       await nextPaint()
       if (destroyed) return
 
-      await Promise.allSettled([
-        hydrateCache(activePlaylistId, "live"),
-        hydrateCache(activePlaylistId, "m3u"),
-        hydrateCache(activePlaylistId, "vod"),
-        hydrateCache(activePlaylistId, "series"),
-      ])
+      await Promise.allSettled(
+        mergedPlaylistIds.flatMap((playlistId) => [
+          hydrateCache(playlistId, "live"),
+          hydrateCache(playlistId, "m3u"),
+          hydrateCache(playlistId, "vod"),
+          hydrateCache(playlistId, "series"),
+        ])
+      )
       if (destroyed) return
       await ensureOverridesReady()
       if (destroyed) return
@@ -584,9 +654,11 @@ const view: TvView = {
     document.addEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
 
     void init()
+    const stopRemountOnMergedChange = remountOnMergedChange()
 
     return () => {
       destroyed = true
+      stopRemountOnMergedChange()
       if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
       document.removeEventListener(CATALOG_WARMED_EVENT, onCatalogWarmed)
       document.removeEventListener(EVT_SEARCH_RECENT_CHANGED, onRecentChanged)

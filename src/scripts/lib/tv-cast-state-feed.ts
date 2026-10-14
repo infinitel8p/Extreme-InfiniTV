@@ -110,12 +110,19 @@ export function createIdleTeardownGuard(graceMs = IDLE_TEARDOWN_GRACE_MS): IdleT
   }
 }
 
-export const CAST_LOADING_STALL_TIMEOUT_MS = 25000
+const CAST_LOADING_STALL_LIVE_TIMEOUT_MS = 35000
+const CAST_LOADING_STALL_VOD_TIMEOUT_MS = 95000
+
+/** VOD gets the receiver's own loading window (up to 90s); live stays short so a stuck tune is caught fast. */
+export function castLoadingStallTimeoutMs(isLive: boolean): number {
+  return isLive ? CAST_LOADING_STALL_LIVE_TIMEOUT_MS : CAST_LOADING_STALL_VOD_TIMEOUT_MS
+}
 
 export interface CastLoadingStallInput {
   stateValue: string
   playRequestedAtMs: number
   nowMs: number
+  isLive: boolean
 }
 
 export interface CastLoadingStallGuard {
@@ -128,7 +135,7 @@ export interface CastLoadingStallGuard {
  * since the /play request landed. Any non-"loading" frame settles the request for good, so a later
  * re-buffer can't retroactively trip the same judgment.
  */
-export function createCastLoadingStallGuard(timeoutMs = CAST_LOADING_STALL_TIMEOUT_MS): CastLoadingStallGuard {
+export function createCastLoadingStallGuard(): CastLoadingStallGuard {
   let trackedRequestedAtMs: number | null = null
   let settled = false
   let declaredFailed = false
@@ -144,7 +151,7 @@ export function createCastLoadingStallGuard(timeoutMs = CAST_LOADING_STALL_TIMEO
         return false
       }
       if (settled || declaredFailed) return false
-      const stalled = input.nowMs - input.playRequestedAtMs >= timeoutMs
+      const stalled = input.nowMs - input.playRequestedAtMs >= castLoadingStallTimeoutMs(input.isLive)
       if (stalled) declaredFailed = true
       return stalled
     },
@@ -249,6 +256,8 @@ function registerOutcome(hit: boolean): void {
   missCount = outcome.count
   emitHealthIfChanged()
   if (!outcome.lost) return
+  const transport: "ws" | "poll" = mode === "ws" ? "ws" : "poll"
+  log.warn("[xt:cast-state-feed] feed lost", { device: boundDevice?.name, transport, misses: outcome.count })
   const lostSubscribers = [...subscribers.values()]
   unbind()
   subscribers.clear()
@@ -260,6 +269,7 @@ function enterWsMode(): void {
   stopPollingLoop()
   startWatchdog()
   emitHealthIfChanged()
+  log.info("[xt:cast-state-feed] transport: ws")
 }
 
 function enterPollMode(): void {
@@ -267,6 +277,7 @@ function enterPollMode(): void {
   stopWatchdog()
   startPollingLoop()
   emitHealthIfChanged()
+  log.info("[xt:cast-state-feed] transport: poll")
 }
 
 function scheduleWsRetry(): void {
@@ -279,12 +290,14 @@ function scheduleWsRetry(): void {
 
 function onWsAttemptFailed(isInitial: boolean): void {
   ws = null
+  log.warn("[xt:cast-state-feed] WebSocket attempt failed")
   enterPollMode()
   if (!isInitial) scheduleWsRetry()
 }
 
 function onWsDroppedMidSession(): void {
   ws = null
+  log.warn("[xt:cast-state-feed] WebSocket dropped mid-session")
   enterPollMode()
   scheduleWsRetry()
 }

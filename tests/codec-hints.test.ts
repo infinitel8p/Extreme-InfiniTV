@@ -645,3 +645,26 @@ describe("classifyStartFailure connection-limit verdict", () => {
   })
 })
 
+describe("classifyStartFailure video decode message", () => {
+  const base = { videoCodec: "avc1.640028", audioCodec: "ac-3", deviceHevc: true }
+
+  it("blames the video codec when the element error reports a video decode failure", () => {
+    expect(
+      classifyStartFailure({
+        ...base,
+        errorDetail:
+          "PipelineStatus::PIPELINE_ERROR_DECODE: Failed to send video packet for decoding: {}",
+      })
+    ).toEqual({ kind: "codec", codec: "avc1.640028" })
+  })
+
+  it("keeps the audio verdict when there is no error message", () => {
+    expect(classifyStartFailure({ ...base, errorDetail: null }).kind).toBe("audio")
+  })
+
+  it("keeps the audio verdict for the SourceBuffer limit error", () => {
+    expect(
+      classifyStartFailure({ ...base, errorDetail: "Failed to execute 'addSourceBuffer': limit of SourceBuffer objects" }).kind
+    ).toBe("audio")
+  })
+})

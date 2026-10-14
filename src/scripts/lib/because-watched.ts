@@ -11,6 +11,7 @@ import {
 } from "@/scripts/lib/similar-local.ts"
 
 export interface WatchedSignal {
+  playlistId?: string
   kind: "vod" | "episode"
   id: string | number
   name?: string | null
@@ -21,6 +22,7 @@ export interface WatchedSignal {
 }
 
 export interface BecauseSeed {
+  playlistId?: string
   kind: "vod" | "series"
   id: number
   name: string
@@ -29,25 +31,26 @@ export interface BecauseSeed {
 
 function normalizeSignal(signal: WatchedSignal): BecauseSeed | null {
   const updatedAt = signal.updatedAt ?? 0
+  const owner = signal.playlistId ? { playlistId: signal.playlistId } : {}
   if (signal.kind === "vod") {
     const id = Number(signal.id)
     if (!Number.isFinite(id)) return null
     const name = signal.name?.trim()
     if (!name) return null
-    return { kind: "vod", id, name, updatedAt }
+    return { ...owner, kind: "vod", id, name, updatedAt }
   }
   if (signal.kind === "episode") {
     const id = Number(signal.seriesId)
     if (!Number.isFinite(id)) return null
     const name = signal.seriesName?.trim()
     if (!name) return null
-    return { kind: "series", id, name, updatedAt }
+    return { ...owner, kind: "series", id, name, updatedAt }
   }
   return null
 }
 
 export function seedKey(seed: BecauseSeed): string {
-  return `${seed.kind}:${seed.id}`
+  return seed.playlistId ? `${seed.playlistId}:${seed.kind}:${seed.id}` : `${seed.kind}:${seed.id}`
 }
 
 export function pickBecauseSeedPool(signals: WatchedSignal[], poolSize = 5): BecauseSeed[] {

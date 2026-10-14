@@ -3,6 +3,7 @@
 
 import { resolveCatchupSrc, type CatchupCreds, type CatchupRequestChannel } from "@/scripts/lib/catchup-resolve.ts"
 import { buildCatchupCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
+import { getPlaylistDnsOverride } from "@/scripts/lib/creds.js"
 
 export function catchupMimeForKindHint(kindHint: "hls" | "ts"): string {
   return kindHint === "hls" ? "application/x-mpegURL" : "video/mp2t"
@@ -113,7 +114,8 @@ export async function resolveCatchupCastDescriptor(
     seekSeconds: input.seekSeconds ?? 0,
   })
 
-  return buildCatchupCastDescriptor({
+  const dns = (await getPlaylistDnsOverride(input.playlistId))?.raw ?? null
+  const descriptor = buildCatchupCastDescriptor({
     src: resolution.src,
     mime: catchupMimeForKindHint(resolution.kindHint),
     title: input.title,
@@ -122,5 +124,7 @@ export async function resolveCatchupCastDescriptor(
     durationSeconds: timeline.timelineSpanSeconds,
     timelineOffsetSeconds: timeline.timelineOffsetSeconds,
     resumeSeconds: timeline.initialPositionSeconds > 0 ? timeline.initialPositionSeconds : undefined,
+    dns,
   })
+  return descriptor
 }

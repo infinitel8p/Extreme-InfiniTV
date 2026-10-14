@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import CategoryPickerDialog from "@/components/CategoryPickerDialog.astro";
 import SearchInput from "@/components/SearchInput.astro";
-import { IconRefresh, IconArrowLeft, IconChevronDown, IconChevronLeft, IconChevronRight, IconClockHour3, IconLink } from "@tabler/icons-svelte";
+import { IconRefresh, IconArrowLeft, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronsLeft, IconChevronsRight, IconClockHour3, IconLink } from "@tabler/icons-svelte";
 ---
 
 <Layout pageTitle="EPG" showVersion={false}>
@@ -55,7 +55,8 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconChevronLeft, IconChevr
 				title="Previous day"
 				data-i18n-attr="aria-label:epg.previousDay;title:epg.previousDay"
 				class="rounded-xl border border-line bg-surface min-h-11 min-w-11 text-fg-2 inline-flex items-center justify-center shrink-0
-					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors
+					disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none">
 				<IconChevronLeft aria-hidden="true" stroke={2} class="size-4" />
 			</button>
 			<span
@@ -71,8 +72,19 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconChevronLeft, IconChevr
 				title="Next day"
 				data-i18n-attr="aria-label:epg.nextDay;title:epg.nextDay"
 				class="rounded-xl border border-line bg-surface min-h-11 min-w-11 text-fg-2 inline-flex items-center justify-center shrink-0
-					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors
+					disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none">
 				<IconChevronRight aria-hidden="true" stroke={2} class="size-4" />
+			</button>
+			<button
+				id="epg-earlier"
+				type="button"
+				aria-label="Earlier"
+				title="Earlier"
+				data-i18n-attr="aria-label:epg.earlier;title:epg.earlier"
+				class="rounded-xl border border-line bg-surface min-h-11 min-w-11 text-fg-2 inline-flex items-center justify-center shrink-0
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+				<IconChevronsLeft aria-hidden="true" stroke={2} class="size-4" />
 			</button>
 			<button
 				id="epg-now"
@@ -84,6 +96,16 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconChevronLeft, IconChevr
 					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
 				<IconClockHour3 aria-hidden="true" stroke={2} class="size-4" />
 				<span data-i18n="epg.now" class="hidden sm:inline">Now</span>
+			</button>
+			<button
+				id="epg-later"
+				type="button"
+				aria-label="Later"
+				title="Later"
+				data-i18n-attr="aria-label:epg.later;title:epg.later"
+				class="rounded-xl border border-line bg-surface min-h-11 min-w-11 text-fg-2 inline-flex items-center justify-center shrink-0
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+				<IconChevronsRight aria-hidden="true" stroke={2} class="size-4" />
 			</button>
 			<button
 				id="epg-refresh"

@@ -3,8 +3,24 @@
 
 import { nextPaint, takeLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
-import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
+import { getActiveEntry, getMergedEntries, entryToCreds, loadCreds } from "@/scripts/lib/creds.js"
 import { ensureVod, ensureSeries, CATALOG_WARMED_EVENT } from "@/scripts/lib/catalog.js"
+import {
+  hydrateMergedRows,
+  readMergedRows,
+  ensureMergedRows,
+  isMergedView,
+  type MergedReadResult,
+} from "@/scripts/lib/merged-catalog.ts"
+import {
+  rowKey,
+  categoryLabel as mergedCategoryLabel,
+  mergedCategoryKey,
+  parseMergedCategoryKey,
+} from "@/scripts/lib/merged-catalog-core.ts"
+import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
+import { toast } from "@/scripts/lib/toast"
+import { remountOnMergedChange } from "@/scripts/tv/merged-remount"
 import { getCached, hydrate as hydrateCache, CACHE_REVALIDATED_EVENT } from "@/scripts/lib/cache.js"
 import { normalize } from "@/scripts/lib/text.ts"
 import {
@@ -15,8 +31,10 @@ import {
   setHideWatched,
   isCompleted,
   getProgress,
-  getSeriesEpisodeProgress,
-  hasSeriesWatchedOverride,
+  getSeriesWatchedMap,
+  getHiddenCategories,
+  getAllowedCategories,
+  getCategoryMode,
 } from "@/scripts/lib/preferences.js"
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { CANONICAL_GENRES, type GenreId } from "@/scripts/lib/genres.ts"
@@ -27,10 +45,11 @@ import {
   LANGUAGE_GROUPING_EVENT,
   CONTENT_LANGUAGE_EVENT,
 } from "@/scripts/lib/app-settings.js"
-import { filterAndSortEntries, type GridFilterState } from "@/scripts/lib/tv-grid-filter"
+import { filterAndSortEntries, gridEntryKey, type GridFilterState } from "@/scripts/lib/tv-grid-filter"
 import { filterCatalog } from "@/scripts/tv/catalog-filter-client"
 import {
   getSharedGroupingIndex,
+  buildGroupingIndexesByPlaylist,
   collapseIntoDisplayGroups,
   isLanguageGroupingExplicitlyEnabled,
   type CatalogGroupingIndex,
@@ -57,6 +76,15 @@ interface CatalogRow {
   added?: number
   norm?: string
   tmdb?: number | null
+  playlistId?: string
+  key?: string
+  rawCategory?: string
+}
+
+interface ChipInfo {
+  tags: string[]
+  variantCount: number
+  displayTag: string | null
 }
 
 interface KindConfig {
@@ -69,7 +97,7 @@ interface KindConfig {
   fallbackTitleKey: string
   searchPlaceholderKey: string
   ensure: (creds: Record<string, string>, playlistId: string) => Promise<CatalogRow[]>
-  detailHref: (id: number | string) => string
+  detailHref: (id: number | string, playlistId?: string) => string
 }
 
 const KIND_CONFIG: Record<CatalogKind, KindConfig> = {
@@ -83,7 +111,7 @@ const KIND_CONFIG: Record<CatalogKind, KindConfig> = {
     fallbackTitleKey: "list.movieFallback",
     searchPlaceholderKey: "list.searchMovies",
     ensure: ensureVod,
-    detailHref: (id) => `/tv/movies/detail?id=${encodeURIComponent(String(id))}`,
+    detailHref: (id, playlistId) => detailHrefFor("vod", id, { tv: true, playlistId }),
   },
   series: {
     kind: "series",
@@ -95,7 +123,7 @@ const KIND_CONFIG: Record<CatalogKind, KindConfig> = {
     fallbackTitleKey: "list.seriesFallback",
     searchPlaceholderKey: "list.searchSeries",
     ensure: ensureSeries,
-    detailHref: (id) => `/tv/series/detail?id=${encodeURIComponent(String(id))}`,
+    detailHref: (id, playlistId) => detailHrefFor("series", id, { tv: true, playlistId }),
   },
 }
 
@@ -126,11 +154,19 @@ function scheduleIdle(fn: () => void): void {
 
 const PREPAINT_ROW_LIMIT = 30
 
+type MergedRow = CatalogRow & { playlistId: string }
+
 export function createCatalogGridView(kind: CatalogKind): TvView {
   const config = KIND_CONFIG[kind]
   // Set once init() resolves a playlist; lets prepaint read the cache synchronously on a later visit.
   let lastKnownPlaylistId = ""
   let prepaintedGrid: { root: HTMLElement; wrap: HTMLElement; grid: GridHandle } | null = null
+  // Indirection so both createGrid() call sites (prepaint and mount) share one hook even though
+  // the decorator itself only exists once mount() builds its language-chip state.
+  let onCardMountedHandler: ((cardEl: HTMLElement) => void) | null = null
+  function onCardMounted(cardEl: HTMLElement): void {
+    onCardMountedHandler?.(cardEl)
+  }
 
   function discardPrepaint(): void {
     const stale = prepaintedGrid
@@ -144,12 +180,14 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
     releasePrepaint: discardPrepaint,
     prepaint(root: HTMLElement): boolean {
       if (!lastKnownPlaylistId) return false
-      const rows = (getCached(lastKnownPlaylistId, kind)?.data || []) as CatalogRow[]
+      const mergedRead = isMergedView() ? readMergedRows(kind) : null
+      const prepaintMerged = !!mergedRead && mergedRead.isMerged
+      const rows = (prepaintMerged ? mergedRead!.rows : (getCached(lastKnownPlaylistId, kind)?.data || [])) as CatalogRow[]
       if (!rows.length) return false
 
       const wrap = document.createElement("div")
       wrap.className = "flex h-full flex-col gap-4"
-      const grid = createGrid({ focusSectionId: `tv-${kind}-grid`, railId: `tv-${kind}-grid` })
+      const grid = createGrid({ focusSectionId: `tv-${kind}-grid`, railId: `tv-${kind}-grid`, onCardMounted })
       const firstWindow = rows.slice(0, PREPAINT_ROW_LIMIT)
       grid.setEntries({
         count: firstWindow.length,
@@ -159,21 +197,26 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
           return {
             railId: `tv-${kind}-grid`,
             kind,
-            id: row.id,
+            id: prepaintMerged ? rowKey(row as MergedRow) : row.id,
             name,
-            href: config.detailHref(row.id),
+            href: config.detailHref(row.id, prepaintMerged ? row.playlistId : undefined),
             posterUrl: row.logo || null,
             meta: formatCardMeta(row.year, row.rating),
             ariaLabel: t("tv.aria.open", { name }),
           }
         },
-        keyAt: (rowIndex) => `${kind}:${firstWindow[rowIndex].id}`,
+        keyAt: (rowIndex) =>
+          `${kind}:${prepaintMerged ? rowKey(firstWindow[rowIndex] as MergedRow) : firstWindow[rowIndex].id}`,
       }, undefined, { animate: false })
       wrap.appendChild(grid.el)
       root.appendChild(wrap)
 
       const openedEntry = takeLastOpenedEntry()
-      if (openedEntry && openedEntry.kind === kind) nameReturningCard(grid.el, `${kind}:${openedEntry.id}`)
+      if (openedEntry && openedEntry.kind === kind) {
+        const openedKey =
+          prepaintMerged && openedEntry.playlistId ? `${openedEntry.playlistId}:${openedEntry.id}` : openedEntry.id
+        nameReturningCard(grid.el, `${kind}:${openedKey}`)
+      }
 
       prepaintedGrid = { root, wrap, grid }
       return true
@@ -182,15 +225,24 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       let destroyed = false
       let activePlaylistId = ""
       let activeCreds: Record<string, string> | null = null
+      let mergedPlaylistIds: string[] = []
+      let isMerged = false
+      let anyXtreamSource = false
+      const titleById = new Map<string, string>()
       let allRows: CatalogRow[] = []
-      let genreSets: Map<GenreId, Set<number>> | null = null
+      let genreSetsByPlaylist = new Map<string, Map<GenreId, Set<number>>>()
+      let mergedPartsMemo: { parts: any[][]; rows: CatalogRow[] } | null = null
+      let facadeByPart = new WeakMap<any[], CatalogRow[]>()
+      const mergedGroupingMemo = new WeakMap<CatalogRow[], Map<string, CatalogGroupingIndex>>()
       let loadGeneration = 0
       let filterGeneration = 0
       // The very first render after a catalog lands must never wait on the filter worker.
       let hasRenderedOnce = false
       let filterState: GridFilterState = { category: null, query: "", hideWatched: false, sort: "default" }
       let displayedRows: CatalogRow[] = []
-      let chipInfoByRowId = new Map<number, { tags: string[]; variantCount: number; displayTag: string | null }>()
+      let chipInfoByRowId = new Map<string, ChipInfo>()
+      // Keyed by allRows identity so a dialog reopen on an unchanged catalog skips the O(n) count pass.
+      const categoryOptionsCache = new WeakMap<CatalogRow[], FilterOption[]>()
 
       const adopted = prepaintedGrid && prepaintedGrid.root === root ? prepaintedGrid : null
       if (adopted) prepaintedGrid = null
@@ -228,9 +280,25 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         },
       })
 
-      const grid = adopted?.grid ?? createGrid({ focusSectionId: `tv-${kind}-grid`, railId: `tv-${kind}-grid` })
+      const grid = adopted?.grid ?? createGrid({ focusSectionId: `tv-${kind}-grid`, railId: `tv-${kind}-grid`, onCardMounted })
 
       const actionSheet: ActionSheetHandle = createActionSheet(`tv-${kind}-grid-actions-dialog`)
+
+      function rowPlaylistId(row: CatalogRow): string {
+        return row.playlistId ?? activePlaylistId
+      }
+
+      function entryKeyOf(row: CatalogRow): string {
+        return gridEntryKey(row)
+      }
+
+      function cardIdOf(row: CatalogRow): string | number {
+        return isMerged ? entryKeyOf(row) : row.id
+      }
+
+      function hrefFor(row: CatalogRow): string {
+        return config.detailHref(row.id, isMerged ? rowPlaylistId(row) : undefined)
+      }
 
       function openCardMenu(row: CatalogRow, name: string): void {
         actionSheet.open(
@@ -240,11 +308,52 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
             id: row.id,
             name,
             logo: row.logo,
-            playlistId: activePlaylistId,
-            href: config.detailHref(row.id),
+            playlistId: rowPlaylistId(row),
+            href: hrefFor(row),
             includeWatchlist: true,
           })
         )
+      }
+
+      function mergedFacade(read: MergedReadResult): CatalogRow[] {
+        const parts = read.sources.map((source) => read.byPlaylist.get(source.playlistId) ?? [])
+        const memo = mergedPartsMemo
+        if (memo && memo.parts.length === parts.length && memo.parts.every((part, index) => part === parts[index])) {
+          return memo.rows
+        }
+        const uncategorized = t("list.uncategorized")
+        const rows: CatalogRow[] = []
+        parts.forEach((part) => {
+          let facade = facadeByPart.get(part)
+          if (!facade) {
+            facade = part.map((row: CatalogRow & { playlistId: string }) => {
+              const rawCategory = (row.category || "").trim() || uncategorized
+              return {
+                ...row,
+                rawCategory,
+                category: mergedCategoryKey(row.playlistId, rawCategory),
+                key: rowKey(row),
+              }
+            })
+            facadeByPart.set(part, facade)
+          }
+          for (const row of facade) rows.push(row)
+        })
+        mergedPartsMemo = { parts, rows }
+        return rows
+      }
+
+      function currentMergedRows(): CatalogRow[] {
+        return mergedFacade(readMergedRows(kind))
+      }
+
+      function ensureMergedGroupingIndexes(): Map<string, CatalogGroupingIndex> {
+        let indexes = mergedGroupingMemo.get(allRows)
+        if (!indexes) {
+          indexes = buildGroupingIndexesByPlaylist(allRows as Array<CatalogRow & { playlistId?: string }>)
+          mergedGroupingMemo.set(allRows, indexes)
+        }
+        return indexes
       }
 
       if (adopted) {
@@ -257,30 +366,21 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         grid.setLoading()
       }
 
-      // Grid rows mount lazily (row-windowing); a chip is appended as each card's row enters the DOM.
+      // Grid rows mount lazily (row-windowing); a chip is appended as each card mounts, via the
+      // grid's own onCardMounted hook instead of a subtree MutationObserver over the whole grid.
       function decorateCardChips(cardEl: HTMLElement): void {
         const indexStr = cardEl.dataset.gridIndex
         if (indexStr == null) return
         const row = displayedRows[Number(indexStr)]
         if (!row) return
-        const info = chipInfoByRowId.get(row.id)
+        const info = chipInfoByRowId.get(entryKeyOf(row))
         if (!info) return
         const posterWrap = cardEl.querySelector<HTMLElement>("[data-poster-wrap]")
         if (!posterWrap || posterWrap.querySelector(`.${LANGUAGE_CHIPS_CLASS}`)) return
         const chip = buildLanguageChips(info.tags, info.variantCount, getActiveLocale(), info.displayTag)
         if (chip) posterWrap.appendChild(chip)
       }
-
-      const chipObserver = new MutationObserver((mutations) => {
-        for (const mutation of mutations) {
-          for (const node of mutation.addedNodes) {
-            if (!(node instanceof HTMLElement)) continue
-            if (node.matches("[data-grid-index]")) decorateCardChips(node)
-            node.querySelectorAll<HTMLElement>("[data-grid-index]").forEach(decorateCardChips)
-          }
-        }
-      })
-      chipObserver.observe(grid.el, { childList: true, subtree: true })
+      onCardMountedHandler = decorateCardChips
 
       function persistState(): void {
         if (!activePlaylistId) return
@@ -310,6 +410,10 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
           const genre = CANONICAL_GENRES.find((candidate) => candidate.id === genreId)
           return genre ? t(genre.labelKey) : filterState.category
         }
+        if (isMerged) {
+          const parsed = parseMergedCategoryKey(filterState.category, "")
+          if (parsed) return mergedCategoryLabel(parsed.name, titleById.get(parsed.playlistId) || "", true)
+        }
         return filterState.category
       }
 
@@ -327,24 +431,24 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       function categoryMatcher(row: CatalogRow, category: string): boolean {
         if (category.startsWith(GENRE_CAT_PREFIX)) {
           const genreId = category.slice(GENRE_CAT_PREFIX.length) as GenreId
-          return !!genreSets?.get(genreId)?.has(Number(row.id))
+          return !!genreSetsByPlaylist.get(rowPlaylistId(row))?.get(genreId)?.has(Number(row.id))
         }
         const name = (row.category || "").trim() || t("list.uncategorized")
         return name === category
       }
 
       function isWatched(row: CatalogRow): boolean {
-        if (!activePlaylistId) return false
-        if (kind === "vod") return isCompleted(activePlaylistId, "vod", row.id)
-        if (hasSeriesWatchedOverride(activePlaylistId, row.id)) return true
+        const playlistId = rowPlaylistId(row)
+        if (!playlistId) return false
+        if (kind === "vod") return isCompleted(playlistId, "vod", row.id)
         // No total episode count here; only hide once every recorded episode is completed.
-        const progress = getSeriesEpisodeProgress(activePlaylistId, row.id)
-        return progress.completedIds.length > 0 && !progress.hasIncompleteEpisode
+        return getSeriesWatchedMap(playlistId).has(row.id)
       }
 
-      function vodProgressPercent(id: number): number | undefined {
-        if (kind !== "vod" || !activePlaylistId) return undefined
-        const progress = getProgress(activePlaylistId, "vod", id) as
+      function vodProgressPercent(row: CatalogRow): number | undefined {
+        const playlistId = rowPlaylistId(row)
+        if (kind !== "vod" || !playlistId) return undefined
+        const progress = getProgress(playlistId, "vod", row.id) as
           | { completed?: boolean; position?: number; duration?: number }
           | null
         if (!progress || progress.completed || !(Number(progress.duration) > 0)) return undefined
@@ -352,7 +456,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       }
 
       function toCardItem(row: CatalogRow): PosterCardItem {
-        const chipInfo = chipInfoByRowId.get(row.id)
+        const chipInfo = chipInfoByRowId.get(entryKeyOf(row))
         // Strip the tag prefix (redundant once the language shows as a chip) only when 2+ languages are grouped.
         const stripPrefix = chipInfo && chipInfo.tags.length >= 2 && chipInfo.displayTag
         const displayName = stripPrefix ? parseNamePrefix(row.name).rest : row.name
@@ -360,13 +464,13 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         return {
           railId: `tv-${kind}-grid`,
           kind,
-          id: row.id,
+          id: cardIdOf(row),
           name,
-          href: config.detailHref(row.id),
+          href: hrefFor(row),
           posterUrl: row.logo || null,
           meta: formatCardMeta(row.year, row.rating),
           ariaLabel: t("tv.aria.open", { name }),
-          progressPercent: vodProgressPercent(row.id),
+          progressPercent: vodProgressPercent(row),
           onLongPress: () => openCardMenu(row, name),
         }
       }
@@ -398,19 +502,18 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         if (!target) return
         initialFocusApplied = true
         target.focus()
-        window.SpatialNavigation?.makeFocusable?.()
+        window.SpatialNavigation?.makeFocusable?.(`tv-${kind}-grid`)
       }
 
       function catalogId(): string {
-        return `${kind}:${activePlaylistId}`
+        return `${kind}:${mergedPlaylistIds.join("+")}`
       }
 
       async function applyFilter(): Promise<void> {
         const generation = ++filterGeneration
         if (!allRows.length) {
-          const emptyMessage = !activeCreds?.user || !activeCreds?.pass
-            ? t(config.requiresXtreamKey)
-            : t(config.emptyKey)
+          const missingXtream = isMerged ? !anyXtreamSource : !activeCreds?.user || !activeCreds?.pass
+          const emptyMessage = missingXtream ? t(config.requiresXtreamKey) : t(config.emptyKey)
           displayedRows = []
           chipInfoByRowId = new Map()
           grid.setEntries(EMPTY_GRID_SOURCE, emptyMessage)
@@ -425,15 +528,15 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
           hasRenderedOnce = true
         } else {
           const isGenreCategory = !!filterState.category?.startsWith(GENRE_CAT_PREFIX)
-          const genreMatchIds = isGenreCategory
-            ? Array.from(genreSets?.get(filterState.category!.slice(GENRE_CAT_PREFIX.length) as GenreId) || [])
+          const genreMatchKeys = isGenreCategory
+            ? genreKeysFor(filterState.category!.slice(GENRE_CAT_PREFIX.length) as GenreId)
             : undefined
-          const watchedIds = filterState.hideWatched ? allRows.filter(isWatched).map((row) => row.id) : undefined
+          const watchedKeys = filterState.hideWatched ? allRows.filter(isWatched).map(entryKeyOf) : undefined
 
           const indexes = await filterCatalog(catalogId(), allRows, {
             state: filterState,
-            category: { isGenreCategory, genreMatchIds, uncategorizedLabel: t("list.uncategorized") },
-            watchedIds,
+            category: { isGenreCategory, genreMatchKeys, uncategorizedLabel: t("list.uncategorized") },
+            watchedKeys,
           })
           if (indexes === null || destroyed || generation !== filterGeneration) return
           filtered = new Array(indexes.length)
@@ -442,14 +545,46 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
         const languageGroupingEnabled = languageGroupingAllowed()
         let rows = filtered
-        const nextChipInfoByRowId = new Map<number, { tags: string[]; variantCount: number; displayTag: string | null }>()
+        let groupedTotal = allRows.length
+        const nextChipInfoByRowId = new Map<string, ChipInfo>()
 
         if (languageGroupingEnabled) {
-          const index = ensureGroupingIndex()
           const preferredTags = effectivePreferredTags(getContentLanguage(), getActiveLocale())
-          const groups = collapseIntoDisplayGroups(filtered, index, preferredTags)
-          const groupByDisplayId = new Map<number, DisplayGroup<CatalogRow>>(
-            groups.map((group) => [group.displayEntry.id, group])
+          let groups: DisplayGroup<CatalogRow>[] = []
+          let tagForRow: (row: CatalogRow) => string | null
+          if (isMerged) {
+            const indexes = ensureMergedGroupingIndexes()
+            const filteredByPlaylist = new Map<string, CatalogRow[]>()
+            const positionByKey = new Map<string, number>()
+            for (let position = 0; position < filtered.length; position++) {
+              const row = filtered[position]
+              positionByKey.set(entryKeyOf(row), position)
+              const playlistId = rowPlaylistId(row)
+              const bucket = filteredByPlaylist.get(playlistId)
+              if (bucket) bucket.push(row)
+              else filteredByPlaylist.set(playlistId, [row])
+            }
+            groupedTotal = 0
+            for (const [playlistId, bucket] of filteredByPlaylist) {
+              const index = indexes.get(playlistId)
+              if (!index) continue
+              for (const group of collapseIntoDisplayGroups(bucket, index, preferredTags)) groups.push(group)
+            }
+            for (const index of indexes.values()) groupedTotal += index.groupsByKey.size
+            groups.sort(
+              (first, second) =>
+                (positionByKey.get(entryKeyOf(first.entries[0])) ?? 0) -
+                (positionByKey.get(entryKeyOf(second.entries[0])) ?? 0)
+            )
+            tagForRow = (row) => indexes.get(rowPlaylistId(row))?.tagByEntryId.get(row.id) ?? null
+          } else {
+            const index = ensureGroupingIndex()
+            groups = collapseIntoDisplayGroups(filtered, index, preferredTags)
+            groupedTotal = index.groupsByKey.size
+            tagForRow = (row) => index.tagByEntryId.get(row.id) ?? null
+          }
+          const groupByDisplayKey = new Map<string, DisplayGroup<CatalogRow>>(
+            groups.map((group) => [entryKeyOf(group.displayEntry), group])
           )
           rows = filterAndSortEntries(
             groups.map((group) => group.displayEntry),
@@ -457,12 +592,12 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
             { categoryMatcher: () => true, isWatched: () => false, normalize }
           )
           for (const row of rows) {
-            const group = groupByDisplayId.get(row.id)
+            const group = groupByDisplayKey.get(entryKeyOf(row))
             if (!group) continue
-            nextChipInfoByRowId.set(row.id, {
+            nextChipInfoByRowId.set(entryKeyOf(row), {
               tags: group.tags,
               variantCount: group.globalEntryIds.length,
-              displayTag: index.tagByEntryId.get(row.id) ?? null,
+              displayTag: tagForRow(row),
             })
           }
         }
@@ -470,41 +605,72 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         displayedRows = rows
         chipInfoByRowId = nextChipInfoByRowId
         // Set before grid.setEntries so the count can never lag behind a card-reconcile that fails or animates.
-        const totalCount = languageGroupingEnabled ? ensureGroupingIndex().groupsByKey.size : allRows.length
-        updateHeading(rows.length, totalCount)
+        updateHeading(rows.length, groupedTotal)
         grid.setEntries(
           {
             count: rows.length,
             itemAt: (rowIndex) => toCardItem(rows[rowIndex]),
-            keyAt: (rowIndex) => `${kind}:${rows[rowIndex].id}`,
+            keyAt: (rowIndex) => `${kind}:${cardIdOf(rows[rowIndex])}`,
           },
           t(config.noResultsCategoryKey)
         )
         ensureInitialGridFocus()
       }
 
-      function buildCategoryOptions(): FilterOption[] {
-        const counts = new Map<string, number>()
-        for (const row of allRows) {
-          const name = (row.category || "").trim() || t("list.uncategorized")
-          counts.set(name, (counts.get(name) || 0) + 1)
+      function isCategoryVisible(playlistId: string, rawName: string): boolean {
+        if (getCategoryMode(playlistId, kind) === "select") {
+          const allowed = getAllowedCategories(playlistId, kind)
+          return !allowed || allowed.size === 0 || allowed.has(rawName)
         }
-        const names = Array.from(counts.keys()).sort((first, second) =>
-          first.localeCompare(second, "en", { sensitivity: "base" })
-        )
+        return !getHiddenCategories(playlistId, kind)?.has(rawName)
+      }
+
+      function genreKeysFor(genreId: GenreId): string[] {
+        const keys: string[] = []
+        for (const [playlistId, sets] of genreSetsByPlaylist) {
+          for (const id of sets.get(genreId) || []) keys.push(isMerged ? `${playlistId}:${id}` : String(id))
+        }
+        return keys
+      }
+
+      function buildCategoryOptions(): FilterOption[] {
+        const cached = categoryOptionsCache.get(allRows)
+        if (cached) return cached
+
+        const counts = new Map<string, number>()
+        const sourceByValue = new Map<string, { playlistId: string; rawName: string }>()
+        for (const row of allRows) {
+          const value = (row.category || "").trim() || t("list.uncategorized")
+          counts.set(value, (counts.get(value) || 0) + 1)
+          if (isMerged && !sourceByValue.has(value)) {
+            sourceByValue.set(value, { playlistId: rowPlaylistId(row), rawName: row.rawCategory || value })
+          }
+        }
+        const labelOf = (value: string): string => {
+          const source = sourceByValue.get(value)
+          return source ? mergedCategoryLabel(source.rawName, titleById.get(source.playlistId) || "", true) : value
+        }
+        const values = Array.from(counts.keys())
+          .filter((value) => {
+            const source = sourceByValue.get(value)
+            return !source || isCategoryVisible(source.playlistId, source.rawName)
+          })
+          .sort((first, second) => labelOf(first).localeCompare(labelOf(second), "en", { sensitivity: "base" }))
 
         const options: FilterOption[] = [{ value: "", label: t("list.allCategories") }]
 
-        if (genreSets) {
+        if (genreSetsByPlaylist.size) {
           const enrichmentActive = isEnrichmentActive()
           for (const genre of CANONICAL_GENRES) {
-            const count = genreSets.get(genre.id)?.size || 0
+            let count = 0
+            for (const sets of genreSetsByPlaylist.values()) count += sets.get(genre.id)?.size || 0
             if (!enrichmentActive && count === 0) continue
             options.push({ value: GENRE_CAT_PREFIX + genre.id, label: t(genre.labelKey), count })
           }
         }
 
-        for (const name of names) options.push({ value: name, label: name, count: counts.get(name) || 0 })
+        for (const value of values) options.push({ value, label: labelOf(value), count: counts.get(value) || 0 })
+        categoryOptionsCache.set(allRows, options)
         return options
       }
 
@@ -518,7 +684,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
             filterState = { ...filterState, category: nextCategory }
             if (nextCategory?.startsWith(GENRE_CAT_PREFIX) && activePlaylistId) {
               const genreId = nextCategory.slice(GENRE_CAT_PREFIX.length) as GenreId
-              ensureGenreBoost(activePlaylistId, kind, genreId).catch(() => {})
+              for (const playlistId of mergedPlaylistIds) ensureGenreBoost(playlistId, kind, genreId).catch(() => {})
             }
             persistState()
             syncFilterBar()
@@ -559,8 +725,9 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         if (!playlistId) return
         try {
           const index = await getGenreIndex(playlistId, kind)
-          if (destroyed || playlistId !== activePlaylistId) return
-          genreSets = index.sets
+          if (destroyed || !mergedPlaylistIds.includes(playlistId)) return
+          genreSetsByPlaylist.set(playlistId, index.sets)
+          categoryOptionsCache.delete(allRows)
         } catch {
           return
         }
@@ -568,8 +735,38 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         if (filterState.category?.startsWith(GENRE_CAT_PREFIX)) applyFilter()
       }
 
+      async function loadMergedRows(): Promise<void> {
+        const generation = ++loadGeneration
+        await hydrateMergedRows(kind)
+        if (destroyed || generation !== loadGeneration) return
+        const cached = currentMergedRows()
+        if (cached.length) {
+          allRows = cached
+          applyFilter()
+        } else {
+          grid.setLoading()
+        }
+
+        const ensured = await ensureMergedRows(kind)
+        if (destroyed || generation !== loadGeneration) return
+        for (const playlistId of ensured.errors.keys()) {
+          toast({
+            title: t("stream.mergedPartialError", { title: titleById.get(playlistId) || "" }),
+            variant: "error",
+          })
+        }
+        const fresh = mergedFacade(ensured)
+        if (!cached.length && !fresh.length) {
+          allRows = []
+          applyFilter()
+          return
+        }
+        setRowsAndRender(fresh)
+      }
+
       async function loadRows(): Promise<void> {
         if (destroyed || !activePlaylistId) return
+        if (isMerged) return loadMergedRows()
         const generation = ++loadGeneration
         const playlistId = activePlaylistId
 
@@ -600,18 +797,26 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         }
       }
 
-      function onCatalogWarmed(event: Event): void {
-        const detail = (event as CustomEvent).detail
-        if (!detail || detail.playlistId !== activePlaylistId) return
+      function refreshRowsFromCache(): void {
+        if (isMerged) {
+          const rows = currentMergedRows()
+          if (rows.length) setRowsAndRender(rows)
+          return
+        }
         const hit = getCached(activePlaylistId, kind)
         if (hit?.data) setRowsAndRender(hit.data)
       }
 
+      function onCatalogWarmed(event: Event): void {
+        const detail = (event as CustomEvent).detail
+        if (!detail || !mergedPlaylistIds.includes(detail.playlistId)) return
+        refreshRowsFromCache()
+      }
+
       function onCacheRevalidated(event: Event): void {
         const detail = (event as CustomEvent).detail
-        if (!detail || detail.entryId !== activePlaylistId || detail.kind !== kind) return
-        const hit = getCached(activePlaylistId, kind)
-        if (hit?.data) setRowsAndRender(hit.data)
+        if (!detail || !mergedPlaylistIds.includes(detail.entryId) || detail.kind !== kind) return
+        refreshRowsFromCache()
       }
 
       function onLanguageSettingsChanged(): void {
@@ -620,19 +825,25 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
       function onGenreIndexChanged(event: Event): void {
         const detail = (event as CustomEvent).detail
-        if (!detail || detail.playlistId !== activePlaylistId || detail.kind !== kind) return
-        refreshGenreSets(activePlaylistId)
+        if (!detail || !mergedPlaylistIds.includes(detail.playlistId) || detail.kind !== kind) return
+        refreshGenreSets(detail.playlistId)
       }
 
       function onProgressChanged(event: Event): void {
         const detail = (event as CustomEvent).detail
-        if (!detail || detail.playlistId !== activePlaylistId) return
+        if (!detail || !mergedPlaylistIds.includes(detail.playlistId)) return
         const relevant = kind === "vod" ? detail.kind === "vod" : detail.kind === "episode"
         if (!relevant) return
         applyFilter()
       }
 
       function onLocaleChanged(): void {
+        if (isMerged) {
+          facadeByPart = new WeakMap()
+          mergedPartsMemo = null
+          allRows = currentMergedRows()
+        }
+        categoryOptionsCache.delete(allRows)
         filterBar.setState(
           { hideWatched: filterState.hideWatched, query: filterState.query },
           { categoryLabel: categoryLabel(), sortLabel: sortLabel() }
@@ -655,11 +866,13 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
       async function init(): Promise<void> {
         heading.textContent = t(config.titleKey)
-        const active = await getActiveEntry()
+        const [active, mergedEntries] = await Promise.all([getActiveEntry(), getMergedEntries()])
         if (destroyed) return
 
         if (!active) {
           activePlaylistId = ""
+          mergedPlaylistIds = []
+          isMerged = false
           allRows = []
           grid.setEntries(EMPTY_GRID_SOURCE)
           updateHeading(0, 0)
@@ -668,6 +881,15 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
         activePlaylistId = active._id
         lastKnownPlaylistId = activePlaylistId
+        mergedPlaylistIds = mergedEntries.length ? mergedEntries.map((entry: any) => entry._id) : [activePlaylistId]
+        isMerged = mergedPlaylistIds.length >= 2
+        titleById.clear()
+        for (const entry of mergedEntries) titleById.set(entry._id, entry.title || "")
+        anyXtreamSource = mergedEntries.some((entry: any) => {
+          const entryCreds = entryToCreds(entry)
+          return !!entryCreds.user && !!entryCreds.pass
+        })
+        genreSetsByPlaylist = new Map()
         hasRenderedOnce = false
         activeCreds = await loadCreds()
         if (destroyed) return
@@ -687,14 +909,17 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         if (destroyed) return
         // Off the mount path: indexing a full catalog by genre only matters once the category dialog opens.
         scheduleIdle(() => {
-          if (!destroyed) void refreshGenreSets(activePlaylistId)
+          if (destroyed) return
+          for (const playlistId of mergedPlaylistIds) void refreshGenreSets(playlistId)
         })
       }
 
       void init()
+      const stopRemountOnMergedChange = remountOnMergedChange()
 
       return () => {
         destroyed = true
+        stopRemountOnMergedChange()
         window.removeEventListener("keydown", noteInteraction, true)
         window.removeEventListener("pointerdown", noteInteraction, true)
         document.removeEventListener(CATALOG_WARMED_EVENT, onCatalogWarmed)
@@ -705,14 +930,14 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         document.removeEventListener("xt:active-changed", onActiveChanged)
         document.removeEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
         document.removeEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
-        chipObserver.disconnect()
+        if (onCardMountedHandler === decorateCardChips) onCardMountedHandler = null
         grid.destroy()
         filterBar.destroy()
         actionSheet.destroy()
         wrap.remove()
         allRows = []
         displayedRows = []
-        genreSets = null
+        genreSetsByPlaylist = new Map()
         chipInfoByRowId = new Map()
       }
     },

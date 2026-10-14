@@ -185,6 +185,19 @@ describe("fetchShortEpg", () => {
     expect(await fetchShortEpg(m3uCreds, 1)).toBeNull()
     expect(xtreamApiFetchMock).not.toHaveBeenCalled()
   })
+
+  it("filters rows against an explicit nowMs instead of Date.now()", async () => {
+    xtreamApiFetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        epg_listings: [
+          { title: "past", start: "10", end: "20" },
+          { title: "current", start: "15", end: "9999999999" },
+        ],
+      })
+    )
+    const result = await fetchShortEpg(xtreamCreds, 1, 4, 20_000)
+    expect(result?.map((programme) => programme.title)).toEqual(["current"])
+  })
 })
 
 describe("fetchChannelEpgTable", () => {

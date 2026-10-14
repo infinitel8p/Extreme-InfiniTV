@@ -5,6 +5,7 @@
 import { log } from "@/scripts/lib/log.js"
 import { getCurrentAppVersion, isStoreBuild } from "@/scripts/lib/update-check.js"
 import { deviceSupportsHevc, clearKeyAvailable } from "@/scripts/lib/codec-hints.js"
+import { parseChromiumMajor, MIN_CHROMIUM_MAJOR } from "@/scripts/lib/webview-floor.js"
 import { peekAudioTranscodeAvailable } from "@/scripts/lib/audio-proxy.js"
 import { peekVodAudioRemuxAvailable } from "@/scripts/lib/vod-audio-proxy.js"
 import {
@@ -15,9 +16,11 @@ import {
   getUpdateChannel,
   getUserAgent,
   getFfmpegPath,
+  getAndroidNativePlayerEnabled,
 } from "@/scripts/lib/app-settings.js"
 import { getActiveLocale } from "@/scripts/lib/i18n.js"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
+import { isTvDevice } from "@/scripts/lib/tv-detect.js"
 
 export type PlatformFamily = "windows" | "macos" | "linux" | "android" | "web"
 
@@ -49,6 +52,8 @@ export interface SessionSnapshotInputs {
   vodAudioRemuxAvailable: boolean | null
   customFfmpegPathConfigured: boolean | null
   playerBackend: string | null
+  mpvBinaryResolved: boolean | null
+  mpvSessionActive: boolean | null
   perfMode: boolean | null
   perfModeAuto: boolean | null
   tvDevice: boolean | null
@@ -58,6 +63,11 @@ export interface SessionSnapshotInputs {
   locale: string | null
   playlistCount: number | null
   activePlaylistEntry: SessionSnapshotPlaylistEntry | null
+  androidNativePlayerEnabled: boolean | null
+  chromiumMajor: number | null
+  belowChromiumFloor: boolean
+  webViewPackage: string | null
+  webViewVersion: string | null
 }
 
 export interface SessionSnapshot {
@@ -78,6 +88,8 @@ export interface SessionSnapshot {
   vodAudioRemuxAvailable: boolean | null
   customFfmpegPathConfigured: boolean | null
   playerBackend: string | null
+  mpvBinaryResolved: boolean | null
+  mpvSessionActive: boolean | null
   perfMode: boolean | null
   perfModeAuto: boolean | null
   tvDevice: boolean | null
@@ -89,6 +101,24 @@ export interface SessionSnapshot {
   activePlaylistType: string | null
   activePlaylistMirrorsConfigured: boolean | null
   activePlaylistLiveContainer: string | null
+  androidNativePlayerEnabled: boolean | null
+  chromiumMajor: number | null
+  belowChromiumFloor: boolean
+  webViewPackage: string | null
+  webViewVersion: string | null
+}
+
+/** Prefers the WebView bridge's own version - the bridge rewrites the UA per channel. */
+export function resolveChromiumMajor(
+  webViewVersion: string | null,
+  userAgent: string | null,
+): number | null {
+  const bridgeMatch = webViewVersion?.trim().match(/^(\d+)/)
+  if (bridgeMatch) {
+    const major = Number(bridgeMatch[1])
+    if (Number.isFinite(major)) return major
+  }
+  return parseChromiumMajor(userAgent || "")
 }
 
 function derivePlatformFamily(
@@ -127,6 +157,8 @@ export function buildSessionSnapshot(inputs: SessionSnapshotInputs): SessionSnap
     vodAudioRemuxAvailable: inputs.vodAudioRemuxAvailable,
     customFfmpegPathConfigured: inputs.customFfmpegPathConfigured,
     playerBackend: inputs.playerBackend,
+    mpvBinaryResolved: inputs.mpvBinaryResolved,
+    mpvSessionActive: inputs.mpvSessionActive,
     perfMode: inputs.perfMode,
     perfModeAuto: inputs.perfModeAuto,
     tvDevice: inputs.tvDevice,
@@ -143,6 +175,11 @@ export function buildSessionSnapshot(inputs: SessionSnapshotInputs): SessionSnap
       isXtream && typeof activeEntry?.liveContainer === "string"
         ? activeEntry.liveContainer
         : null,
+    androidNativePlayerEnabled: inputs.androidNativePlayerEnabled,
+    chromiumMajor: inputs.chromiumMajor,
+    belowChromiumFloor: inputs.belowChromiumFloor,
+    webViewPackage: inputs.webViewPackage,
+    webViewVersion: inputs.webViewVersion,
   }
 }
 
@@ -205,15 +242,38 @@ function detectMseAvailable(): boolean {
   )
 }
 
-function detectTvDevice(): boolean | null {
-  const bridge = (window as any).AndroidDeviceInfo
-  if (!bridge || typeof bridge.isTv !== "function") return null
-  return !!bridge.isTv()
+function detectWebViewPackage(): string | null {
+  const value = window.AndroidDeviceInfo?.getWebViewPackageName?.() ?? null
+  return typeof value === "string" ? value : null
+}
+
+function detectWebViewVersion(): string | null {
+  const value = window.AndroidDeviceInfo?.getWebViewVersionName?.() ?? null
+  return typeof value === "string" ? value : null
+}
+
+// Reuses the existing mpv-embed commands; reports resolution/activity as booleans,
+// never the resolved binary path, since a PATH-derived path can embed the OS username.
+async function peekMpvEmbedStatus(): Promise<{ binaryResolved: boolean | null; sessionActive: boolean | null }> {
+  if (!detectIsTauri() || detectIsAndroid()) return { binaryResolved: null, sessionActive: null }
+  const { invoke } = await import("@tauri-apps/api/core")
+  const [availability, status] = await Promise.all([
+    safeAsync(() => invoke("mpv_embed_available") as Promise<{ supported: boolean }>, null),
+    safeAsync(() => invoke("mpv_embed_status") as Promise<{ running: boolean }>, null),
+  ])
+  return {
+    binaryResolved: availability ? availability.supported : null,
+    sessionActive: status ? status.running : null,
+  }
 }
 
 async function gatherInputs(): Promise<SessionSnapshotInputs> {
   const entries = await safeAsync(() => getEntries(), null)
   const activeEntry = await safeAsync(() => getActiveEntry(), null)
+  const mpvEmbedStatus = await safeAsync(peekMpvEmbedStatus, { binaryResolved: null, sessionActive: null })
+  const userAgent = safeSync(() => navigator.userAgent || null, null)
+  const webViewVersion = safeSync(detectWebViewVersion, null)
+  const chromiumMajor = safeSync(() => resolveChromiumMajor(webViewVersion, userAgent), null)
 
   return {
     appVersion: await safeAsync(() => getCurrentAppVersion(), null),
@@ -223,7 +283,7 @@ async function gatherInputs(): Promise<SessionSnapshotInputs> {
     isWindows: safeSync(detectIsWindows, null),
     isMacOS: safeSync(detectIsMacOS, null),
     isAndroid: safeSync(detectIsAndroid, null),
-    userAgent: safeSync(() => navigator.userAgent || null, null),
+    userAgent,
     language: safeSync(() => navigator.language || null, null),
     screenWidth: safeSync(() => window.screen?.width ?? null, null),
     screenHeight: safeSync(() => window.screen?.height ?? null, null),
@@ -236,15 +296,22 @@ async function gatherInputs(): Promise<SessionSnapshotInputs> {
     vodAudioRemuxAvailable: safeSync(peekVodAudioRemuxAvailable, null),
     customFfmpegPathConfigured: safeSync(() => !!getFfmpegPath(), null),
     playerBackend: safeSync(() => getPlayerBackend(), null),
+    mpvBinaryResolved: mpvEmbedStatus.binaryResolved,
+    mpvSessionActive: mpvEmbedStatus.sessionActive,
     perfMode: safeSync(() => getPerfMode(), null),
     perfModeAuto: safeSync(() => localStorage.getItem("xt_perf_mode_auto") === "1", null),
-    tvDevice: safeSync(detectTvDevice, null),
+    tvDevice: safeSync(isTvDevice, null),
     networkTimeoutSeconds: safeSync(() => getNetworkTimeoutSeconds(), null),
     audioTranscodeAuto: safeSync(() => getAudioTranscodeAuto(), null),
     customUserAgentConfigured: safeSync(() => !!getUserAgent(), null),
     locale: safeSync(() => getActiveLocale(), null),
     playlistCount: Array.isArray(entries) ? entries.length : null,
     activePlaylistEntry: activeEntry as SessionSnapshotPlaylistEntry | null,
+    androidNativePlayerEnabled: safeSync(() => getAndroidNativePlayerEnabled(), null),
+    chromiumMajor,
+    belowChromiumFloor: chromiumMajor !== null && chromiumMajor < MIN_CHROMIUM_MAJOR,
+    webViewPackage: safeSync(detectWebViewPackage, null),
+    webViewVersion,
   }
 }
 

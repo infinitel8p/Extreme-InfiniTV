@@ -10,6 +10,24 @@ export interface EngineRegistry {
   native?: ReceiverEngine | null
 }
 
+export interface PlaybackTrackOption {
+  id: number
+  label: string
+  selected: boolean
+}
+
+/** Track/speed controls for the currently mounted engine; only the embedded mpv backend implements this. */
+export interface PlaybackControls {
+  listAudioTracks(): PlaybackTrackOption[]
+  listSubtitleTracks(): PlaybackTrackOption[]
+  selectAudioTrack(id: number): Promise<void>
+  /** null = subtitles off. */
+  selectSubtitleTrack(id: number | null): Promise<void>
+  getPlaybackRate(): number
+  setPlaybackRate(value: number): void
+  onTracksChanged(listener: () => void): () => void
+}
+
 export function selectEngine(
   registry: EngineRegistry,
   descriptor: CastDescriptorV1,

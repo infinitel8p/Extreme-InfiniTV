@@ -2,8 +2,9 @@
   // Full-page Recently Added view: VOD + series sorted by `added` ts.
   import { onMount } from "svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-  import { getActiveEntry } from "@/scripts/lib/creds.js"
-  import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { getMergedEntries } from "@/scripts/lib/creds.js"
+  import { hydrateMergedRows, readMergedRows } from "@/scripts/lib/merged-catalog.ts"
+  import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
   import {
     warmupActive,
     CATALOG_WARMED_EVENT,
@@ -24,7 +25,6 @@
   /** @type {Array<{ts:number, kind:"vod"|"series", item:any}>} */
   let merged = $state([])
   let loading = $state(true)
-  let activePlaylistId = $state("")
   let renderLimit = $state(PAGE_SIZE)
 
   const visible = $derived(
@@ -56,44 +56,37 @@
     })
   }
 
-  function buildHref(kind, id) {
-    return kind === "vod"
-      ? `/movies/detail?id=${encodeURIComponent(id)}`
-      : `/series/detail?id=${encodeURIComponent(id)}`
+  function buildHref(kind, id, playlistId) {
+    return detailHrefFor(kind, id, { playlistId })
   }
 
   let reloadGeneration = 0
 
   async function reload() {
     const generation = ++reloadGeneration
-    const active = await getActiveEntry()
+    const mergedEntries = await getMergedEntries()
     if (generation !== reloadGeneration) return
-    if (!active) {
+    if (!mergedEntries.length) {
       merged = []
-      activePlaylistId = ""
       loading = false
       return
     }
-    activePlaylistId = active._id
 
     const buildMerged = () => {
-      const vod = (getCached(active._id, "vod")?.data || [])
-        .filter((item) => item && item.id && (item.added || 0) > 0)
+      const vod = readMergedRows("vod")
+        .rows.filter((item) => item && item.id && (item.added || 0) > 0)
         .map((item) => ({ ts: Number(item.added) || 0, kind: "vod", item }))
-      const series = (getCached(active._id, "series")?.data || [])
-        .filter((item) => item && item.id && (item.added || 0) > 0)
+      const series = readMergedRows("series")
+        .rows.filter((item) => item && item.id && (item.added || 0) > 0)
         .map((item) => ({ ts: Number(item.added) || 0, kind: "series", item }))
       merged = [...vod, ...series].sort(
         (firstRow, secondRow) => secondRow.ts - firstRow.ts
       )
     }
 
-    const hydrations = [
-      hydrateCache(active._id, "vod"),
-      hydrateCache(active._id, "series"),
-    ]
+    const hydrations = [hydrateMergedRows("vod"), hydrateMergedRows("series")]
     const allCached =
-      !!getCached(active._id, "vod") && !!getCached(active._id, "series")
+      readMergedRows("vod").rows.length > 0 && readMergedRows("series").rows.length > 0
 
     if (allCached) {
       // Paint from memory now; hydration below only refreshes stale rows.
@@ -128,6 +121,7 @@
     const onLocale = () => { locale++ }
     const handlers = {
       "xt:active-changed": reload,
+      "xt:merged-changed": reload,
       [CATALOG_WARMED_EVENT]: reload,
       [LOCALE_EVENT]: onLocale,
     }
@@ -186,10 +180,10 @@
            lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]
            auto-rows-min content-start
            p-2 pb-4">
-    {#each visible as row, idx (row.kind + ":" + row.item.id)}
+    {#each visible as row, idx (row.item.playlistId + ":" + row.kind + ":" + row.item.id)}
       {@const ratingText = fmtImdbRating(row.item.rating)}
       <a
-        href={buildHref(row.kind, row.item.id)}
+        href={buildHref(row.kind, row.item.id, row.item.playlistId)}
         aria-label={`Open ${row.item.name || row.kind}`}
         class="ra-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line

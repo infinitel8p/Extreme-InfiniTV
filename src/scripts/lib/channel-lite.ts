@@ -12,6 +12,7 @@
 //     ua:            string,  // per-channel User-Agent, may be ""
 //     referer:       string,  // per-channel Referer, may be ""
 //     nowProgramme:  string,  // "now: <title>" string, may be ""
+//     backupUrls:    string[],  // same channel on other accounts, tried in order after streamUrl
 //   }
 
 import { getNowNextForChannel } from "@/scripts/lib/epg-data.js"
@@ -30,6 +31,7 @@ export interface ChannelInput {
   tvgId?: string | null
   /** Per-channel tvg-shift hours applied to EPG lookups. */
   tvgShift?: number | null
+  backupUrls?: string[] | null
 }
 
 export interface ChannelLite {
@@ -40,6 +42,7 @@ export interface ChannelLite {
   ua: string
   referer: string
   nowProgramme: string
+  backupUrls: string[]
 }
 
 /** Minimum shape we read off a programme entry. Matches the Programme type
@@ -84,6 +87,18 @@ function programmeLabel(
   }
 }
 
+function dedupeBackupUrls(backupUrls: string[] | null | undefined, streamUrl: string): string[] {
+  if (!Array.isArray(backupUrls)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const url of backupUrls) {
+    if (!url || url === streamUrl || seen.has(url)) continue
+    seen.add(url)
+    out.push(url)
+  }
+  return out
+}
+
 /**
  * Convert the in-app channel array into the ChannelLite[] wire format. Drops
  * entries with no streamUrl (defensive against malformed M3Us).
@@ -105,6 +120,7 @@ export function serializeChannelsForActivity(
       ua: channel.ua || defaultUa || "",
       referer: channel.referer || "",
       nowProgramme: programmeLabel(options.programmes, channel, atMs),
+      backupUrls: dedupeBackupUrls(channel.backupUrls, channel.streamUrl),
     })
   }
   return out
@@ -116,4 +132,24 @@ export function serializeChannelsJson(
   options: SerializeOptions = {},
 ): string {
   return JSON.stringify(serializeChannelsForActivity(channels, options))
+}
+
+/** Half-width of the native sibling window: ~200 channels total around the tuned index. */
+export const NATIVE_SIBLING_WINDOW_RADIUS = 100
+
+/**
+ * Slices `channels` down to a window of `radius * 2 + 1` entries centered on
+ * `currentIndex`. Keeps the native handoff payload (and its per-sibling stream
+ * resolution) bounded on catalogs with thousands of channels. An out-of-range
+ * index falls back to the leading window so a caller that can't locate the
+ * tuned channel still gets a bounded, non-empty slice.
+ */
+export function sliceSiblingWindow<T>(channels: T[], currentIndex: number, radius: number): T[] {
+  if (!channels.length) return []
+  if (currentIndex < 0 || currentIndex >= channels.length) {
+    return channels.slice(0, Math.min(channels.length, radius * 2 + 1))
+  }
+  const start = Math.max(0, currentIndex - radius)
+  const end = Math.min(channels.length, currentIndex + radius + 1)
+  return channels.slice(start, end)
 }

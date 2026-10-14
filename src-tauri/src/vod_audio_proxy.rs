@@ -160,8 +160,9 @@ pub async fn register_vod_audio_remux(
         return Err("OTHER:url must be http or https".to_string());
     }
 
-    // A loopback tee (e.g. vod_proxy) already applies user_agent/authorization.
-    let is_loopback = is_loopback_http(&url);
+    // A loopback tee (e.g. vod_proxy) already applies user_agent/authorization;
+    // a dns_proxy-wrapped loopback URL still needs them to forward upstream.
+    let is_loopback_tee = is_loopback_http(&url) && !crate::dns_proxy::is_dns_proxy_url(&url);
 
     let _register_guard = state.register_lock.lock().await;
 
@@ -184,8 +185,8 @@ pub async fn register_vod_audio_remux(
     let session = Arc::new(VodAudioSession {
         session_id: token.clone(),
         upstream_url: url.clone(),
-        user_agent: if is_loopback { None } else { user_agent },
-        authorization: if is_loopback { None } else { authorization },
+        user_agent: if is_loopback_tee { None } else { user_agent },
+        authorization: if is_loopback_tee { None } else { authorization },
         torn_down: AtomicBool::new(false),
         client_gone: AtomicBool::new(false),
         current_client: Mutex::new(None),
@@ -204,7 +205,7 @@ pub async fn register_vod_audio_remux(
     // Inserted before spawn so ffmpeg's request can resolve this token.
     insert_session(&state, session.clone());
 
-    let input_url = if is_loopback {
+    let input_url = if is_loopback_tee {
         url
     } else {
         format!("http://127.0.0.1:{port}/forward/{token}/stream")

@@ -44,6 +44,7 @@
                 style="@style/ExoStyledControls.Button.Bottom"
                 android:focusable="true"
                 android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent"
                 android:src="@drawable/ic_video_volume"
                 android:contentDescription="@string/xt_video_mute_description" />
 
@@ -54,6 +55,7 @@
                 android:layout_marginStart="4dp"
                 android:focusable="true"
                 android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent"
                 android:max="100"
                 android:progress="100"
                 android:progressTint="@color/xt_accent"
@@ -69,19 +71,22 @@
                 android:id="@id/exo_subtitle"
                 style="@style/ExoStyledControls.Button.Bottom.CC"
                 android:focusable="true"
-                android:background="@drawable/bg_video_control_focus" />
+                android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent" />
 
             <ImageButton
                 android:id="@id/exo_audio_track"
                 style="@style/ExoStyledControls.Button.Bottom.AudioTrack"
                 android:focusable="true"
-                android:background="@drawable/bg_video_control_focus" />
+                android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent" />
 
             <ImageButton
                 android:id="@id/exo_settings"
                 style="@style/ExoStyledControls.Button.Bottom.Settings"
                 android:focusable="true"
-                android:background="@drawable/bg_video_control_focus" />
+                android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent" />
 
         </LinearLayout>
 
@@ -104,6 +109,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent"
                 app:bar_height="2dp"
                 app:touch_target_height="48dp"
                 app:scrubber_enabled_size="10dp"
@@ -131,6 +137,7 @@
                 android:focusable="true"
                 android:layout_marginEnd="16dp"
                 android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent"
                 android:src="@drawable/ic_video_channel_down"
                 android:contentDescription="@string/xt_video_previous_channel_description"
                 android:visibility="gone" />
@@ -139,6 +146,7 @@
                 android:id="@id/exo_rew"
                 style="@style/ExoStyledControls.Button.Center"
                 android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent"
                 android:scaleType="fitCenter"
                 android:padding="@dimen/exo_icon_padding"
                 android:src="@drawable/exo_styled_controls_rewind"
@@ -147,12 +155,14 @@
             <ImageButton
                 android:id="@id/exo_play_pause"
                 style="@style/ExoStyledControls.Button.Center.PlayPause"
-                android:background="@drawable/bg_video_control_focus" />
+                android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent" />
 
             <ImageButton
                 android:id="@id/exo_ffwd"
                 style="@style/ExoStyledControls.Button.Center"
                 android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent"
                 android:scaleType="fitCenter"
                 android:padding="@dimen/exo_icon_padding"
                 android:src="@drawable/exo_styled_controls_fastforward"
@@ -164,6 +174,7 @@
                 android:focusable="true"
                 android:layout_marginStart="16dp"
                 android:background="@drawable/bg_video_control_focus"
+                android:backgroundTint="@color/xt_accent"
                 android:src="@drawable/ic_video_channel_up"
                 android:contentDescription="@string/xt_video_next_channel_description"
                 android:visibility="gone" />

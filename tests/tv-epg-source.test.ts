@@ -183,6 +183,39 @@ describe("short-EPG dead-marker state machine", () => {
   })
 })
 
+describe("shortEpgNowNextSlot", () => {
+  it("passes provider times through unchanged when no offset state is cached for the playlist", async () => {
+    const { shortEpgNowNextSlot } = await import("../src/scripts/tv/epg-source")
+    const nowMs = 1_000_000
+    const slot = shortEpgNowNextSlot(
+      {
+        current: { start: nowMs - 1000, stop: nowMs + 1000, title: "Current", desc: "" },
+        next: { start: nowMs + 1000, stop: nowMs + 2000, title: "Next", desc: "" },
+      },
+      "p1",
+      nowMs
+    )
+    expect(slot.current).toEqual({ title: "Current", start: nowMs - 1000, stop: nowMs + 1000, progress: 0.5 })
+    expect(slot.next).toEqual({ title: "Next", start: nowMs + 1000, stop: nowMs + 2000 })
+  })
+
+  it("returns nulls for an empty payload", async () => {
+    const { shortEpgNowNextSlot } = await import("../src/scripts/tv/epg-source")
+    expect(shortEpgNowNextSlot(null, "p1")).toEqual({ current: null, next: null })
+  })
+})
+
+describe("shortEpgToGuideProgrammes", () => {
+  it("carries provider times through as both display and raw fields when no offset is cached", async () => {
+    const { shortEpgToGuideProgrammes } = await import("../src/scripts/tv/epg-source")
+    const rows = [{ start: 100_000, stop: 200_000, title: "Show", desc: "desc." }]
+    const mapped = shortEpgToGuideProgrammes(rows, "p1")
+    expect(mapped).toEqual([
+      { start: 100_000, stop: 200_000, title: "Show", desc: "desc.", rawStart: 100_000, rawStop: 200_000 },
+    ])
+  })
+})
+
 describe("tvShortEpgCache empirical-emptiness wiring", () => {
   it("counts an empty-but-successful now/next result, not a failure, toward the dead marker", async () => {
     const { tvShortEpgCache, shortEpgIsDead } = await import("../src/scripts/tv/epg-source")

@@ -48,12 +48,7 @@
     data-settings-item
     class="settings-row scroll-mt-6 lg:scroll-mt-20 border-t border-line/60">
     <div class="settings-row__text">
-      <div class="flex items-center gap-2 flex-wrap">
-        <h3 class="text-sm font-medium leading-snug">{tr("settings.androidNativePlayer.title")}</h3>
-        <span class="inline-flex shrink-0 items-center px-2 py-0.5 rounded-full border border-line bg-surface-2 text-fg-3 text-2xs font-medium">
-          {tr("settings.androidNativePlayer.experimental")}
-        </span>
-      </div>
+      <h3 class="text-sm font-medium leading-snug">{tr("settings.androidNativePlayer.title")}</h3>
       <p id="android-native-player-helper" class="text-xs text-fg-3">{tr("settings.androidNativePlayer.helper")}</p>
     </div>
     <div class="settings-row__control">
