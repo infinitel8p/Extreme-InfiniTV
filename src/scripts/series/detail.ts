@@ -93,6 +93,7 @@ import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { providerSeasonsFromEpisodeMap } from "@/scripts/lib/tmdb-season-map.ts"
 import { enrichmentNeedsFill, fetchTvdbSeason, parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
+import { categoryNameOf, categoryVisibleFor } from "@/scripts/lib/category-visibility.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
@@ -1335,6 +1336,8 @@ async function enrichSeriesDetailFromTmdb(requestId) {
       sourcePrefix: parseNamePrefix(series.name).tag,
       preferredTags: effectivePreferredTags(getContentLanguage(), getActiveLocale()),
       groupKeyForEntry: groupKeyForCatalog(catalog),
+      isCandidateAllowed: (candidate) =>
+        categoryVisibleFor(detailPlaylistId, "series", categoryNameOf(candidate, t("stream.uncategorized"))),
     })
     if (matches.length) {
       renderSimilar(matches)

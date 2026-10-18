@@ -1,6 +1,7 @@
 import { takeLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { navigate } from "astro:transitions/client"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
+import { filterRowsByCategoryPrefs, CATEGORY_PREFS_EVENTS } from "@/scripts/lib/category-visibility.ts"
 import {
   getActiveEntry,
   getMergedEntries,
@@ -844,8 +845,13 @@ function buildRecentlyAddedItems(
 ): CardItem[] {
   const wantVod = filterKind === "all" || filterKind === "vod"
   const wantSeries = filterKind === "all" || filterKind === "series"
-  const vodRows = wantVod ? ((getCached(playlistId, "vod")?.data || []) as CatalogRow[]) : []
-  const seriesRows = wantSeries ? ((getCached(playlistId, "series")?.data || []) as CatalogRow[]) : []
+  const visibleRows = (kind: "vod" | "series"): CatalogRow[] =>
+    filterRowsByCategoryPrefs((getCached(playlistId, kind)?.data || []) as CatalogRow[], kind, {
+      playlistIdOf: () => playlistId,
+      fallbackCategoryName: t("stream.uncategorized"),
+    })
+  const vodRows = wantVod ? visibleRows("vod") : []
+  const seriesRows = wantSeries ? visibleRows("series") : []
 
   const newest: Array<{ kind: "vod" | "series"; row: CatalogRow; ts: number }> = []
   const limit = railItemLimit()
@@ -1677,6 +1683,7 @@ const view: TvView = {
     document.addEventListener("xt:watchlist-changed", onCatalogChanged)
     document.addEventListener("xt:progress-changed", onProgressChanged)
     document.addEventListener("xt:recents-changed", onCatalogChanged)
+    for (const eventName of CATEGORY_PREFS_EVENTS) document.addEventListener(eventName, onCatalogChanged)
     document.addEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
     document.addEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
     document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
@@ -1792,6 +1799,7 @@ const view: TvView = {
       document.removeEventListener("xt:watchlist-changed", onCatalogChanged)
       document.removeEventListener("xt:progress-changed", onProgressChanged)
       document.removeEventListener("xt:recents-changed", onCatalogChanged)
+      for (const eventName of CATEGORY_PREFS_EVENTS) document.removeEventListener(eventName, onCatalogChanged)
       document.removeEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
       document.removeEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)

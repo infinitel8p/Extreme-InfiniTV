@@ -1,6 +1,7 @@
 // Shared TV grid view for /tv/movies and /tv/series: cache-first catalog paint,
 // category/genre + query + hide-watched + sort filtering, row-windowed grid.
 
+import { categoryVisibleFor } from "@/scripts/lib/category-visibility.ts"
 import { nextPaint, takeLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, getMergedEntries, entryToCreds, loadCreds } from "@/scripts/lib/creds.js"
@@ -32,9 +33,6 @@ import {
   isCompleted,
   getProgress,
   getSeriesWatchedMap,
-  getHiddenCategories,
-  getAllowedCategories,
-  getCategoryMode,
 } from "@/scripts/lib/preferences.js"
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { CANONICAL_GENRES, type GenreId } from "@/scripts/lib/genres.ts"
@@ -618,11 +616,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       }
 
       function isCategoryVisible(playlistId: string, rawName: string): boolean {
-        if (getCategoryMode(playlistId, kind) === "select") {
-          const allowed = getAllowedCategories(playlistId, kind)
-          return !allowed || allowed.size === 0 || allowed.has(rawName)
-        }
-        return !getHiddenCategories(playlistId, kind)?.has(rawName)
+        return categoryVisibleFor(playlistId, kind, rawName)
       }
 
       function genreKeysFor(genreId: GenreId): string[] {

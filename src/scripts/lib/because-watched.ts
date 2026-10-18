@@ -78,6 +78,7 @@ export interface BecauseRowOptions {
   limit?: number
   infoLookup?: (id: number | string) => LocalSimilarInfo | null
   isWatched?: (id: number | string) => boolean
+  isCandidateAllowed?: (candidate: LocalSimilarCandidate) => boolean
 }
 
 // Groups language-prefixed variants of the same title so they dedupe together.
@@ -94,7 +95,7 @@ export function buildBecauseRow(
   catalog: LocalSimilarCandidate[],
   options: BecauseRowOptions = {}
 ): LocalSimilarCandidate[] {
-  const { limit, infoLookup, isWatched } = options
+  const { limit, infoLookup, isWatched, isCandidateAllowed } = options
   const seedEntry = catalog.find((entry) => String(entry.id) === String(seed.id))
   if (!seedEntry) return []
 
@@ -109,6 +110,7 @@ export function buildBecauseRow(
   const candidates = catalog.filter((entry) => {
     if (String(entry.id) === String(seed.id)) return false
     if (isWatched?.(entry.id)) return false
+    if (isCandidateAllowed && !isCandidateAllowed(entry)) return false
     return true
   })
 

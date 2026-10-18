@@ -8,8 +8,10 @@
   import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import { hydrateMergedRows, readMergedRows } from "@/scripts/lib/merged-catalog.ts"
   import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
+  import { filterRowsByCategoryPrefs, CATEGORY_PREFS_EVENTS } from "@/scripts/lib/category-visibility.ts"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
+  import { ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js"
 
   const STRIP_LIMIT = 12
 
@@ -53,12 +55,17 @@
     }
   }
 
+  const visibleRows = (kind) =>
+    filterRowsByCategoryPrefs(readMergedRows(kind).rows, kind, {
+      fallbackCategoryName: t("stream.uncategorized"),
+    })
+
   function buildEntries(wantVod, wantSeries) {
     const vod = wantVod
-      ? readMergedRows("vod").rows.filter((item) => item && item.id && (item.added || 0) > 0)
+      ? visibleRows("vod").filter((item) => item && item.id && (item.added || 0) > 0)
       : []
     const series = wantSeries
-      ? readMergedRows("series").rows.filter((item) => item && item.id && (item.added || 0) > 0)
+      ? visibleRows("series").filter((item) => item && item.id && (item.added || 0) > 0)
       : []
     const merged = [
       ...vod.map((item) => ({ ts: Number(item.added) || 0, kind: "vod", item })),
@@ -72,7 +79,7 @@
 
   async function reload() {
     const generation = ++reloadGeneration
-    const mergedEntries = await getMergedEntries()
+    const [mergedEntries] = await Promise.all([getMergedEntries(), ensurePrefsLoaded()])
     if (generation !== reloadGeneration) return
     if (!mergedEntries.length) {
       entries = []
@@ -120,6 +127,7 @@
       "xt:active-changed": scheduleReload,
       "xt:merged-changed": scheduleReload,
       "xt:catalog-warmed": scheduleReload,
+      ...Object.fromEntries(CATEGORY_PREFS_EVENTS.map((eventName) => [eventName, scheduleReload])),
       [LOCALE_EVENT]: onLocaleChange,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {

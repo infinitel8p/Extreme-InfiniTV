@@ -5,6 +5,7 @@
   import { getMergedEntries } from "@/scripts/lib/creds.js"
   import { hydrateMergedRows, readMergedRows } from "@/scripts/lib/merged-catalog.ts"
   import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
+  import { filterRowsByCategoryPrefs, CATEGORY_PREFS_EVENTS } from "@/scripts/lib/category-visibility.ts"
   import {
     warmupActive,
     CATALOG_WARMED_EVENT,
@@ -12,6 +13,7 @@
   import { fmtImdbRating } from "@/scripts/lib/format.js"
   import { kindLabel } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
+  import { ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js"
 
   const PAGE_SIZE = 200
 
@@ -60,11 +62,16 @@
     return detailHrefFor(kind, id, { playlistId })
   }
 
+  const visibleRows = (kind) =>
+    filterRowsByCategoryPrefs(readMergedRows(kind).rows, kind, {
+      fallbackCategoryName: t("stream.uncategorized"),
+    })
+
   let reloadGeneration = 0
 
   async function reload() {
     const generation = ++reloadGeneration
-    const mergedEntries = await getMergedEntries()
+    const [mergedEntries] = await Promise.all([getMergedEntries(), ensurePrefsLoaded()])
     if (generation !== reloadGeneration) return
     if (!mergedEntries.length) {
       merged = []
@@ -73,11 +80,11 @@
     }
 
     const buildMerged = () => {
-      const vod = readMergedRows("vod")
-        .rows.filter((item) => item && item.id && (item.added || 0) > 0)
+      const vod = visibleRows("vod")
+        .filter((item) => item && item.id && (item.added || 0) > 0)
         .map((item) => ({ ts: Number(item.added) || 0, kind: "vod", item }))
-      const series = readMergedRows("series")
-        .rows.filter((item) => item && item.id && (item.added || 0) > 0)
+      const series = visibleRows("series")
+        .filter((item) => item && item.id && (item.added || 0) > 0)
         .map((item) => ({ ts: Number(item.added) || 0, kind: "series", item }))
       merged = [...vod, ...series].sort(
         (firstRow, secondRow) => secondRow.ts - firstRow.ts
@@ -123,6 +130,7 @@
       "xt:active-changed": reload,
       "xt:merged-changed": reload,
       [CATALOG_WARMED_EVENT]: reload,
+      ...Object.fromEntries(CATEGORY_PREFS_EVENTS.map((eventName) => [eventName, reload])),
       [LOCALE_EVENT]: onLocale,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {

@@ -5,6 +5,7 @@
 // EPG. The four pages used to each carry ~250 lines of near-identical code -
 // see `git log -- src/scripts/{stream,movies,series,epg}` if you need the
 // pre-extraction versions.
+import { categoryPassesPrefs } from "@/scripts/lib/category-visibility.ts"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { matchesNormQuery, normalize, parseSearchQuery, scoreNormMatch, type SearchToken } from "@/scripts/lib/text.js"
@@ -230,13 +231,14 @@ export function mountCategoryPicker(
   const categoryPassesFilter = (value: string): boolean => {
     const parsed = parseMergedCategoryKey(value, opts.getActivePlaylistId())
     if (!parsed) return true
-    const mode = categoryMode()
-    if (mode === "select") {
-      const allowed = allowedSet(parsed.playlistId)
-      if (allowed.size === 0) return true
-      return allowed.has(parsed.name)
-    }
-    return !hiddenSet(parsed.playlistId).has(parsed.name)
+    return categoryPassesPrefs(
+      {
+        mode: categoryMode(),
+        hidden: hiddenSet(parsed.playlistId),
+        allowed: allowedSet(parsed.playlistId),
+      },
+      parsed.name
+    )
   }
 
   const buildCategoryRows = (items: CategoryPickerItem[]): MergedCategoryRow[] => {

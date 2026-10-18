@@ -82,6 +82,7 @@ import {
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { enrichmentNeedsFill, parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
+import { categoryNameOf, categoryVisibleFor } from "@/scripts/lib/category-visibility.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
@@ -612,6 +613,8 @@ async function enrichMovieDetailFromTmdb(requestId) {
       sourcePrefix: parseNamePrefix(movie.name).tag,
       preferredTags: effectivePreferredTags(getContentLanguage(), getActiveLocale()),
       groupKeyForEntry: groupKeyForCatalog(catalog),
+      isCandidateAllowed: (candidate) =>
+        categoryVisibleFor(detailPlaylistId, "vod", categoryNameOf(candidate, t("stream.uncategorized"))),
     })
     if (matches.length) {
       renderSimilar(matches)

@@ -15,6 +15,7 @@ import {
 import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live-catalog.ts"
 import { normalize } from "@/scripts/lib/text.js"
+import { filterRowsByCategoryPrefs, CATEGORY_PREFS_EVENTS, type CategoryPrefsKind } from "@/scripts/lib/category-visibility.ts"
 import { searchCatalog, SYNC_THRESHOLD } from "@/scripts/tv/catalog-filter-client"
 import { kindLabel } from "@/scripts/lib/kinds.ts"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
@@ -479,17 +480,24 @@ const view: TvView = {
       scheduleSearch(value)
     }
 
+    function visibleRows<Row extends { category?: string | null }>(rows: Row[], kind: CategoryPrefsKind): Row[] {
+      return filterRowsByCategoryPrefs(rows as Array<Row & { playlistId?: string }>, kind, {
+        playlistIdOf: (row) => row.playlistId || activePlaylistId,
+        fallbackCategoryName: t("stream.uncategorized"),
+      })
+    }
+
     function rebuildIndex(): void {
       if (isMerged) {
-        channels = withNorms(readMergedRows("live").rows as LiveRow[], true)
-        movies = withNorms(readMergedRows("vod").rows as CatalogRow[])
-        series = withNorms(readMergedRows("series").rows as CatalogRow[])
+        channels = withNorms(visibleRows(readMergedRows("live").rows as LiveRow[], "live"), true)
+        movies = withNorms(visibleRows(readMergedRows("vod").rows as CatalogRow[], "vod"))
+        series = withNorms(visibleRows(readMergedRows("series").rows as CatalogRow[], "series"))
         indexReady = true
         return
       }
-      channels = withNorms(readCachedLiveChannels(activePlaylistId) as LiveRow[], true)
-      movies = withNorms((getCached(activePlaylistId, "vod")?.data || []) as CatalogRow[])
-      series = withNorms((getCached(activePlaylistId, "series")?.data || []) as CatalogRow[])
+      channels = withNorms(visibleRows(readCachedLiveChannels(activePlaylistId) as LiveRow[], "live"), true)
+      movies = withNorms(visibleRows((getCached(activePlaylistId, "vod")?.data || []) as CatalogRow[], "vod"))
+      series = withNorms(visibleRows((getCached(activePlaylistId, "series")?.data || []) as CatalogRow[], "series"))
       indexReady = true
     }
 
@@ -643,6 +651,12 @@ const view: TvView = {
       prewarmGroupingIndexes()
     }
 
+    function onCategoryPrefsChanged(): void {
+      if (!indexReady) return
+      rebuildIndex()
+      void runSearch(inputEl.value)
+    }
+
     inputEl.addEventListener("input", () => onInputChanged(inputEl.value))
     recentClear.addEventListener("click", () => clearRecentSearches(activePlaylistId))
 
@@ -650,6 +664,7 @@ const view: TvView = {
     document.addEventListener(EVT_SEARCH_RECENT_CHANGED, onRecentChanged)
     document.addEventListener(LOCALE_EVENT, onLocaleChanged)
     document.addEventListener("xt:active-changed", onActiveChanged)
+    for (const eventName of CATEGORY_PREFS_EVENTS) document.addEventListener(eventName, onCategoryPrefsChanged)
     document.addEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
     document.addEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
 
@@ -664,6 +679,7 @@ const view: TvView = {
       document.removeEventListener(EVT_SEARCH_RECENT_CHANGED, onRecentChanged)
       document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
       document.removeEventListener("xt:active-changed", onActiveChanged)
+      for (const eventName of CATEGORY_PREFS_EVENTS) document.removeEventListener(eventName, onCategoryPrefsChanged)
       document.removeEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
       document.removeEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
       channelsRail?.destroy()

@@ -15,6 +15,7 @@
     EVT_SEARCH_RECENT_CHANGED,
   } from "@/scripts/lib/preferences.js"
   import { warmupActive } from "@/scripts/lib/catalog.js"
+  import { filterRowsByCategoryPrefs, CATEGORY_PREFS_EVENTS } from "@/scripts/lib/category-visibility.ts"
   import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import {
     loadProgrammes,
@@ -187,19 +188,28 @@
     refreshRecentSearches()
     const playlistIds = mergedEntries.length ? mergedEntries.map((entry) => entry._id) : [active._id]
 
+    const visibleIn = (rows, kind, playlistId) =>
+      filterRowsByCategoryPrefs(rows, kind, {
+        playlistIdOf: () => playlistId,
+        fallbackCategoryName: t("stream.uncategorized"),
+      })
+
     const buildIndex = async () => {
       const items = []
       const liveByPlaylist = []
       let activeCold = false
       for (const playlistId of playlistIds) {
-        const liveData = readCachedLiveChannels(playlistId)
-        const vodData = getCached(playlistId, "vod")?.data || []
-        const seriesData = getCached(playlistId, "series")?.data || []
+        const liveRaw = readCachedLiveChannels(playlistId)
+        const vodRaw = getCached(playlistId, "vod")?.data || []
+        const seriesRaw = getCached(playlistId, "series")?.data || []
+        const liveData = visibleIn(liveRaw, "live", playlistId)
+        const vodData = visibleIn(vodRaw, "vod", playlistId)
+        const seriesData = visibleIn(seriesRaw, "series", playlistId)
         liveByPlaylist.push({ playlistId, liveData })
         if (playlistId === active._id) {
           rawVodData = vodData
           rawSeriesData = seriesData
-          activeCold = !liveData.length && !vodData.length && !seriesData.length
+          activeCold = !liveRaw.length && !vodRaw.length && !seriesRaw.length
         }
 
         for (const channel of liveData) {
@@ -731,6 +741,7 @@
     document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
     document.addEventListener("xt:active-changed", onActiveChanged)
     document.addEventListener("xt:merged-changed", onMergedChanged)
+    for (const eventName of CATEGORY_PREFS_EVENTS) document.addEventListener(eventName, onWarmed)
     document.addEventListener(LOCALE_EVENT, onLocale)
     document.addEventListener(SEARCH_VIEW_EVENT, onSearchView)
     document.addEventListener(EVT_SEARCH_RECENT_CHANGED, onSearchRecentChanged)
@@ -746,6 +757,7 @@
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.removeEventListener("xt:active-changed", onActiveChanged)
       document.removeEventListener("xt:merged-changed", onMergedChanged)
+      for (const eventName of CATEGORY_PREFS_EVENTS) document.removeEventListener(eventName, onWarmed)
       document.removeEventListener(LOCALE_EVENT, onLocale)
       document.removeEventListener(SEARCH_VIEW_EVENT, onSearchView)
       document.removeEventListener(EVT_SEARCH_RECENT_CHANGED, onSearchRecentChanged)

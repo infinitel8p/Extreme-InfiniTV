@@ -20,6 +20,8 @@
   import { cleanProviderTitle } from "@/scripts/lib/tmdb-match.ts"
   import { pickBecauseSeedPool, seedKey, pickNextSeed, buildBecauseRow } from "@/scripts/lib/because-watched.ts"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
+  import { ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js"
+  import { categoryNameOf, categoryVisibleFor, CATEGORY_PREFS_EVENTS } from "@/scripts/lib/category-visibility.ts"
 
   const SEED_KEY_PREFIX = "xt_because_seed:"
 
@@ -131,7 +133,7 @@
   }
 
   async function reload() {
-    const active = await getActiveEntry()
+    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
     const token = ++requestToken
     if (!active) {
       entries = []
@@ -214,7 +216,17 @@
         if (token !== requestToken) return null
         isWatched = (id) => watchedSeriesIds.has(Number(id))
       }
-      return buildBecauseRow(candidateSeed, catalog, { limit: 12, infoLookup, isWatched })
+      return buildBecauseRow(candidateSeed, catalog, {
+        limit: 12,
+        infoLookup,
+        isWatched,
+        isCandidateAllowed: (candidate) =>
+          categoryVisibleFor(
+            seedPlaylistId,
+            candidateSeed.kind,
+            categoryNameOf(candidate, t("stream.uncategorized"))
+          ),
+      })
     }
 
     // The candidate cycle is deterministic up front (pickNextSeed only depends on pool + key),
@@ -280,6 +292,7 @@
       "xt:merged-changed": onActiveChanged,
       "xt:catalog-warmed": scheduleReload,
       "xt:progress-changed": scheduleReload,
+      ...Object.fromEntries(CATEGORY_PREFS_EVENTS.map((eventName) => [eventName, scheduleReload])),
       [LOCALE_EVENT]: onLocaleChange,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
