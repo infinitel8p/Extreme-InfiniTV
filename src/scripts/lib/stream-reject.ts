@@ -46,3 +46,17 @@ export function isTransientRejection(input: { errorDetail?: string | null; httpS
   const status = input.httpStatus ?? parseHttpStatusFromDetail(input.errorDetail)
   return typeof status === "number" && TRANSIENT_REJECTION_STATUSES.has(status)
 }
+
+export const RECENT_RETURN_WINDOW_MS = 15_000
+export const RECENT_RETURN_RETRY_DELAYS_MS = [2000, 3000, 5000]
+
+// XUI panels keep the old session briefly and 403 a quick return.
+export function isRecentReturnRejection(input: {
+  status?: number | null
+  msSinceLeft?: number | null
+  windowMs?: number
+}): boolean {
+  const { status, msSinceLeft, windowMs = RECENT_RETURN_WINDOW_MS } = input
+  if (status !== 403) return false
+  return typeof msSinceLeft === "number" && Number.isFinite(msSinceLeft) && msSinceLeft >= 0 && msSinceLeft < windowMs
+}

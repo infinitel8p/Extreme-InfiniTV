@@ -6,6 +6,8 @@ import {
   isProviderPageDetail,
   shouldRepinMirror,
   isTransientRejection,
+  isRecentReturnRejection,
+  RECENT_RETURN_RETRY_DELAYS_MS,
 } from "../src/scripts/lib/stream-reject"
 
 describe("REJECTION_STATUSES", () => {
@@ -132,5 +134,37 @@ describe("isTransientRejection", () => {
 describe("isProviderRejection with the provider-page detail", () => {
   it("stays false, since a body-only signal never warrants a mirror hop", () => {
     expect(isProviderRejection({ errorDetail: "unrecognized file format" })).toBe(false)
+  })
+})
+
+describe("isRecentReturnRejection", () => {
+  it("is true for a 403 inside the window", () => {
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: 3000 })).toBe(true)
+  })
+
+  it("is false for a 403 outside the window or at the boundary", () => {
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: 20000 })).toBe(false)
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: 15000 })).toBe(false)
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: 14999 })).toBe(true)
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: 500, windowMs: 400 })).toBe(false)
+  })
+
+  it("is false when the channel was not recently left", () => {
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: undefined })).toBe(false)
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: null })).toBe(false)
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: Number.NaN })).toBe(false)
+  })
+
+  it("is false for a negative msSinceLeft", () => {
+    expect(isRecentReturnRejection({ status: 403, msSinceLeft: -1 })).toBe(false)
+  })
+
+  it("leaves other statuses to the transient path", () => {
+    expect(isRecentReturnRejection({ status: 458, msSinceLeft: 1000 })).toBe(false)
+    expect(isRecentReturnRejection({ status: null, msSinceLeft: 1000 })).toBe(false)
+  })
+
+  it("exposes an increasing retry schedule", () => {
+    expect(RECENT_RETURN_RETRY_DELAYS_MS).toEqual([2000, 3000, 5000])
   })
 })

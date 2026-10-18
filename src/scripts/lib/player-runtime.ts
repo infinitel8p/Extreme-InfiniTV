@@ -1256,6 +1256,7 @@ function createTauriHlsLoaderClass(
 
     destroy() {
       this.callbacks = null
+      this.aborted = true
       this.abortInternal()
       this.context = null
     }

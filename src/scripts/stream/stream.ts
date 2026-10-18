@@ -46,6 +46,9 @@ import {
   isProviderPageDetail,
   shouldRepinMirror,
   isTransientRejection,
+  isRecentReturnRejection,
+  parseHttpStatusFromDetail,
+  RECENT_RETURN_RETRY_DELAYS_MS,
 } from "@/scripts/lib/stream-reject.ts"
 import { normalize, parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.js"
 import { mapXtreamLiveRows } from "@/scripts/lib/catalog-mappers.js"
@@ -2463,6 +2466,8 @@ const STALL_AUTO_TUNE_MS = 30_000
 const BUFFERING_GRACE_MS = 350
 const ERROR_AUTO_RETRY_MS = 1500
 const REJECTION_RETRY_DELAYS_MS = [2000, 4000, 8000]
+const CHANNEL_LEFT_MAX_ENTRIES = 8
+const channelLeftAtMs = new Map<string, number>()
 const TIMESHIFT_CHIP_UPDATE_MS = 1000
 const TIMESHIFT_CHIP_LIVE_THRESHOLD_MS = 15_000
 const TIMESHIFT_CHIP_IDLE_MS = 3000
@@ -2586,22 +2591,24 @@ function remountFromContext(ctx) {
 }
 
 /** Same-src retry (or give-up) path; transient rejections get a backoff budget first. */
-function scheduleSameSrcRetry(ctx, rejection = null) {
+function scheduleSameSrcRetry(ctx, rejection = null, recentReturn = false) {
   const errorDetail = rejection?.errorDetail ?? vjs?.codecInfo?.()?.errorDetail ?? null
-  if (ctx.isLive && !ctx.audioProxied && isTransientRejection(rejection ?? { errorDetail })) {
+  if (ctx.isLive && !ctx.audioProxied && (recentReturn || isTransientRejection(rejection ?? { errorDetail }))) {
+    const delays = recentReturn ? RECENT_RETURN_RETRY_DELAYS_MS : REJECTION_RETRY_DELAYS_MS
     const attempt = ctx.rejectionRetries ?? 0
-    if (attempt < REJECTION_RETRY_DELAYS_MS.length) {
+    if (attempt < delays.length) {
       // shaka/mpv can fire more than one error per rejection.
       if (ctx.rejectionRetryTimer) return
       ctx.rejectionRetries = attempt + 1
       const seqAtRetry = ctx.seq
-      toast({ title: t("stream.error.providerBusyRetrying"), duration: REJECTION_RETRY_DELAYS_MS[attempt] })
+      if (recentReturn) log.info("[xt:livetv] 403 on quick return - retrying", { streamId: ctx.streamId, attempt: attempt + 1 })
+      toast({ title: t("stream.error.providerBusyRetrying"), duration: delays[attempt] })
       ctx.rejectionRetryTimer = setTimeout(() => {
         ctx.rejectionRetryTimer = null
         if (seqAtRetry !== playSeq) return
         if (isCastRoutingActive() || externalPlaybackActive) return
         remountFromContext(ctx)
-      }, REJECTION_RETRY_DELAYS_MS[attempt])
+      }, delays[attempt])
       return
     }
   }
@@ -2837,6 +2844,7 @@ async function mountEmbeddedPlayer(backend, opts) {
         log.debug("[xt:livetv] first frame", `channel=${lastPlayContext.streamId} elapsedMs=${Math.round(performance.now() - lastPlayContext.startedAtMs)}`)
       }
       lastPlayContext.started = true
+      channelLeftAtMs.delete(lastPlayContext.channelKey)
       if (lastPlayContext.audioProxied) {
         rememberAudioTranscodeChannel(lastPlayContext.playlistId, String(lastPlayContext.streamId))
       }
@@ -2957,6 +2965,19 @@ async function mountEmbeddedPlayer(backend, opts) {
     clearDeadAudioWatchdog()
 
     const httpStatus = parseHttpStatusPrefix(errorDetail)
+    const errorStatus = httpStatus ?? parseHttpStatusFromDetail(errorDetail)
+    if (ctx.recentReturn === undefined && errorStatus === 403) {
+      const leftAtMs = channelLeftAtMs.get(ctx.channelKey)
+      ctx.recentReturn = isRecentReturnRejection({
+        status: errorStatus,
+        msSinceLeft: leftAtMs == null ? null : Date.now() - leftAtMs,
+      })
+    }
+    const recentReturn = !!ctx.recentReturn && errorStatus === 403 && ctx.isLive && !ctx.audioProxied
+    if (recentReturn) {
+      scheduleSameSrcRetry(ctx, { errorDetail, httpStatus }, true)
+      return
+    }
     const canTryMirrorHop =
       ctx.isLive &&
       !ctx.audioProxied &&
@@ -4735,6 +4756,7 @@ async function play(target, reason = "user") {
   const name = target.name
   const playlistId = target.playlistId || activePlaylistId
   const key = channelKey(target)
+  const previousCtx = lastPlayContext
   // Every tune's trigger reaches the log file, so sessions reconstruct from it.
   log.info("[xt:livetv] tune", { streamId, playlistId, name: name || null, reason })
   if (reason === "user") {
@@ -5041,6 +5063,11 @@ async function play(target, reason = "user") {
   if (playerWrap) qualityChipDetach = attachQualityChip(playerWrap, player)
   await applyStreamHeaders(channelHeaders)
   const seq = ++playSeq
+  if (previousCtx?.isLive && previousCtx.channelKey !== key) {
+    channelLeftAtMs.delete(previousCtx.channelKey)
+    channelLeftAtMs.set(previousCtx.channelKey, Date.now())
+    while (channelLeftAtMs.size > CHANNEL_LEFT_MAX_ENTRIES) channelLeftAtMs.delete(channelLeftAtMs.keys().next().value)
+  }
   lastPlayContext = {
     streamId,
     playlistId,
