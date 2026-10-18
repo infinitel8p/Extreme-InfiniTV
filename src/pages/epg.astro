@@ -107,6 +107,15 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconChevronLeft, IconChevr
 				<IconLink aria-hidden="true" stroke={2} class="size-4" />
 				<span data-i18n="epg.map.openDialog" class="hidden sm:inline">Map channels</span>
 			</button>
+			<div class="w-full sm:w-auto sm:flex-1 sm:min-w-56 sm:max-w-sm sm:ms-auto">
+				<SearchInput
+					id="epg-search"
+					label="Search programmes"
+					placeholder="Search programmes…"
+					labelKey="epg.search.label"
+					placeholderKey="epg.search.placeholder"
+				/>
+			</div>
 		</section>
 
 		<!-- Status message (skeleton / error text) -->
@@ -139,6 +148,15 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconChevronLeft, IconChevr
 			<!-- Body -->
 			<div id="epg-body" class="relative">
 			</div>
+		</section>
+
+		<!-- Programme search results (replaces the grid while a query is active) -->
+		<section
+			id="epg-search-results"
+			aria-label="Programme search results"
+			data-i18n-attr="aria-label:epg.search.results"
+			class="hidden flex-1 min-h-0 overflow-auto custom-scroll
+				rounded-2xl border border-line bg-bg">
 		</section>
 
 		<CategoryPickerDialog idPrefix="epg-category-picker" showSyncToggle={true} />
