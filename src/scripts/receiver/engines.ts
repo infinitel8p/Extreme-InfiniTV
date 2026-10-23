@@ -583,7 +583,7 @@ export function createEmbeddedReceiverEngine(
   function wantedBackendFor(descriptor: CastDescriptorV1): PlayerBackend {
     let backend = getPlayerBackend() as PlayerBackend
     // Local playback here would be an unattended child process.
-    if (backend === "mpv" || backend === "vlc") backend = "artplayer"
+    if (backend === "mpv" || backend === "vlc" || backend === "iina") backend = "artplayer"
     // Its own control bar only makes sense when the caller owns input.
     if (backend === "mpv-embedded" && !engineOptions.localInput) backend = "artplayer"
     // mpv has no ClearKey support.

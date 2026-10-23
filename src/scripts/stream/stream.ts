@@ -4565,7 +4565,7 @@ function refreshDiscordPresenceProgramme() {
 
 function pickConfiguredExternal() {
   const pref = getExternalPlayerPref()
-  if ((pref === "mpv" || pref === "vlc") && getPlayerPath(pref)) return pref
+  if ((pref === "mpv" || pref === "vlc" || pref === "iina") && getPlayerPath(pref)) return pref
   for (const kind of EXTERNAL_PLAYER_BACKENDS) {
     if (getPlayerPath(kind)) return kind
   }
@@ -4853,7 +4853,7 @@ async function play(target, reason = "user") {
   if (!isHttpSrc && src) {
     const selectedBackend = getPlayerBackend()
     const backendIsExternal =
-      selectedBackend === "mpv" || selectedBackend === "vlc"
+      selectedBackend === "mpv" || selectedBackend === "vlc" || selectedBackend === "iina"
     if (!backendIsExternal) {
       void stopAudioTranscode()
       const externalKind =
@@ -4978,9 +4978,9 @@ async function play(target, reason = "user") {
   const channelHeaders = streamHeadersById.get(key) || null
   const channelDrm = streamDrmById.get(key) || null
   const tuneStartedAtMs = performance.now()
-  log.debug("[xt:livetv] tune start", `channel=${streamId} backend=${backend} container=${credsFor(playlistId).liveContainer || "m3u8"} mode=live external=${backend === "mpv" || backend === "vlc"}`)
+  log.debug("[xt:livetv] tune start", `channel=${streamId} backend=${backend} container=${credsFor(playlistId).liveContainer || "m3u8"} mode=live external=${backend === "mpv" || backend === "vlc" || backend === "iina"}`)
 
-  if (backend === "mpv" || backend === "vlc") {
+  if (backend === "mpv" || backend === "vlc" || backend === "iina") {
     void stopAudioTranscode()
     try {
       await launchExternalLive(backend, src, channelHeaders)
@@ -5337,8 +5337,8 @@ async function playCatchup(channel, opts) {
 
   const backend = getPlayerBackend()
   const catchupTuneStartedAtMs = performance.now()
-  log.debug("[xt:livetv] tune start", `channel=${channel.id} backend=${backend} mode=catchup kind=${kind} external=${backend === "mpv" || backend === "vlc"}`)
-  if (backend === "mpv" || backend === "vlc") {
+  log.debug("[xt:livetv] tune start", `channel=${channel.id} backend=${backend} mode=catchup kind=${kind} external=${backend === "mpv" || backend === "vlc" || backend === "iina"}`)
+  if (backend === "mpv" || backend === "vlc" || backend === "iina") {
     toastError(kind === "timeshift" ? t("timeshift.seekFailed") : t("catchup.failed"))
     return false
   }
@@ -5840,7 +5840,7 @@ function appendExternalLaunchButton(parent, channel, src, name) {
       externalPlaybackActive = true
       externalPlaybackKind = kind
       // The embedded surface is empty now; show the "Now playing in <PLAYER>" state instead.
-      if (kind === "mpv" || kind === "vlc") {
+      if (kind === "mpv" || kind === "vlc" || kind === "iina") {
         document.getElementById("player")?.setAttribute("hidden", "")
         showExternalPlayerEmptyState(kind, name)
       }

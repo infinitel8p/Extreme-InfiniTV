@@ -1035,7 +1035,7 @@ async function startPlayback(options = {}) {
   let backend = getPlayerBackend()
   log.debug("[xt:movie-detail] playback source", `id=${movie.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)
 
-  if (backend === "mpv" || backend === "vlc") {
+  if (backend === "mpv" || backend === "vlc" || backend === "iina") {
     try {
       const externalSrc = (await getLocalDownloadPath(detailSrc)) || playSrc
       await launchExternalPlayback(backend, externalSrc, resumePos, movie.id)

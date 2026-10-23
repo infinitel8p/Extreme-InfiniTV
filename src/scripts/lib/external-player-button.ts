@@ -74,7 +74,7 @@ function configuredExternalKinds(): ExternalPlayerKind[] {
 
 function pickPreferredExternal(): ExternalPlayerKind | null {
   const pref = getExternalPlayerPref()
-  if ((pref === "mpv" || pref === "vlc") && getPlayerPath(pref)) return pref
+  if ((pref === "mpv" || pref === "vlc" || pref === "iina") && getPlayerPath(pref)) return pref
   return configuredExternalKinds()[0] || null
 }
 
@@ -86,7 +86,7 @@ export function hasAvailableExternalPlayer(): boolean {
   if (androidExternalAvailable) return true
   if (!externalPlayersAvailable) return false
   const backend = getPlayerBackend()
-  if (backend === "mpv" || backend === "vlc") return false
+  if (backend === "mpv" || backend === "vlc" || backend === "iina") return false
   return pickPreferredExternal() !== null
 }
 
@@ -141,7 +141,7 @@ export function setupExternalPlayerButton(
       return
     }
     const backend = getPlayerBackend()
-    if (backend === "mpv" || backend === "vlc") {
+    if (backend === "mpv" || backend === "vlc" || backend === "iina") {
       btn.hidden = true
       return
     }

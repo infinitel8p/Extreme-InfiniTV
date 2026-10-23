@@ -849,7 +849,7 @@ function setExternalBackHintVisible(visible: boolean): void {
 function externalPlaybackBackend(): ExternalPlayerKind | null {
   if (!externalPlayersAvailable) return null
   const backend = getPlayerBackend()
-  return backend === "mpv" || backend === "vlc" ? backend : null
+  return backend === "mpv" || backend === "vlc" || backend === "iina" ? backend : null
 }
 
 // Runs the shared external-session teardown, from a user-initiated stop or the process exiting on its own.
