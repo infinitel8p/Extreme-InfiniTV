@@ -587,6 +587,31 @@ describe("createVodAudioSwitcher async state machine", () => {
     switcher.dispose()
   })
 
+  it("mounts the remux at the session's actual start, falling back to the requested start", async () => {
+    for (const [sessionStart, expectedOffset] of [[38.5, 38.5], [undefined, 42]] as const) {
+      const handle = createFakeHandle()
+      handle.currentTime(42)
+      const { trackDefault, trackA } = makeTracks()
+      startVodAudioRemuxMock.mockResolvedValueOnce({
+        sessionId: "session-offset",
+        playbackUrl: "http://127.0.0.1/live/session-offset",
+        startSeconds: sessionStart,
+      })
+      const switcher = createVodAudioSwitcher({
+        handle: handle as any,
+        originalSrc: "https://host.example/movie.mp4",
+        originalMime: "video/mp4",
+        sourceUrl: "https://host.example/movie.mp4",
+        getKnownDurationSeconds: () => 100,
+        tracks: [trackDefault, trackA],
+      })
+      switcher.source.select("a")
+      await flushMicrotasks()
+      expect(handle.src).toHaveBeenCalledWith(expect.objectContaining({ timelineOffsetSeconds: expectedOffset }))
+      switcher.dispose()
+    }
+  })
+
   it("stops a session that resolves after dispose and mutates no further state", async () => {
     const handle = createFakeHandle()
     const { trackDefault, trackA, trackB } = makeTracks()

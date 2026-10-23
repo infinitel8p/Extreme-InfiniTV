@@ -44,6 +44,11 @@ import {
   type TrackMemoryContext,
 } from "@/scripts/lib/track-memory.ts"
 
+// The old mount clamps pos to its duration while a remux switch is in flight.
+export function shouldWriteProgress(positionSeconds: number, recovering: boolean): boolean {
+  return !recovering && positionSeconds >= 1
+}
+
 type SrcOptions = Parameters<VjsLikeHandle["src"]>[0]
 
 export interface VodMountOptions {
@@ -436,7 +441,8 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
       if (now - lastWriteAt < 5000) return
       const pos = mountedPlayer.currentTime?.() || 0
       const dur = mountedPlayer.duration?.() || 0
-      if (pos < 1) return
+      const recovering = options.getAudioSwitcher()?.isRecovering?.() ?? false
+      if (!shouldWriteProgress(pos, recovering)) return
       lastWriteAt = now
       options.writeProgress(pos, dur)
     })

@@ -1788,6 +1788,11 @@ export function mpegtsRelativeTimestampOffset(nativeOffset: number, timelineOffs
   return nativeOffset - timelineOffset
 }
 
+/** Returns the buffered start to seek to when playback sits before it, else null. */
+export function startupJumpTarget(currentTime: number, bufferedStart: number): number | null {
+  return Number.isFinite(bufferedStart) && currentTime < bufferedStart - 0.1 ? bufferedStart : null
+}
+
 /** Rewraps a SourceBuffer's timestampOffset relative to baseSeconds; mpegts.js re-manages the native absolute value for audio drift. */
 export function defineRelativeTimestampOffset(
   sourceBuffer: { timestampOffset: number },
@@ -1839,6 +1844,7 @@ async function attachMpegts(
   let triedTauriLoader = false
   let durationRetryTimer: ReturnType<typeof setInterval> | null = null
   let offsetWrapTimer: ReturnType<typeof setInterval> | null = null
+  let startupJumpTimer: ReturnType<typeof setInterval> | null = null
 
   const { url: cleanUrl, authorization } = splitUrlAuth(url)
   const playbackUrl = wrapForDnsProxySync(cleanUrl)
@@ -1851,6 +1857,10 @@ async function attachMpegts(
     if (offsetWrapTimer) {
       clearInterval(offsetWrapTimer)
       offsetWrapTimer = null
+    }
+    if (startupJumpTimer) {
+      clearInterval(startupJumpTimer)
+      startupJumpTimer = null
     }
     if (!player) return
     try { player.unload() } catch {}
@@ -1882,7 +1892,6 @@ async function attachMpegts(
       } catch {}
       return true
     }
-    // Wrap before sourceopen when possible: a pre-buffered remux can add its SourceBuffer before a 25ms poll lands.
     if (wrap()) return
     let attempts = 0
     offsetWrapTimer = setInterval(() => {
@@ -1906,15 +1915,21 @@ async function attachMpegts(
     }, 25)
   }
 
-  // An offset mount buffers from the offset while the element sits at 0, and mpegts.js' startup jumper never fires on WebKit.
+  // mpegts.js' startup jumper never fires on WebKit for offset mounts.
   const armStartupJump = () => {
     if (isLive || !((timelineOffsetSeconds as number) > 0)) return
-    const timer = setInterval(() => {
-      if (disposed || !player) return clearInterval(timer)
+    if (startupJumpTimer) clearInterval(startupJumpTimer)
+    startupJumpTimer = setInterval(() => {
+      if (disposed || !player) {
+        clearInterval(startupJumpTimer!)
+        startupJumpTimer = null
+        return
+      }
       if (!videoEl.buffered.length) return
-      clearInterval(timer)
-      const start = videoEl.buffered.start(0)
-      if (videoEl.currentTime < start - 0.1) videoEl.currentTime = start
+      clearInterval(startupJumpTimer!)
+      startupJumpTimer = null
+      const jumpTarget = startupJumpTarget(videoEl.currentTime, videoEl.buffered.start(0))
+      if (jumpTarget !== null) videoEl.currentTime = jumpTarget
     }, 250)
   }
 
