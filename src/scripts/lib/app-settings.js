@@ -19,10 +19,13 @@ const KEY_NETWORK_TIMEOUT_S = "xt_network_timeout_s"
 const KEY_PLAYER_BACKEND = "xt_player_backend"
 const KEY_PLAYER_PATH_MPV = "xt_player_path_mpv"
 const KEY_PLAYER_PATH_VLC = "xt_player_path_vlc"
+const KEY_PLAYER_PATH_IINA = "xt_player_path_iina"
 const KEY_PLAYER_ARGS_MPV = "xt_player_args_mpv"
 const KEY_PLAYER_ARGS_VLC = "xt_player_args_vlc"
+const KEY_PLAYER_ARGS_IINA = "xt_player_args_iina"
 const KEY_PLAYER_REUSE_MPV = "xt_player_reuse_mpv"
 const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
+const KEY_PLAYER_REUSE_IINA = "xt_player_reuse_iina"
 const KEY_MPV_HWDEC = "xt_mpv_hwdec"
 const KEY_MPV_QUALITY = "xt_mpv_quality"
 const KEY_MPV_EXTRA_ARGS = "xt_mpv_extra_args"
@@ -127,7 +130,7 @@ export const NETWORK_TIMEOUT_EVENT = "xt:network-timeout-changed"
 export const DNS_EVENT = "xt:dns-changed"
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
 export const MAX_DOWNLOAD_CONCURRENCY = 4
-export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv-embedded", "mpv", "vlc"]
+export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv-embedded", "mpv", "vlc", "iina"]
 export const DEFAULT_PLAYER_BACKEND = "artplayer"
 
 // mpv-embedded only ships on Windows desktop (Rust commands + sidecar are Windows-only).
@@ -136,8 +139,8 @@ export function isWindowsDesktopSync() {
   const isTauriRuntime = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__
   return isTauriRuntime && /Windows/i.test(navigator.userAgent || "")
 }
-export const EXTERNAL_PLAYER_BACKENDS = ["mpv", "vlc"]
-export const EXTERNAL_PLAYER_PREF_VALUES = ["mpv", "vlc", "ask"]
+export const EXTERNAL_PLAYER_BACKENDS = ["mpv", "vlc", "iina"]
+export const EXTERNAL_PLAYER_PREF_VALUES = ["mpv", "vlc", "iina", "ask"]
 export const UA_PRESETS = [
   { id: "default", label: "Default (browser/WebView)", value: "" },
   {
@@ -783,6 +786,10 @@ export function getPlayerBackend() {
   if (backend === "mpv-embedded" && !isWindowsDesktopSync()) {
     return DEFAULT_PLAYER_BACKEND
   }
+  // IINA is macOS-only; a backup restored on another OS falls back the same way.
+  if (backend === "iina" && !(typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent || ""))) {
+    return DEFAULT_PLAYER_BACKEND
+  }
   return backend
 }
 
@@ -798,18 +805,21 @@ export function setPlayerBackend(backend) {
 function pathKeyFor(kind) {
   if (kind === "mpv") return KEY_PLAYER_PATH_MPV
   if (kind === "vlc") return KEY_PLAYER_PATH_VLC
+  if (kind === "iina") return KEY_PLAYER_PATH_IINA
   return ""
 }
 
 function argsKeyFor(kind) {
   if (kind === "mpv") return KEY_PLAYER_ARGS_MPV
   if (kind === "vlc") return KEY_PLAYER_ARGS_VLC
+  if (kind === "iina") return KEY_PLAYER_ARGS_IINA
   return ""
 }
 
 function reuseKeyFor(kind) {
   if (kind === "mpv") return KEY_PLAYER_REUSE_MPV
   if (kind === "vlc") return KEY_PLAYER_REUSE_VLC
+  if (kind === "iina") return KEY_PLAYER_REUSE_IINA
   return ""
 }
 

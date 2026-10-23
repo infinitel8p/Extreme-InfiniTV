@@ -395,7 +395,8 @@ export function buildVlcArgs(input: ArgvInput): string[] {
 }
 
 export function buildArgsFor(kind: ExternalPlayerKind, input: ArgvInput): string[] {
-  return kind === "mpv" ? buildMpvArgs(input) : buildVlcArgs(input)
+  // IINA embeds mpv; the Rust launcher rewrites these to iina-cli's --mpv- form.
+  return kind === "vlc" ? buildVlcArgs(input) : buildMpvArgs(input)
 }
 
 // ---------------------------------------------------------------------------
@@ -846,18 +847,19 @@ export async function openStreamInAndroidPackage(
   }
 }
 
-export async function discoverExternalPlayers(): Promise<{ mpv: string[]; vlc: string[] }> {
+export async function discoverExternalPlayers(): Promise<{ mpv: string[]; vlc: string[]; iina: string[] }> {
   const invoke = await getInvoke()
-  if (!invoke) return { mpv: [], vlc: [] }
+  if (!invoke) return { mpv: [], vlc: [], iina: [] }
   try {
     const result = (await invoke("discover_external_players", {})) as {
       mpv?: string[]
       vlc?: string[]
+      iina?: string[]
     }
-    return { mpv: result?.mpv || [], vlc: result?.vlc || [] }
+    return { mpv: result?.mpv || [], vlc: result?.vlc || [], iina: result?.iina || [] }
   } catch (error) {
     log.warn("[xt:player] discover_external_players failed:", error)
-    return { mpv: [], vlc: [] }
+    return { mpv: [], vlc: [], iina: [] }
   }
 }
 
@@ -883,7 +885,8 @@ export async function detectPlayer(
       ),
     }
   }
-  const detectMode = kind === "vlc" ? "exists" : "detect"
+  // iina-cli has no --version; running it would open IINA.
+  const detectMode = kind === "mpv" ? "detect" : "exists"
   try {
     const result = (await invoke("launch_external_player", {
       path: candidatePath,
@@ -3436,11 +3439,12 @@ function dispatchPlayerFallback(requested: PlayerBackend, used: PlayerBackend): 
 /** Pure backend-availability decision, unit-testable without the platform probes it's normally fed. */
 export function resolveBackendFrom(
   backend: PlayerBackend,
-  context: { isAndroid: boolean; mpvAvailable: boolean; externalAvailable: boolean },
+  context: { isAndroid: boolean; isMacOS: boolean; mpvAvailable: boolean; externalAvailable: boolean },
 ): PlayerBackend {
   if (backend === "artplayer" && context.isAndroid) return "videojs"
   if (backend === "mpv-embedded" && !context.mpvAvailable) return "artplayer"
-  if ((backend === "mpv" || backend === "vlc") && !context.externalAvailable) return "artplayer"
+  if (backend === "iina" && !context.isMacOS) return "artplayer"
+  if ((backend === "mpv" || backend === "vlc" || backend === "iina") && !context.externalAvailable) return "artplayer"
   return backend
 }
 
@@ -3453,7 +3457,7 @@ export async function resolveEffectiveBackend(
     const { mpvEmbeddedAvailable } = await import("@/scripts/lib/mpv-embedded.ts")
     mpvAvailable = await mpvEmbeddedAvailable()
   }
-  return resolveBackendFrom(backend, { isAndroid, mpvAvailable, externalAvailable: externalPlayersAvailable })
+  return resolveBackendFrom(backend, { isAndroid, isMacOS, mpvAvailable, externalAvailable: externalPlayersAvailable })
 }
 
 // ---------------------------------------------------------------------------
@@ -3490,7 +3494,7 @@ export async function mountPlayer(
     dispatchPlayerFallback(backend, "artplayer")
     return mountPlayer(videoEl, "artplayer", options)
   }
-  if (backend === "mpv" || backend === "vlc") {
+  if (backend === "mpv" || backend === "vlc" || backend === "iina") {
     return {
       kind: "external",
       backend,

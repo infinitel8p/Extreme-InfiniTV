@@ -275,14 +275,17 @@ export async function exportAll() {
       playerPaths: {
         mpv: getPlayerPath("mpv"),
         vlc: getPlayerPath("vlc"),
+        iina: getPlayerPath("iina"),
       },
       playerExtraArgs: {
         mpv: getPlayerExtraArgs("mpv"),
         vlc: getPlayerExtraArgs("vlc"),
+        iina: getPlayerExtraArgs("iina"),
       },
       playerReuse: {
         mpv: getPlayerReuseInstance("mpv"),
         vlc: getPlayerReuseInstance("vlc"),
+        iina: getPlayerReuseInstance("iina"),
       },
       tmdbKey: getTmdbApiKey(),
       subsLangDefault: readRawLS("xt_subs_lang_default") || "",

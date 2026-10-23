@@ -269,6 +269,11 @@ fn resolve_app_bundle(path: &str) -> String {
         return path.to_string();
     }
     let macos_dir = p.join("Contents/MacOS");
+    // IINA.app's main binary ignores CLI args; iina-cli is its command-line entry point.
+    let iina_cli = macos_dir.join("iina-cli");
+    if iina_cli.is_file() {
+        return iina_cli.to_string_lossy().into_owned();
+    }
     if let Ok(entries) = std::fs::read_dir(&macos_dir) {
         let files: Vec<_> = entries
             .filter_map(|e| e.ok())
@@ -387,11 +392,39 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
         }
     }
     let resolved = resolve_app_bundle(path);
+    let iina_args;
+    let args = if matches!(Path::new(&resolved).file_name().and_then(|s| s.to_str()), Some("iina-cli" | "iina")) {
+        iina_args = iina_cli_args(args);
+        &iina_args
+    } else {
+        args
+    };
     let mut cmd = build_command(&resolved, args);
     match cmd.spawn() {
         Ok(child) => Ok((child.id(), true)),
         Err(e) => Err(classify_io_error(&e)),
     }
+}
+
+// IINA embeds mpv, so it shares mpv's IPC reuse, track switching and exit watching.
+fn is_mpv_kind(kind: &str) -> bool {
+    kind == "mpv" || kind == "iina"
+}
+
+// iina-cli only forwards mpv options spelled `--mpv-<opt>`, rejects `--mpv-no-<opt>`,
+// and quits right after handing off to IINA unless told to keep running.
+fn iina_cli_args(args: &[String]) -> Vec<String> {
+    let mut out = vec!["--keep-running".to_string(), "--no-stdin".to_string()];
+    for arg in args {
+        out.push(match arg.strip_prefix("--") {
+            Some(opt) => match opt.strip_prefix("no-") {
+                Some(name) if !name.contains('=') => format!("--mpv-{name}=no"),
+                _ => format!("--mpv-{opt}"),
+            },
+            None => arg.clone(),
+        });
+    }
+    out
 }
 
 fn spawn_detect(path: String, mut args: Vec<String>) -> Result<String, String> {
@@ -612,7 +645,7 @@ fn pid_alive(pid: u32) -> bool {
 // ---------------------------------------------------------------------------
 /// Polls `pid` and emits `xt:external-player-exited` when the player dies.
 fn watch_for_exit(app: AppHandle, state: &ExternalPlayerState, kind: &str, pid: u32) {
-    if pid == 0 || (kind != "mpv" && kind != "vlc") {
+    if pid == 0 || (!is_mpv_kind(kind) && kind != "vlc") {
         return;
     }
     if !state.mark_watched_pid(kind, pid) {
@@ -1184,6 +1217,7 @@ fn spawn_mpv_state_observer(app: AppHandle, endpoint: String, session_id: String
 pub struct DiscoveredPlayers {
     pub mpv: Vec<String>,
     pub vlc: Vec<String>,
+    pub iina: Vec<String>,
 }
 
 fn dedupe_preserve_order(candidates: Vec<String>) -> Vec<String> {
@@ -1401,6 +1435,21 @@ pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     filter_existing(dedupe_preserve_order(candidates))
 }
 
+#[cfg(target_os = "macos")]
+fn discover_iina_candidates() -> Vec<String> {
+    let mut candidates = vec!["/Applications/IINA.app/Contents/MacOS/iina-cli".to_string()];
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(format!("{home}/Applications/IINA.app/Contents/MacOS/iina-cli"));
+    }
+    candidates.extend(build_path_candidates(&path_env_dirs(), &["iina"]));
+    filter_existing(dedupe_preserve_order(candidates))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn discover_iina_candidates() -> Vec<String> {
+    Vec::new()
+}
+
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn discover_vlc_candidates() -> Vec<String> {
     Vec::new()
@@ -1415,6 +1464,7 @@ fn discover_external_players_sync() -> DiscoveredPlayers {
     DiscoveredPlayers {
         mpv: discover_mpv_candidates(),
         vlc: discover_vlc_candidates(),
+        iina: discover_iina_candidates(),
     }
 }
 
@@ -1434,7 +1484,7 @@ pub async fn stop_external_player(
     state: State<'_, ExternalPlayerState>,
     kind: String,
 ) -> Result<bool, String> {
-    if kind != "mpv" {
+    if !is_mpv_kind(&kind) {
         return Ok(false);
     }
     let Some(slot) = state.get(&kind) else {
@@ -1468,7 +1518,7 @@ pub async fn external_player_set_property(
     name: String,
     value: Value,
 ) -> Result<(), String> {
-    if kind != "mpv" {
+    if !is_mpv_kind(&kind) {
         return Err("OTHER:set_property only supported for mpv".to_string());
     }
     if !ALLOWED_MPV_SET_PROPERTIES.contains(&name.as_str()) {
@@ -1517,7 +1567,7 @@ async fn launch_mode(
 ) -> Result<Value, String> {
     let reuse = reuse.unwrap_or_default();
     let kind = reuse.kind.clone();
-    let reuse_active = reuse.enabled && !reuse.url.is_empty() && (kind == "mpv" || kind == "vlc");
+    let reuse_active = reuse.enabled && !reuse.url.is_empty() && (is_mpv_kind(&kind) || kind == "vlc");
 
     // Serialize concurrent launches per kind. Without this the
     // "check slot -> spawn -> persist" sequence can interleave between
@@ -1533,7 +1583,7 @@ async fn launch_mode(
         None
     };
 
-    if reuse.enabled && kind == "mpv" && !reuse.url.is_empty() {
+    if reuse.enabled && is_mpv_kind(&kind) && !reuse.url.is_empty() {
         // MPV: drive the existing window via JSON-IPC over its socket / pipe.
         if let Some(slot) = state.get(&kind) {
             let endpoint_alive = pid_alive(slot.pid);
@@ -1648,7 +1698,7 @@ async fn launch_mode(
     }
 
     // Reuse off: mpv still gets an IPC endpoint for the observer, but no --idle=yes.
-    if kind == "mpv" {
+    if is_mpv_kind(&kind) {
         let endpoint = pick_mpv_endpoint();
         let augmented = augment_mpv_args(args.clone(), &endpoint, false);
         let path_for_spawn = path.clone();
@@ -1741,6 +1791,41 @@ mod tests {
         let out = augment_mpv_args(args, "/new/path", false);
         assert!(!out.iter().any(|arg| arg.starts_with("--idle")));
         assert!(out.contains(&"--input-ipc-server=/new/path".to_string()));
+    }
+
+    #[test]
+    fn iina_cli_args_prefixes_mpv_options() {
+        let args = vec![
+            "--no-terminal".to_string(),
+            "--user-agent=UA/1.0".to_string(),
+            "--input-ipc-server=/tmp/s".to_string(),
+            "https://example.com/stream.m3u8".to_string(),
+        ];
+        assert_eq!(
+            iina_cli_args(&args),
+            vec![
+                "--keep-running",
+                "--no-stdin",
+                "--mpv-terminal=no",
+                "--mpv-user-agent=UA/1.0",
+                "--mpv-input-ipc-server=/tmp/s",
+                "https://example.com/stream.m3u8",
+            ]
+        );
+    }
+
+    #[test]
+    fn iina_cli_args_handles_valued_negations_and_bare_flags() {
+        let args = vec![
+            "--no-foo=bar".to_string(),
+            "--fs".to_string(),
+            "--no-border".to_string(),
+            "-v".to_string(),
+        ];
+        assert_eq!(
+            iina_cli_args(&args),
+            vec!["--keep-running", "--no-stdin", "--mpv-no-foo=bar", "--mpv-fs", "--mpv-border=no", "-v"]
+        );
     }
 
     #[test]

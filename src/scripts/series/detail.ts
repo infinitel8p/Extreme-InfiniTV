@@ -1799,7 +1799,7 @@ async function playEpisode(episode, options = {}) {
   let backend = getPlayerBackend()
   log.debug("[xt:series-detail] playback source", `id=${episode.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)
 
-  if (backend === "mpv" || backend === "vlc") {
+  if (backend === "mpv" || backend === "vlc" || backend === "iina") {
     try {
       const externalSrc = (await getLocalDownloadPath(src)) || playSrc
       await launchExternalPlayback(backend, externalSrc, resumePos, episode)

@@ -54,6 +54,11 @@
   let detectedVlc = $state(readDetectCache("vlc"))
   let statusMpv = $state(readDetectStatus("mpv"))
   let statusVlc = $state(readDetectStatus("vlc"))
+  let pathIina = $state(getPlayerPath("iina"))
+  let argsIina = $state(getPlayerExtraArgs("iina").join("\n"))
+  let reuseIina = $state(getPlayerReuseInstance("iina"))
+  let detectedIina = $state(readDetectCache("iina"))
+  let statusIina = $state(readDetectStatus("iina"))
   let externalPref = $state(getExternalPlayerPref())
   let mpvHwdec = $state(getMpvHwdec())
   let mpvQuality = $state(getMpvQuality())
@@ -62,6 +67,8 @@
   const sandboxed = isDesktopTauriEnv && !externalPlayersAvailable
   // mpv-embedded only ships on Windows desktop (Rust commands + sidecar are Windows-only).
   const mpvEmbeddedAvailable = isDesktopTauriEnv && isWindowsDesktopSync()
+  // IINA is macOS-only.
+  const iinaAvailable = isDesktopTauriEnv && /Mac/i.test(navigator.userAgent || "")
 
   let titleLabel = $state(label("title", "Playback"))
   let videojsLabel = $state(label("backend.videojs", "Video.js"))
@@ -76,6 +83,8 @@
   let artplayerAndroidHelper = $state(label("backend.artplayerAndroidHelper", "Not supported on Android - Video.js is used instead."))
   let mpvHelper = $state(label("backend.mpvHelper", "Best for 4K and HDR."))
   let vlcHelper = $state(label("backend.vlcHelper", "Plays almost any format."))
+  let iinaLabel = $state(label("backend.iina", "IINA (external)"))
+  let iinaHelper = $state(label("backend.iinaHelper", "mpv-based macOS player."))
   let mpvEmbeddedHelper = $state(label("backend.mpvEmbeddedHelper", "Plays almost any format in-app. Requires a restart to switch."))
   let pathLabel = $state(label("pathLabel", "Path"))
   let readyLabel = $state(label("ready", "Ready"))
@@ -160,6 +169,8 @@
     artplayerAndroidHelper = label("backend.artplayerAndroidHelper", "Not supported on Android - Video.js is used instead.")
     mpvHelper = label("backend.mpvHelper", "Best for 4K and HDR.")
     vlcHelper = label("backend.vlcHelper", "Plays almost any format.")
+    iinaLabel = label("backend.iina", "IINA (external)")
+    iinaHelper = label("backend.iinaHelper", "mpv-based macOS player.")
     mpvEmbeddedHelper = label("backend.mpvEmbeddedHelper", "Plays almost any format in-app. Requires a restart to switch.")
     pathLabel = label("pathLabel", "Path")
     readyLabel = label("ready", "Ready")
@@ -203,22 +214,26 @@
 
   function onPathChange(kind, value) {
     if (kind === "mpv") pathMpv = value
+    else if (kind === "iina") pathIina = value
     else pathVlc = value
     setPlayerPath(kind, value)
     writeDetectCache(kind, "")
     writeDetectStatus(kind, "")
     if (kind === "mpv") { detectedMpv = ""; statusMpv = "" }
+    else if (kind === "iina") { detectedIina = ""; statusIina = "" }
     else { detectedVlc = ""; statusVlc = "" }
   }
 
   function onArgsChange(kind, value) {
     if (kind === "mpv") argsMpv = value
+    else if (kind === "iina") argsIina = value
     else argsVlc = value
     setPlayerExtraArgs(kind, value)
   }
 
   function onReuseChange(kind, value) {
     if (kind === "mpv") reuseMpv = value
+    else if (kind === "iina") reuseIina = value
     else reuseVlc = value
     setPlayerReuseInstance(kind, value)
   }
@@ -267,7 +282,7 @@
     }
   }
 
-  let autoDetecting = $state({ mpv: false, vlc: false })
+  let autoDetecting = $state({ mpv: false, vlc: false, iina: false })
   let discoveryRan = false
 
   async function autoDetectFor(kind) {
@@ -300,12 +315,14 @@
       writeDetectCache(kind, version)
       writeDetectStatus(kind, "ok")
       if (kind === "mpv") { detectedMpv = version; statusMpv = "ok" }
+      else if (kind === "iina") { detectedIina = version; statusIina = "ok" }
       else { detectedVlc = version; statusVlc = "ok" }
       toastSuccess(`${kind.toUpperCase()}: ${version}`)
     } else {
       writeDetectCache(kind, "")
       writeDetectStatus(kind, "fail")
       if (kind === "mpv") { detectedMpv = ""; statusMpv = "fail" }
+      else if (kind === "iina") { detectedIina = ""; statusIina = "fail" }
       else { detectedVlc = ""; statusVlc = "fail" }
       surfaceLaunchError(result.error, kind)
     }
@@ -317,11 +334,12 @@
 
   async function autoFillEmptyPaths() {
     if (discoveryRan || !isDesktopTauriEnv || sandboxed) return
-    if (pathMpv && pathVlc) return
+    if (pathMpv && pathVlc && (pathIina || !iinaAvailable)) return
     discoveryRan = true
     const discovered = await discoverExternalPlayers()
     if (!pathMpv && discovered.mpv[0]) onPathChange("mpv", discovered.mpv[0])
     if (!pathVlc && discovered.vlc[0]) onPathChange("vlc", discovered.vlc[0])
+    if (!pathIina && discovered.iina[0]) onPathChange("iina", discovered.iina[0])
   }
 
   onMount(() => {
@@ -597,12 +615,47 @@
         </span>
       {/if}
     </label>
+    {#if iinaAvailable}
+    <label class="player-row">
+      <input
+        type="radio"
+        name="player-backend"
+        value="iina"
+        checked={backend === "iina"}
+        onchange={onBackendChange}
+        aria-labelledby="playback-iina-title"
+        aria-describedby={backend === "iina" ? "playback-iina-helper" : "playback-iina-helper playback-iina-status"}
+        class="mt-0.5"
+      />
+      <span class="flex flex-col gap-0.5 min-w-0 flex-1">
+        <span id="playback-iina-title" class="player-row__title">{iinaLabel}</span>
+        <span id="playback-iina-helper" class="text-xs text-fg-3">{iinaHelper}</span>
+      </span>
+      {#if backend === "iina"}
+        <span class="active-pill" aria-hidden="true">{activeLabel}</span>
+      {:else}
+        <span class="status-meta">
+          <span
+            id="playback-iina-status"
+            class="status-chip"
+            class:status-chip--ready={statusIina === "ok"}
+            class:status-chip--fail={statusIina === "fail"}>
+            <span class="status-chip__dot" aria-hidden="true"></span>
+            <span>{statusIina === "fail" ? notFoundLabel : statusIina === "ok" ? readyLabel : notDetectedLabel}</span>
+          </span>
+          {#if statusIina === "ok" && detectedIina}
+            <span class="status-meta__version" aria-hidden="true">{detectedIina}</span>
+          {/if}
+        </span>
+      {/if}
+    </label>
+    {/if}
     {:else if sandboxed}
     <p class="text-xs text-fg-3">{sandboxNoteLabel}</p>
     {/if}
   </fieldset>
 
-  {#if externalPlayersAvailable && !sandboxed && pathMpv && pathVlc}
+  {#if externalPlayersAvailable && !sandboxed && [pathMpv, pathVlc, iinaAvailable && pathIina].filter(Boolean).length > 1}
     <fieldset class="flex flex-col gap-2 player-config">
       <legend class="text-eyebrow font-medium uppercase text-fg-3">{externalPrefLabel}</legend>
       <p class="text-xs text-fg-3">{externalPrefHelper}</p>
@@ -627,6 +680,18 @@
           />
           <span>VLC</span>
         </label>
+        {#if iinaAvailable}
+        <label class="pref-option">
+          <input
+            type="radio"
+            name="external-player-pref"
+            value="iina"
+            checked={externalPref === "iina"}
+            onchange={() => onExternalPrefChange("iina")}
+          />
+          <span>IINA</span>
+        </label>
+        {/if}
         <label class="pref-option">
           <input
             type="radio"
@@ -693,6 +758,63 @@
             placeholder="--hwdec=auto&#10;--cache-secs=20"
             value={argsMpv}
             oninput={(event) => onArgsChange("mpv", event.target.value)}
+            class="field-input font-mono"
+          ></textarea>
+        </label>
+      </details>
+    </div>
+  {:else if backend === "iina" && !sandboxed}
+    <div class="player-config">
+      <label class="flex flex-col gap-1.5">
+        <span class="text-eyebrow font-medium uppercase text-fg-3">{pathLabel}</span>
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="/Applications/IINA.app/Contents/MacOS/iina-cli"
+            value={pathIina}
+            oninput={(event) => onPathChange("iina", event.target.value)}
+            class="field-input font-mono flex-1"
+          />
+          <button type="button" class="btn" onclick={() => browseFor("iina")}>{browseLabel}</button>
+          <button type="button" class="btn" onclick={() => detectFor("iina", pathIina)}>{detectLabel}</button>
+          <button
+            type="button"
+            class="btn"
+            disabled={autoDetecting.iina}
+            onclick={() => autoDetectFor("iina")}>{autoDetectLabel}</button>
+        </div>
+      </label>
+
+      <label class="flex items-start gap-2 text-xs text-fg-2 cursor-pointer" class:opacity-50={!pathIina}>
+        <input
+          type="checkbox"
+          checked={reuseIina}
+          disabled={!pathIina}
+          onchange={(event) => onReuseChange("iina", event.target.checked)}
+          class="mt-0.5"
+        />
+        <span class="flex flex-col gap-0.5">
+          <span>{label("reuse", "Reuse the same window")}</span>
+          <span class="text-fg-3">
+            {label("reuseHelperIina",
+              "Open new streams in the same IINA window.")}
+          </span>
+        </span>
+      </label>
+
+      <details class="player-config__advanced">
+        <summary class="cursor-pointer text-xs font-medium text-fg-3">{advancedLabel}</summary>
+        <label class="flex flex-col gap-1.5 mt-2">
+          <span class="text-eyebrow font-medium uppercase text-fg-3">{extraArgsLabel}</span>
+          <textarea
+            rows="3"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="--hwdec=auto&#10;--cache-secs=20"
+            value={argsIina}
+            oninput={(event) => onArgsChange("iina", event.target.value)}
             class="field-input font-mono"
           ></textarea>
         </label>
