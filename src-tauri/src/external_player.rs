@@ -269,7 +269,6 @@ fn resolve_app_bundle(path: &str) -> String {
         return path.to_string();
     }
     let macos_dir = p.join("Contents/MacOS");
-    // IINA.app's main binary ignores CLI args; iina-cli is its command-line entry point.
     let iina_cli = macos_dir.join("iina-cli");
     if iina_cli.is_file() {
         return iina_cli.to_string_lossy().into_owned();
@@ -361,7 +360,7 @@ fn validate_invocation(path: &str, args: &[String]) -> Result<(), String> {
 
 /// Returned bool is false for the macOS `open -a` handoff, whose pid is not the player's.
 #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<(u32, bool), String> {
+fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool, kind: &str) -> Result<(u32, bool), String> {
     if path.is_empty() {
         return Err("NOT_FOUND:player path is empty".to_string());
     }
@@ -393,7 +392,7 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
     }
     let resolved = resolve_app_bundle(path);
     let iina_args;
-    let args = if matches!(Path::new(&resolved).file_name().and_then(|s| s.to_str()), Some("iina-cli" | "iina")) {
+    let args = if kind == "iina" {
         iina_args = iina_cli_args(args);
         &iina_args
     } else {
@@ -406,13 +405,11 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
     }
 }
 
-// IINA embeds mpv, so it shares mpv's IPC reuse, track switching and exit watching.
 fn is_mpv_kind(kind: &str) -> bool {
     kind == "mpv" || kind == "iina"
 }
 
-// iina-cli only forwards mpv options spelled `--mpv-<opt>`, rejects `--mpv-no-<opt>`,
-// and quits right after handing off to IINA unless told to keep running.
+// Bare `--no-foo` becomes `--mpv-foo=no`; valued `--no-foo=bar` passes through as `--mpv-no-foo=bar`.
 fn iina_cli_args(args: &[String]) -> Vec<String> {
     let mut out = vec!["--keep-running".to_string(), "--no-stdin".to_string()];
     for arg in args {
@@ -1632,8 +1629,9 @@ async fn launch_mode(
         let endpoint = pick_mpv_endpoint();
         let augmented = augment_mpv_args(args.clone(), &endpoint, true);
         let path_for_spawn = path.clone();
+        let spawn_kind = kind.clone();
         let (pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented, true)
+            spawn_launch_inner(&path_for_spawn, &augmented, true, &spawn_kind)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -1667,12 +1665,13 @@ async fn launch_mode(
         };
         let augmented = augment_vlc_args(args.clone());
         let path_for_spawn = path.clone();
+        let spawn_kind = kind.clone();
         // macOS reuse rides `open -a`: the pid is `open`'s, so the slot dies and
         // `reused` reports false there. Raw binary paths get a fresh instance per launch.
         // `open` reuse also forwards only the URL, so custom headers apply on first launch only.
         let direct_exec = cfg!(not(target_os = "macos"));
         let (spawned_pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented, direct_exec)
+            spawn_launch_inner(&path_for_spawn, &augmented, direct_exec, &spawn_kind)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -1702,8 +1701,9 @@ async fn launch_mode(
         let endpoint = pick_mpv_endpoint();
         let augmented = augment_mpv_args(args.clone(), &endpoint, false);
         let path_for_spawn = path.clone();
+        let spawn_kind = kind.clone();
         let (pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented, true)
+            spawn_launch_inner(&path_for_spawn, &augmented, true, &spawn_kind)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -1723,8 +1723,9 @@ async fn launch_mode(
         return Ok(json!({ "pid": pid, "reused": false, "sessionId": session_id }));
     }
 
+    let spawn_kind = kind.clone();
     let (pid, is_real_process) =
-        tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args, false))
+        tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args, false, &spawn_kind))
             .await
             .map_err(|e| format!("OTHER:join: {e}"))??;
     if is_real_process {
@@ -2072,7 +2073,7 @@ mod tests {
 
     #[test]
     fn spawn_launch_inner_rejects_path_with_null_byte() {
-        let err = spawn_launch_inner("/bin/sh\0evil", &[], false).unwrap_err();
+        let err = spawn_launch_inner("/bin/sh\0evil", &[], false, "mpv").unwrap_err();
         assert!(
             err.starts_with("OTHER:") || err.starts_with("NOT_FOUND:"),
             "got {err}"
@@ -2084,7 +2085,7 @@ mod tests {
         // file!() is a real file path, so we get past the NotFound guard
         // and exercise the validation path on a non-empty argv.
         let err =
-            spawn_launch_inner(file!(), &["safe".to_string(), "with\nnewline".to_string()], false)
+            spawn_launch_inner(file!(), &["safe".to_string(), "with\nnewline".to_string()], false, "mpv")
                 .unwrap_err();
         assert!(err.starts_with("OTHER:"), "got {err}");
     }
