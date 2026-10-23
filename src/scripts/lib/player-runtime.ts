@@ -1222,6 +1222,10 @@ function matchesAuthorizedOrigin(requestUrl: string, authorizedOrigin: string | 
   }
 }
 
+export function hlsSessionUserAgent(customUserAgent: string | null | undefined, sequence: number): string {
+  return customUserAgent || `${DEFAULT_BROWSER_UA} r${sequence}`
+}
+
 let hlsSessionSeq = 0
 
 // Custom hls.js loader
@@ -1229,9 +1233,8 @@ function createTauriHlsLoaderClass(
   authorization: string | null = null,
   authorizedOrigin: string | null = null,
 ) {
-  // Panels 403 a just-left channel for ~40s, but only for the UA of the session
-  // they killed; a fresh UA per tune makes every return look like a new client (#227).
-  const userAgent = getUserAgent() || `${DEFAULT_BROWSER_UA} r${++hlsSessionSeq}`
+  // Panels 403 a just-left channel for ~40s, keyed on the killed session's UA (#227).
+  const userAgent = hlsSessionUserAgent(getUserAgent(), ++hlsSessionSeq)
   return class TauriHlsLoader {
     context: any = null
     stats: any

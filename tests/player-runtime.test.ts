@@ -24,6 +24,7 @@ import {
   shouldOfferMpvEmbeddedFix,
   resolveBackendFrom,
   createSubtitleTrackMemoryHooks,
+  hlsSessionUserAgent,
 } from "../src/scripts/lib/player-runtime"
 import { chooseSubtitleTrackId, rememberSubtitleTrack } from "@/scripts/lib/track-memory.ts"
 import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
@@ -644,5 +645,18 @@ describe("resolveReuseSubOff", () => {
 
   it("is false without tracks", () => {
     expect(resolveReuseSubOff({})).toBe(false)
+  })
+})
+
+describe("hlsSessionUserAgent", () => {
+  it("returns a custom UA verbatim", () => {
+    expect(hlsSessionUserAgent("MyAgent/1.0", 3)).toBe("MyAgent/1.0")
+  })
+
+  it("suffixes the default UA with the session sequence", () => {
+    const first = hlsSessionUserAgent(null, 1)
+    expect(hlsSessionUserAgent("", 1)).toBe(first)
+    expect(first).toMatch(/ r1$/)
+    expect(hlsSessionUserAgent(undefined, 2)).not.toBe(first)
   })
 })
