@@ -21,6 +21,10 @@ import {
   buildVodAudioRemuxRequest,
   resolveVodAudioRemuxInput,
   createVodAudioSwitcher,
+  nextPendingSeekTarget,
+  followUpSeekTarget,
+  shouldRunStallRecovery,
+  nextGoodDurationSeconds,
   type VodAudioTrackOption,
 } from "../src/scripts/lib/vod-audio-switch"
 
@@ -780,5 +784,147 @@ describe("createVodAudioSwitcher.setTracks", () => {
     switcher.setTracks([trackDefault, trackA, trackB])
 
     expect(switcher.source.list().map((track) => track.id)).toEqual(["default"])
+  })
+})
+
+describe("in-flight seek coalescing", () => {
+  it("records a target outside the buffer and clears it for an inside-buffer seek", () => {
+    expect(nextPendingSeekTarget(400, true)).toBe(400)
+    expect(nextPendingSeekTarget(37, false)).toBeNull()
+  })
+
+  it("follows up only when the pending target differs by more than a second", () => {
+    expect(followUpSeekTarget(400, null)).toBeNull()
+    expect(followUpSeekTarget(400, 400.5)).toBeNull()
+    expect(followUpSeekTarget(400, 900)).toBe(900)
+  })
+})
+
+describe("shouldRunStallRecovery", () => {
+  it("is suppressed while a switch is in flight or sessionless", () => {
+    expect(shouldRunStallRecovery(true, true)).toBe(false)
+    expect(shouldRunStallRecovery(false, false)).toBe(false)
+    expect(shouldRunStallRecovery(false, true)).toBe(true)
+  })
+})
+
+describe("nextGoodDurationSeconds", () => {
+  it("prefers the known duration", () => {
+    expect(nextGoodDurationSeconds(undefined, 7200, 100, 0)).toBe(7200)
+  })
+
+  it("falls back to a finite captured duration when the known one is missing", () => {
+    expect(nextGoodDurationSeconds(undefined, 0, 5400, 0)).toBe(5400)
+    expect(nextGoodDurationSeconds(undefined, undefined, 5400, 0)).toBe(5400)
+  })
+
+  it("rejects non-finite, collapsed, or smaller-than-previous captures", () => {
+    expect(nextGoodDurationSeconds(undefined, 0, Infinity, 0)).toBeUndefined()
+    expect(nextGoodDurationSeconds(undefined, 0, 37, 900)).toBeUndefined()
+    expect(nextGoodDurationSeconds(5400, 0, 37, 0)).toBe(5400)
+  })
+})
+
+function createSeekableHandle(initialBuffered: Array<[number, number]>) {
+  const listeners = new Set<() => void>()
+  let ranges = initialBuffered
+  const mediaEl = {
+    currentTime: 0,
+    get buffered() {
+      return {
+        length: ranges.length,
+        start: (index: number) => ranges[index][0],
+        end: (index: number) => ranges[index][1],
+      }
+    },
+    addEventListener: (_name: string, listener: () => void) => listeners.add(listener),
+    removeEventListener: (_name: string, listener: () => void) => listeners.delete(listener),
+  }
+  const handle = { ...createFakeHandle(), getMediaElement: () => mediaEl }
+  return {
+    handle,
+    seekTo(seconds: number) {
+      mediaEl.currentTime = seconds
+      for (const listener of [...listeners]) listener()
+    },
+    setBuffered(next: Array<[number, number]>) {
+      ranges = next
+    },
+  }
+}
+
+describe("createVodAudioSwitcher in-flight switch", () => {
+  beforeEach(() => {
+    startVodAudioRemuxMock.mockReset()
+    stopVodAudioRemuxMock.mockReset()
+    onVodAudioErrorMock.mockReset().mockImplementation(() => () => {})
+  })
+
+  async function mountWithSession(fake: ReturnType<typeof createSeekableHandle>) {
+    startVodAudioRemuxMock.mockResolvedValueOnce({ sessionId: "s0", playbackUrl: "http://127.0.0.1/live/s0" })
+    const { trackDefault } = makeTracks()
+    const switcher = createVodAudioSwitcher({
+      handle: fake.handle as any,
+      originalSrc: "http://127.0.0.1/tee/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee/stream.mkv",
+      getKnownDurationSeconds: () => 1000,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+    })
+    await flushMicrotasks()
+    fake.seekTo(10)
+    return switcher
+  }
+
+  it("starts one register for a seek, ignores the clamp seek, and gates recovery while in flight", async () => {
+    const fake = createSeekableHandle([[0, 37]])
+    const switcher = await mountWithSession(fake)
+    const pending = deferred<{ sessionId: string; playbackUrl: string }>()
+    startVodAudioRemuxMock.mockReturnValueOnce(pending.promise)
+
+    fake.seekTo(400)
+    fake.seekTo(37)
+    expect(startVodAudioRemuxMock).toHaveBeenCalledTimes(2)
+    expect(switcher.isRecovering()).toBe(true)
+    switcher.recoverRemuxStall()
+    expect(startVodAudioRemuxMock).toHaveBeenCalledTimes(2)
+
+    pending.resolve({ sessionId: "s1", playbackUrl: "http://127.0.0.1/live/s1" })
+    await flushMicrotasks()
+    expect(switcher.isRecovering()).toBe(false)
+    expect(startVodAudioRemuxMock).toHaveBeenCalledTimes(2)
+    switcher.dispose()
+  })
+
+  it("resets the in-flight state after a failed register so later seeks work", async () => {
+    const fake = createSeekableHandle([[0, 37]])
+    const switcher = await mountWithSession(fake)
+    startVodAudioRemuxMock.mockResolvedValueOnce(null)
+    fake.seekTo(400)
+    await flushMicrotasks()
+    expect(switcher.isRecovering()).toBe(false)
+
+    startVodAudioRemuxMock.mockResolvedValueOnce({ sessionId: "s2", playbackUrl: "http://127.0.0.1/live/s2" })
+    fake.seekTo(800)
+    expect(startVodAudioRemuxMock).toHaveBeenCalledTimes(3)
+    await flushMicrotasks()
+    switcher.dispose()
+  })
+
+  it("ignores an empty-buffer clamp seek during a switch instead of following up to 0", async () => {
+    const fake = createSeekableHandle([[0, 37]])
+    const switcher = await mountWithSession(fake)
+    const pending = deferred<{ sessionId: string; playbackUrl: string }>()
+    startVodAudioRemuxMock.mockReturnValueOnce(pending.promise)
+
+    fake.seekTo(400)
+    fake.setBuffered([])
+    fake.seekTo(0)
+    pending.resolve({ sessionId: "s1", playbackUrl: "http://127.0.0.1/live/s1" })
+    await flushMicrotasks()
+    expect(startVodAudioRemuxMock).toHaveBeenCalledTimes(2)
+    switcher.dispose()
   })
 })
