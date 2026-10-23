@@ -141,6 +141,8 @@ pub async fn vod_audio_remux_available(
 pub struct RegisterVodAudioRemuxResponse {
     pub session_id: String,
     pub playback_url: String,
+    /// Where the output actually starts: -noaccurate_seek begins at the keyframe before the requested start.
+    pub start_seconds: f64,
 }
 
 #[tauri::command]
@@ -165,9 +167,6 @@ pub async fn register_vod_audio_remux(
     let is_loopback_tee = is_loopback_http(&url) && !crate::dns_proxy::is_dns_proxy_url(&url);
 
     let _register_guard = state.register_lock.lock().await;
-
-    // One live session at a time; tear down before starting the next.
-    teardown_active_session(&state).await;
 
     let resolved_ffmpeg_path = match ensure_probed(&state, ffmpeg_path).await {
         (Some(probe), _) => probe.path,
@@ -210,6 +209,18 @@ pub async fn register_vod_audio_remux(
     } else {
         format!("http://127.0.0.1:{port}/forward/{token}/stream")
     };
+    // Probed while the previous session still plays, so its mount doesn't hit end-of-stream during the wait.
+    let actual_start_seconds = if start_seconds > 0.1 {
+        probe_seek_keyframe_seconds(&resolved_ffmpeg_path, &input_url, start_seconds)
+            .await
+            .unwrap_or(start_seconds)
+    } else {
+        start_seconds
+    };
+
+    // One live session at a time; tear down before starting the next.
+    teardown_active_session(&state).await;
+
     let ffmpeg_args = build_ffmpeg_args(&input_url, audio_stream_index, start_seconds, transcode_audio);
 
     let mut command = TokioCommand::new(&resolved_ffmpeg_path);
@@ -280,7 +291,35 @@ pub async fn register_vod_audio_remux(
     Ok(RegisterVodAudioRemuxResponse {
         session_id: token.clone(),
         playback_url: format!("http://127.0.0.1:{port}/live/{token}"),
+        start_seconds: actual_start_seconds,
     })
+}
+
+/// Demuxes one video packet with the same seek as the remux and reads its source pts from -debug_ts.
+async fn probe_seek_keyframe_seconds(ffmpeg_path: &str, input_url: &str, start_seconds: f64) -> Option<f64> {
+    let mut command = TokioCommand::new(ffmpeg_path);
+    command
+        .args(["-hide_banner", "-loglevel", "verbose", "-debug_ts", "-noaccurate_seek", "-ss"])
+        .arg(format!("{start_seconds}"))
+        .args(["-i", input_url, "-map", "0:v:0", "-c", "copy", "-frames:v", "1", "-f", "mpegts", "pipe:1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = tokio::time::timeout(Duration::from_secs(10), command.output()).await.ok()?.ok()?;
+    parse_first_demuxed_video_pts(&String::from_utf8_lossy(&output.stderr))
+}
+
+fn parse_first_demuxed_video_pts(stderr: &str) -> Option<f64> {
+    let line = stderr.lines().find(|line| line.contains("demuxer -> ") && line.contains("type:video"))?;
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix("pkt_pts_time:"))?
+        .parse()
+        .ok()
 }
 
 #[tauri::command]
@@ -1603,6 +1642,14 @@ mod tests {
             args.iter().any(|arg| arg == "-readrate"),
             "seeking must not drop the pacing flags: readrate applies to post-seek reading"
         );
+    }
+
+    #[test]
+    fn parse_first_demuxed_video_pts_reads_the_raw_demuxer_line() {
+        let stderr = "[vist#0:0/h264 @ 0x1] demuxer -> ist_index:0:0 type:video pkt_pts:400000 pkt_pts_time:400 pkt_dts:400000\n\
+            [vist#0:0/h264 @ 0x1] demuxer+tsfixup -> ist_index:0:0 type:video pkt_pts:-4977 pkt_pts_time:-4.977\n";
+        assert_eq!(parse_first_demuxed_video_pts(stderr), Some(400.0));
+        assert_eq!(parse_first_demuxed_video_pts("no packets"), None);
     }
 
     #[test]

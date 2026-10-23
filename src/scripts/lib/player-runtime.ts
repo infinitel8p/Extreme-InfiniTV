@@ -1867,6 +1867,23 @@ async function attachMpegts(
     const baseSeconds = timelineOffsetSeconds
     if (isLive || !Number.isFinite(baseSeconds) || (baseSeconds as number) <= 0) return
     if (offsetWrapTimer) clearInterval(offsetWrapTimer)
+    const wrap = (): boolean => {
+      const mediaSource = resolveMediaSource()
+      if (!mediaSource) return false
+      try {
+        const originalAdd = mediaSource.addSourceBuffer.bind(mediaSource)
+        mediaSource.addSourceBuffer = (mime: string) => {
+          const sourceBuffer = originalAdd(mime)
+          try {
+            defineRelativeTimestampOffset(sourceBuffer, baseSeconds as number)
+          } catch {}
+          return sourceBuffer
+        }
+      } catch {}
+      return true
+    }
+    // Wrap before sourceopen when possible: a pre-buffered remux can add its SourceBuffer before a 25ms poll lands.
+    if (wrap()) return
     let attempts = 0
     offsetWrapTimer = setInterval(() => {
       attempts++
@@ -1883,21 +1900,22 @@ async function attachMpegts(
         log.warn("[xt:player] timeline offset wrap gave up: mpegts.js internals not found after retry budget", { attempts })
         return
       }
-      const mediaSource = resolveMediaSource()
-      if (!mediaSource) return
+      if (!wrap()) return
       clearInterval(offsetWrapTimer!)
       offsetWrapTimer = null
-      try {
-        const originalAdd = mediaSource.addSourceBuffer.bind(mediaSource)
-        mediaSource.addSourceBuffer = (mime: string) => {
-          const sourceBuffer = originalAdd(mime)
-          try {
-            defineRelativeTimestampOffset(sourceBuffer, baseSeconds as number)
-          } catch {}
-          return sourceBuffer
-        }
-      } catch {}
     }, 25)
+  }
+
+  // An offset mount buffers from the offset while the element sits at 0, and mpegts.js' startup jumper never fires on WebKit.
+  const armStartupJump = () => {
+    if (isLive || !((timelineOffsetSeconds as number) > 0)) return
+    const timer = setInterval(() => {
+      if (disposed || !player) return clearInterval(timer)
+      if (!videoEl.buffered.length) return
+      clearInterval(timer)
+      const start = videoEl.buffered.start(0)
+      if (videoEl.currentTime < start - 0.1) videoEl.currentTime = start
+    }, 250)
   }
 
   // mpegts.js never sets MediaSource.duration on the raw-TS path, so assign the known span directly (retried until source buffers are idle).
@@ -2015,6 +2033,7 @@ async function attachMpegts(
     )
     player.attachMediaElement(videoEl)
     armTimelineOffsetWrap()
+    armStartupJump()
     player.load()
     try {
       const playPromise = player.play?.()
