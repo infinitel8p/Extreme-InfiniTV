@@ -1222,11 +1222,16 @@ function matchesAuthorizedOrigin(requestUrl: string, authorizedOrigin: string | 
   }
 }
 
+let hlsSessionSeq = 0
+
 // Custom hls.js loader
 function createTauriHlsLoaderClass(
   authorization: string | null = null,
   authorizedOrigin: string | null = null,
 ) {
+  // Panels 403 a just-left channel for ~40s, but only for the UA of the session
+  // they killed; a fresh UA per tune makes every return look like a new client (#227).
+  const userAgent = getUserAgent() || `${DEFAULT_BROWSER_UA} r${++hlsSessionSeq}`
   return class TauriHlsLoader {
     context: any = null
     stats: any
@@ -1299,7 +1304,7 @@ function createTauriHlsLoaderClass(
         const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http")
         const { url: requestUrl, authorization: urlAuthorization } = splitUrlAuth(context.url)
         const headers = new Headers()
-        headers.set("User-Agent", getUserAgent() || DEFAULT_BROWSER_UA)
+        headers.set("User-Agent", userAgent)
         // Playlist credentials stay scoped to their origin so they never
         // leak to cross-origin segment/key hosts; per-URL userinfo always wins.
         const effectiveAuthorization =
