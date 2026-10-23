@@ -60,6 +60,9 @@ import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { getDensityFactor } from "@/scripts/lib/app-settings.js"
 import { createTimeline } from "@/scripts/lib/epg-timeline.ts"
+import { debounce } from "@/scripts/lib/debounce.js"
+import { searchProgrammes, tokenizeEpgQuery } from "@/scripts/lib/epg-search.ts"
+import { ICON_DEVICE_TV } from "@/scripts/lib/icons.js"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
@@ -72,6 +75,7 @@ const HOUR_MS = 60 * 60 * 1000
 const HALF_HOUR_MS = 30 * 60 * 1000
 const DAY_APPROX_MS = 24 * HOUR_MS
 const CATCHUP_LOOKBACK_DAYS = 7
+const MAX_SEARCH_RESULTS = 200
 const SCRUB_HOURS = 3
 const TICK_STEP_MINUTES = 30
 const FALLBACK_VIEWPORT_WIDTH = 1200
@@ -91,6 +95,8 @@ const laterBtn = document.getElementById("epg-later")
 const prevDayBtn = document.getElementById("epg-prev-day")
 const nextDayBtn = document.getElementById("epg-next-day")
 const dayLabelEl = document.getElementById("epg-day-label")
+const searchInput = document.getElementById("epg-search") as HTMLInputElement | null
+const searchResultsEl = document.getElementById("epg-search-results")
 
 // ----------------------------
 // State
@@ -143,13 +149,22 @@ function setStatus(text) {
   if (statusEl) statusEl.textContent = text
 }
 
+function isSearching() {
+  return tokenizeEpgQuery(searchInput?.value || "").length > 0
+}
+
+function hideContent() {
+  if (gridEl) gridEl.classList.add("hidden")
+  if (searchResultsEl) searchResultsEl.classList.add("hidden")
+}
+
 function showStatus(text) {
   if (statusEl) {
     statusEl.classList.remove("hidden", "epg-status-skeleton")
     statusEl.classList.add("epg-status-text")
     statusEl.textContent = text
   }
-  if (gridEl) gridEl.classList.add("hidden")
+  hideContent()
 }
 
 function showLoadingSkeleton(label = t("epg.loadingSkeleton")) {
@@ -157,7 +172,7 @@ function showLoadingSkeleton(label = t("epg.loadingSkeleton")) {
   statusEl.classList.remove("hidden", "epg-status-text")
   statusEl.classList.add("epg-status-skeleton")
   statusEl.textContent = ""
-  if (gridEl) gridEl.classList.add("hidden")
+  hideContent()
   renderEpgSkeletonInto(statusEl, label)
 }
 
@@ -300,7 +315,7 @@ function showProviderError(kind) {
       onRetry: () => init(),
     })
   }
-  if (gridEl) gridEl.classList.add("hidden")
+  hideContent()
 }
 
 function hideStatus() {
@@ -309,7 +324,9 @@ function hideStatus() {
     statusEl.classList.remove("epg-status-skeleton", "epg-status-text")
     statusEl.textContent = ""
   }
-  if (gridEl) gridEl.classList.remove("hidden")
+  const searching = isSearching()
+  if (gridEl) gridEl.classList.toggle("hidden", searching)
+  if (searchResultsEl) searchResultsEl.classList.toggle("hidden", !searching)
 }
 
 // ----------------------------
@@ -396,6 +413,43 @@ function navigateToCatchup(channel, startDisplayMs, stopDisplayMs, title, catchu
     `&cstop=${stopUtc}` +
     `&ctitle=${encodeURIComponent(title || "")}` +
     (catchupId ? `&cid=${encodeURIComponent(catchupId)}` : "")
+}
+
+// Ended programmes the provider can still serve as catch-up.
+function canReplayProgramme(channel, programme, nowMs = Date.now()) {
+  return (
+    programme.stop <= nowMs &&
+    channelSupportsCatchup(channel) &&
+    isCatchupPlayable(channel, programme.rawStart ?? programme.start, nowMs)
+  )
+}
+
+function openProgrammeFor(channel, programme, nowMs = Date.now()) {
+  // rawStart/rawStop recover true XMLTV time so catch-up never sees the guide-display tvg-shift.
+  const rawStart = programme.rawStart ?? programme.start
+  const rawStop = programme.rawStop ?? programme.stop
+  const isLive = programme.start <= nowMs && programme.stop > nowMs
+  const dialogOpts = {
+    title: programme.title,
+    desc: programme.desc,
+    start: programme.start,
+    stop: programme.stop,
+    channelName: channel.name,
+    channelId: channel.id,
+    onWatch: () => navigateToLive(channel),
+  }
+  if (canReplayProgramme(channel, programme, nowMs)) {
+    dialogOpts.onCatchup = () =>
+      navigateToCatchup(channel, rawStart, rawStop, programme.title, programme.catchupId)
+  } else if (
+    isLive &&
+    channelSupportsCatchup(channel) &&
+    isCatchupPlayable(channel, rawStart, nowMs)
+  ) {
+    dialogOpts.onWatchFromStart = () =>
+      navigateToCatchup(channel, rawStart, rawStop, programme.title, programme.catchupId)
+  }
+  openProgrammeDialog(dialogOpts)
 }
 
 let timeFormat = null
@@ -544,14 +598,11 @@ function renderChannelRow(channel) {
   return { row, track }
 }
 
-function buildProgrammeCell(channel, rowIdx, cellInfo, nowMs, canChannelCatchup) {
+function buildProgrammeCell(channel, rowIdx, cellInfo, nowMs) {
   const p = cellInfo.programme
   const isLive = p.start <= nowMs && p.stop > nowMs
   const isPast = p.stop <= nowMs
-  // rawStart/rawStop recover true XMLTV time so catch-up never sees the guide-display tvg-shift.
-  const rawStart = p.rawStart ?? p.start
-  const rawStop = p.rawStop ?? p.stop
-  const canReplay = isPast && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)
+  const canReplay = canReplayProgramme(channel, p, nowMs)
 
   const cell = document.createElement("button")
   cell.type = "button"
@@ -573,25 +624,7 @@ function buildProgrammeCell(channel, rowIdx, cellInfo, nowMs, canChannelCatchup)
   cell.style.left = `${cellInfo.x}px`
   cell.style.width = `${cellInfo.width}px`
   cell.title = `${fmtTime(p.start)}–${fmtTime(p.stop)} · ${p.title}${p.desc ? "\n\n" + p.desc : ""}`
-  cell.addEventListener("click", () => {
-    const dialogOpts = {
-      title: p.title,
-      desc: p.desc,
-      start: p.start,
-      stop: p.stop,
-      channelName: channel.name,
-      channelId: channel.id,
-      onWatch: () => navigateToLive(channel),
-    }
-    if (canReplay) {
-      dialogOpts.onCatchup = () =>
-        navigateToCatchup(channel, rawStart, rawStop, p.title, p.catchupId)
-    } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)) {
-      dialogOpts.onWatchFromStart = () =>
-        navigateToCatchup(channel, rawStart, rawStop, p.title, p.catchupId)
-    }
-    openProgrammeDialog(dialogOpts)
-  })
+  cell.addEventListener("click", () => openProgrammeFor(channel, p))
 
   const titleLine = document.createElement("div")
   titleLine.className = "truncate w-full min-w-0 leading-tight text-xs font-medium"
@@ -636,11 +669,10 @@ function syncRowCells(rowIdx) {
     state.cells.delete(key)
   }
   const nowMs = Date.now()
-  const canChannelCatchup = channelSupportsCatchup(state.channel)
   const ordered = wanted.map(
     (cellInfo, i) =>
       state.cells.get(wantedKeys[i]) ??
-      buildProgrammeCell(state.channel, rowIdx, cellInfo, nowMs, canChannelCatchup)
+      buildProgrammeCell(state.channel, rowIdx, cellInfo, nowMs)
   )
   let reference = null
   for (let i = ordered.length - 1; i >= 0; i--) {
@@ -908,8 +940,168 @@ gridEl?.addEventListener(
   true
 )
 
+// ----------------------------
+// Programme search
+// ----------------------------
+function fmtSearchDay(ts) {
+  const diffDays = Math.round((startOfDay(ts) - startOfDay(Date.now())) / DAY_APPROX_MS)
+  if (diffDays === 0) return t("epg.today")
+  if (diffDays === -1) return t("epg.yesterday")
+  if (diffDays === 1) return t("epg.tomorrow")
+  return new Intl.DateTimeFormat(getActiveLocale(), {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(ts))
+}
+
+function renderSearchHit(hit, nowMs) {
+  const { channel, programme } = hit
+  const isLive = programme.start <= nowMs && programme.stop > nowMs
+  const canReplay = canReplayProgramme(channel, programme, nowMs)
+
+  const btn = document.createElement("button")
+  btn.type = "button"
+  btn.className =
+    "epg-search-hit flex-1 min-w-0 flex items-start gap-3 px-4 py-2.5 text-left outline-none " +
+    "transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent " +
+    (programme.stop <= nowMs && !canReplay ? "text-fg-3" : "text-fg")
+  btn.title = programme.desc ? `${programme.title}\n\n${programme.desc}` : programme.title
+  btn.addEventListener("click", () => openProgrammeFor(channel, programme, nowMs))
+
+  const time = document.createElement("div")
+  time.className = "shrink-0 w-28 pt-0.5 text-xs tabular-nums text-fg-2"
+  time.textContent = `${fmtTime(programme.start)}–${fmtTime(programme.stop)}`
+
+  const main = document.createElement("div")
+  main.className = "min-w-0 flex-1"
+  const titleLine = document.createElement("div")
+  titleLine.className = "flex items-center gap-2 min-w-0"
+  const titleText = document.createElement("span")
+  titleText.className = "truncate text-sm font-medium"
+  if (canReplay) {
+    const replayDot = document.createElement("span")
+    replayDot.className = "epg-cell-replay-dot"
+    replayDot.title = t("catchup.badge")
+    titleText.appendChild(replayDot)
+  }
+  titleText.appendChild(document.createTextNode(programme.title || t("programme.untitled")))
+  titleLine.appendChild(titleText)
+  if (isLive) {
+    const badge = document.createElement("span")
+    badge.className =
+      "shrink-0 rounded-full border border-accent bg-accent-soft px-2 py-px text-2xs font-medium text-fg"
+    badge.textContent = t("programme.live")
+    titleLine.appendChild(badge)
+  }
+  const sub = document.createElement("div")
+  sub.className = "truncate text-2xs text-fg-3"
+  sub.textContent = hit.inDescription && programme.desc ? `${channel.name} · ${programme.desc}` : channel.name
+  main.append(titleLine, sub)
+
+  btn.append(time, main)
+
+  const openLabel = t("epg.search.openChannel")
+  const open = document.createElement("a")
+  open.href = livetvHref(channel)
+  open.className =
+    "epg-search-open shrink-0 self-center me-3 inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface " +
+    "min-h-9 min-w-9 px-2 sm:px-2.5 text-xs text-fg-2 outline-none transition-colors " +
+    "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent"
+  open.title = `${openLabel} · ${channel.name}`
+  open.setAttribute("aria-label", `${openLabel} · ${channel.name}`)
+  open.innerHTML = `<span class="text-sm">${ICON_DEVICE_TV}</span>`
+  const openText = document.createElement("span")
+  openText.className = "hidden sm:inline"
+  openText.textContent = openLabel
+  open.appendChild(openText)
+
+  const row = document.createElement("div")
+  row.className = "flex items-stretch border-b border-line"
+  row.append(btn, open)
+  return row
+}
+
+function renderSearchResults() {
+  if (!searchResultsEl) return
+  hideStatus()
+  const query = searchInput?.value || ""
+  const nowMs = Date.now()
+  const { hits, total } = searchProgrammes(filterChannels(allChannels), query, {
+    programmesFor: (channel) =>
+      programmesFor(channel.playlistId)?.get(effectiveTvgId(channel, channel.playlistId)),
+    from: Math.floor((nowMs - CATCHUP_LOOKBACK_DAYS * DAY_APPROX_MS) / HOUR_MS) * HOUR_MS,
+    keep: (channel, programme) =>
+      programme.stop > nowMs || canReplayProgramme(channel, programme, nowMs),
+    limit: MAX_SEARCH_RESULTS,
+  })
+
+  if (!hits.length) {
+    const empty = document.createElement("div")
+    empty.setAttribute("role", "status")
+    empty.className = "p-6 text-sm text-fg-3 text-center"
+    empty.textContent = t("epg.search.noResults", { query: query.trim() })
+    searchResultsEl.replaceChildren(empty)
+    return
+  }
+
+  const fragment = document.createDocumentFragment()
+  let currentDay = ""
+  for (const hit of hits) {
+    const day = fmtSearchDay(hit.programme.start)
+    if (day !== currentDay) {
+      currentDay = day
+      const heading = document.createElement("h2")
+      heading.className =
+        "sticky top-0 z-10 px-4 py-1.5 border-b border-line bg-bg/95 backdrop-blur-sm text-eyebrow font-medium uppercase tracking-widest text-fg-3"
+      heading.textContent = day
+      fragment.appendChild(heading)
+    }
+    fragment.appendChild(renderSearchHit(hit, nowMs))
+  }
+  if (total > hits.length) {
+    const tail = document.createElement("div")
+    tail.className = "p-3 text-fg-3 text-xs text-center"
+    tail.textContent = t("epg.search.showingTop", { n: hits.length })
+    fragment.appendChild(tail)
+  }
+  searchResultsEl.replaceChildren(fragment)
+  searchResultsEl.scrollTop = 0
+
+  try {
+    window.SpatialNavigation?.makeFocusable?.()
+  } catch {}
+}
+
+function onSearchInput() {
+  if (!programmesSize() || !allChannels.length) return
+  if (isSearching()) renderSearchResults()
+  else applyCategory()
+}
+
+searchInput?.addEventListener("input", debounce(onSearchInput, 120))
+
+searchInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && searchInput.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    searchInput.value = ""
+    onSearchInput()
+  } else if (event.key === "Enter" || event.key === "ArrowDown") {
+    const first = searchResultsEl?.querySelector(".epg-search-hit") as HTMLElement | null
+    if (!first || searchResultsEl?.classList.contains("hidden")) return
+    event.preventDefault()
+    if (event.key === "Enter") first.click()
+    else first.focus()
+  }
+})
+
 function render() {
   if (!gridEl || !bodyEl || !headerInner) return
+  if (isSearching()) {
+    renderSearchResults()
+    return
+  }
   hideStatus()
 
   timeline = timeline ?? buildTimeline()
@@ -954,6 +1146,11 @@ function render() {
 // Loaders
 // ----------------------------
 function pickChannels(cachedChannels) {
+  return filterChannels(cachedChannels).slice(0, MAX_CHANNELS)
+}
+
+// Uncapped so search covers the whole category, not just the rendered rows.
+function filterChannels(cachedChannels) {
   const activeCat = picker.getActiveCat()
   let filtered
   const uncategorized = t("stream.uncategorized") || "Uncategorized"
@@ -987,7 +1184,7 @@ function pickChannels(cachedChannels) {
   const sortMode = activePlaylistId
     ? getViewSort(activePlaylistId, "live")
     : "default"
-  return sortChannelsForView(withEpg, sortMode).slice(0, MAX_CHANNELS)
+  return sortChannelsForView(withEpg, sortMode)
 }
 
 async function fetchXtreamChannels() {
@@ -1031,6 +1228,10 @@ function syncCategoryTitle() {
 function applyCategory() {
   if (!allChannels.length) return
   channels = pickChannels(allChannels)
+  if (isSearching() && programmesSize()) {
+    renderSearchResults()
+    return
+  }
   const activeCat = picker.getActiveCat()
   if (!channels.length) {
     if (activeCat === CAT_FAVORITES) {
@@ -1216,7 +1417,7 @@ async function finishInit(channelRows, programmeSources, generation) {
   }
 
   channels = pickChannels(channelRows)
-  if (!channels.length) {
+  if (!channels.length && !isSearching()) {
     const activeCat = picker.getActiveCat()
     if (activeCat === CAT_FAVORITES) {
       showStatus(t("epg.noFavoritesEpg"))
