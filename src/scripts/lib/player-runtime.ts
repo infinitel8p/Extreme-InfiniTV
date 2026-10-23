@@ -3439,10 +3439,11 @@ function dispatchPlayerFallback(requested: PlayerBackend, used: PlayerBackend): 
 /** Pure backend-availability decision, unit-testable without the platform probes it's normally fed. */
 export function resolveBackendFrom(
   backend: PlayerBackend,
-  context: { isAndroid: boolean; mpvAvailable: boolean; externalAvailable: boolean },
+  context: { isAndroid: boolean; isMacOS: boolean; mpvAvailable: boolean; externalAvailable: boolean },
 ): PlayerBackend {
   if (backend === "artplayer" && context.isAndroid) return "videojs"
   if (backend === "mpv-embedded" && !context.mpvAvailable) return "artplayer"
+  if (backend === "iina" && !context.isMacOS) return "artplayer"
   if ((backend === "mpv" || backend === "vlc" || backend === "iina") && !context.externalAvailable) return "artplayer"
   return backend
 }
@@ -3456,7 +3457,7 @@ export async function resolveEffectiveBackend(
     const { mpvEmbeddedAvailable } = await import("@/scripts/lib/mpv-embedded.ts")
     mpvAvailable = await mpvEmbeddedAvailable()
   }
-  return resolveBackendFrom(backend, { isAndroid, mpvAvailable, externalAvailable: externalPlayersAvailable })
+  return resolveBackendFrom(backend, { isAndroid, isMacOS, mpvAvailable, externalAvailable: externalPlayersAvailable })
 }
 
 // ---------------------------------------------------------------------------

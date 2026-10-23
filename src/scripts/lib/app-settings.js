@@ -786,6 +786,10 @@ export function getPlayerBackend() {
   if (backend === "mpv-embedded" && !isWindowsDesktopSync()) {
     return DEFAULT_PLAYER_BACKEND
   }
+  // IINA is macOS-only; a backup restored on another OS falls back the same way.
+  if (backend === "iina" && !(typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent || ""))) {
+    return DEFAULT_PLAYER_BACKEND
+  }
   return backend
 }
 

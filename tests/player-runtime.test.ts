@@ -328,6 +328,11 @@ describe("buildArgsFor", () => {
     expect(mpv).toContain("--user-agent=X")
     expect(vlc).toContain("--http-user-agent=X")
   })
+
+  it("gives iina the mpv args (the launcher rewrites them for iina-cli)", () => {
+    const input = { src: SRC, userAgent: "X", title: "T", extraArgs: ["--hwdec=auto"] }
+    expect(buildArgsFor("iina", input)).toEqual(buildArgsFor("mpv", input))
+  })
 })
 
 describe("classifyError", () => {
@@ -510,7 +515,7 @@ describe("shouldOfferMpvEmbeddedFix", () => {
 })
 
 describe("resolveBackendFrom", () => {
-  const available = { isAndroid: false, mpvAvailable: true, externalAvailable: true }
+  const available = { isAndroid: false, isMacOS: true, mpvAvailable: true, externalAvailable: true }
 
   it("swaps artplayer for videojs on Android, regardless of mpv/external availability", () => {
     expect(resolveBackendFrom("artplayer", { ...available, isAndroid: true })).toBe("videojs")
@@ -536,6 +541,14 @@ describe("resolveBackendFrom", () => {
   it("keeps mpv/vlc when external players are available", () => {
     expect(resolveBackendFrom("mpv", available)).toBe("mpv")
     expect(resolveBackendFrom("vlc", available)).toBe("vlc")
+  })
+
+  it("swaps iina for artplayer off macOS", () => {
+    expect(resolveBackendFrom("iina", { ...available, isMacOS: false })).toBe("artplayer")
+  })
+
+  it("keeps iina on macOS", () => {
+    expect(resolveBackendFrom("iina", available)).toBe("iina")
   })
 
   it("leaves videojs and shaka untouched", () => {

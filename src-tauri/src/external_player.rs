@@ -1815,6 +1815,20 @@ mod tests {
     }
 
     #[test]
+    fn iina_cli_args_handles_valued_negations_and_bare_flags() {
+        let args = vec![
+            "--no-foo=bar".to_string(),
+            "--fs".to_string(),
+            "--no-border".to_string(),
+            "-v".to_string(),
+        ];
+        assert_eq!(
+            iina_cli_args(&args),
+            vec!["--keep-running", "--no-stdin", "--mpv-no-foo=bar", "--mpv-fs", "--mpv-border=no", "-v"]
+        );
+    }
+
+    #[test]
     fn augment_vlc_drops_play_and_exit_and_adds_one_instance() {
         let args = vec![
             "--no-qt-error-dialogs".to_string(),
