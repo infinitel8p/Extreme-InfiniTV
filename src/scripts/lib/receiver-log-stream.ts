@@ -15,7 +15,7 @@ function isTauri(): boolean {
 }
 
 /** Pure: shapes one sink call into the line the sender will display. */
-export function formatLogLine(level: "error" | "warn" | "info", text: string, at: Date): string {
+export function formatLogLine(level: "error" | "warn" | "info" | "debug", text: string, at: Date): string {
     const stamp = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}:${String(
         at.getSeconds()
     ).padStart(2, "0")}`

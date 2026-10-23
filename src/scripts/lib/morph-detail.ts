@@ -1,8 +1,9 @@
 import { t } from "@/scripts/lib/i18n.js"
+import { isSafeImageUrl } from "@/scripts/lib/img-scale"
 
 export function setAmbient(ambientEl: HTMLElement | null, url: string | null): void {
     if (!ambientEl) return
-    if (url) {
+    if (url && isSafeImageUrl(url)) {
         const safe = String(url).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
         ambientEl.style.backgroundImage = `url("${safe}")`
         ambientEl.setAttribute("data-ready", "true")
@@ -27,6 +28,27 @@ export function makePosterFallback(name: string): HTMLDivElement {
 
 function escapeUrlForCss(url: string): string {
     return url.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
+const HERO_SHEEN_TIMEOUT_MS = 1600
+
+// Wires the pending -> done paint transition + one-shot sheen sweep for a freshly created hero <img>.
+export function beginHeroDevelop(heroEl: HTMLElement, img: HTMLImageElement): void {
+    heroEl.dataset.heroState = "pending"
+    img.addEventListener(
+        "load",
+        () => {
+            requestAnimationFrame(() => {
+                heroEl.dataset.heroState = "done"
+                heroEl.classList.remove("dt-hero--loading")
+                heroEl.classList.add("dt-hero--sheen")
+                const clearSheen = () => heroEl.classList.remove("dt-hero--sheen")
+                heroEl.addEventListener("animationend", clearSheen, { once: true })
+                setTimeout(clearSheen, HERO_SHEEN_TIMEOUT_MS)
+            })
+        },
+        { once: true }
+    )
 }
 
 const TMDB_SIZE_SEGMENT = "/t/p/"
@@ -69,6 +91,13 @@ export function paintHero(
     else paintHeroPoster(heroEl, name, posterUrl)
 }
 
+// Terminal state: no more artwork to try, so the pending/loading styles must release.
+function paintHeroFallback(heroEl: HTMLElement, name: string): void {
+    heroEl.dataset.heroState = "done"
+    heroEl.classList.remove("dt-hero--loading")
+    heroEl.replaceChildren(makePosterFallback(name))
+}
+
 function paintHeroBackdrop(
     heroEl: HTMLElement,
     name: string,
@@ -91,6 +120,7 @@ function paintHeroBackdrop(
         img.fetchPriority = "high"
         img.referrerPolicy = "no-referrer"
         img.className = "h-full w-full object-cover"
+        beginHeroDevelop(heroEl, img)
     }
     img.onerror = () => {
         paintHeroBackdrop(heroEl, name, candidates, index + 1, posterUrl)
@@ -100,15 +130,15 @@ function paintHeroBackdrop(
 }
 
 function paintHeroPoster(heroEl: HTMLElement, name: string, posterUrl: string | null): void {
-    if (!posterUrl) {
-        heroEl.replaceChildren(makePosterFallback(name))
+    if (!posterUrl || !isSafeImageUrl(posterUrl)) {
+        paintHeroFallback(heroEl, name)
         return
     }
     const existingImg = heroEl.querySelector('img[data-hero-role="poster"]')
     const existingBlur = heroEl.querySelector("[data-hero-blur]")
     if (existingImg instanceof HTMLImageElement && existingBlur instanceof HTMLElement) {
         existingBlur.style.backgroundImage = `url("${escapeUrlForCss(posterUrl)}")`
-        existingImg.onerror = () => heroEl.replaceChildren(makePosterFallback(name))
+        existingImg.onerror = () => paintHeroFallback(heroEl, name)
         existingImg.src = posterUrl
         return
     }
@@ -123,10 +153,9 @@ function paintHeroPoster(heroEl: HTMLElement, name: string, posterUrl: string | 
     img.fetchPriority = "high"
     img.referrerPolicy = "no-referrer"
     img.className = "relative h-full w-full object-contain"
+    img.onerror = () => paintHeroFallback(heroEl, name)
+    beginHeroDevelop(heroEl, img)
     img.src = posterUrl
-    img.onerror = () => {
-        heroEl.replaceChildren(makePosterFallback(name))
-    }
     heroEl.replaceChildren(blurLayer, img)
 }
 

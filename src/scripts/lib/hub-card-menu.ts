@@ -3,6 +3,7 @@
 // without a playlist attach nothing.
 
 import { isTauri } from "@/scripts/lib/creds.js"
+import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
 
 // Matches the resume threshold on the movie/series detail pages.
 const RESUME_MIN_SECONDS = 30
@@ -85,7 +86,7 @@ export function hubCardMenu(
             (item: any) => String(item?.id) === String(target.id)
           )
           onDownload = () => {
-            window.location.href = `/movies/detail?id=${encodeURIComponent(String(target.id))}&download=1`
+            window.location.href = detailHrefFor("vod", target.id, { playlistId, download: true })
           }
           buildStreamUrl = () => {
             if (!hasXtreamCreds) return null
@@ -184,7 +185,7 @@ export function hubCardMenu(
                   title: episodeEntry.title || target.name || null,
                   logo: target.logo || undefined,
                   resumeSeconds,
-                  contentHref: `/series/detail?id=${encodeURIComponent(String(seriesId))}`,
+                  contentHref: detailHrefFor("series", seriesId, { playlistId }),
                 })()
                 return
               }
@@ -202,7 +203,7 @@ export function hubCardMenu(
                 title: nextUp.title || target.name || null,
                 logo: target.logo || undefined,
                 resumeSeconds: nextUp.resumeSeconds,
-                contentHref: `/series/detail?id=${encodeURIComponent(String(seriesId))}`,
+                contentHref: detailHrefFor("series", seriesId, { playlistId }),
               })()
             })()
           }
@@ -218,11 +219,9 @@ export function hubCardMenu(
         point,
         onOpen: () => {
           window.location.href =
-            target.kind === "vod"
-              ? `/movies/detail?id=${encodeURIComponent(String(target.id))}`
-              : target.kind === "live"
-                ? `/livetv?channel=${encodeURIComponent(String(target.id))}`
-                : `/series/detail?id=${encodeURIComponent(String(target.id))}`
+            target.kind === "live"
+              ? `/livetv?channel=${encodeURIComponent(String(target.id))}&pl=${encodeURIComponent(playlistId)}`
+              : detailHrefFor(target.kind, target.id, { playlistId })
         },
         onDownload,
         buildStreamUrl,

@@ -262,16 +262,23 @@ export async function pickM3UFile(opts = {}) {
 export async function pickJsonFile() {
   const m = await mod()
   if (!m) return null
-  const uris = await m.AndroidFs.showOpenFilePicker({
-    mimeTypes: [
-      "application/json",
-      "text/json",
-      "text/plain",
-      "application/octet-stream",
-      "*/*",
-    ],
-    multiple: false,
-  })
+  const mimeTypes = [
+    "application/json",
+    "text/json",
+    "text/plain",
+    "application/octet-stream",
+    "*/*",
+  ]
+  let uris
+  try {
+    uris = await m.AndroidFs.showOpenFilePicker({ mimeTypes, multiple: false })
+  } catch (error) {
+    const { androidContentPickerAvailable, pickTextFileViaIntent } = await import(
+      "@/scripts/lib/android-file-pick.js"
+    )
+    if (!androidContentPickerAvailable("*/*")) throw error
+    return await pickTextFileViaIntent(mimeTypes)
+  }
   const uri = Array.isArray(uris) ? uris[0] : null
   if (!uri) return null
   let name = ""

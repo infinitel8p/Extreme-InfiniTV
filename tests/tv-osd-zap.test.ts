@@ -35,3 +35,22 @@ describe("resolveZapTarget", () => {
     expect(resolveZapTarget("-1", channels)).toBeNull()
   })
 })
+
+describe("resolveZapTarget with merged channels", () => {
+  const channels = [
+    { id: 1, playlistId: "pl-a", chno: 10 },
+    { id: 1, playlistId: "pl-b", chno: 20 },
+    { id: 2, playlistId: "pl-b" },
+  ]
+
+  it("returns the channel object carrying its own playlistId", () => {
+    expect(resolveZapTarget("20", channels)?.playlistId).toBe("pl-b")
+    expect(resolveZapTarget("1", channels)?.playlistId).toBe("pl-a")
+  })
+
+  it("resolves by position across colliding ids", () => {
+    expect(resolveZapTarget("2", channels)).toBe(channels[1])
+    expect(resolveZapTarget("3", channels)).toBe(channels[2])
+  })
+})
+

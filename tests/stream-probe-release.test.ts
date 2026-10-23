@@ -19,6 +19,7 @@ vi.mock("@/scripts/lib/creds.js", () => ({
   xtreamCandidatesFor: () => candidates,
   getMirrorPin: () => 0,
   setMirrorPin: () => {},
+  getEntryDnsOverride: () => null,
 }))
 
 import { resolveStreamUrl } from "@/scripts/lib/xtream-api.js"

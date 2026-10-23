@@ -1,5 +1,4 @@
-// Programme search for the /epg page. Pure: takes the channel list and the
-// tvg-id → programmes map, returns ranked hits with tvg-shift applied.
+// Pure programme search for /epg: ranked hits with tvg-shift applied.
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.ts"
 
 export interface EpgSearchProgramme {
@@ -19,21 +18,15 @@ export interface EpgSearchChannel {
 
 export interface EpgSearchHit<C extends EpgSearchChannel = EpgSearchChannel> {
   channel: C
-  /** Guide-display times (tvg-shift applied); rawStart/rawStop are the XMLTV times. */
   programme: EpgSearchProgramme & { rawStart: number; rawStop: number }
   score: number
-  /** True when only the description matched, not the title / channel name. */
   inDescription: boolean
 }
 
 export interface EpgSearchOptions<C extends EpgSearchChannel> {
-  /** Resolves the programmes-map key for a channel (override-aware). */
-  resolveTvgId: (channel: C) => string | null | undefined
-  /** Inclusive lower bound on programme stop, in guide-display time. */
+  programmesFor: (channel: C) => readonly EpgSearchProgramme[] | undefined
   from?: number
-  /** Exclusive upper bound on programme start, in guide-display time. */
   to?: number
-  /** Extra filter, e.g. to drop ended programmes that can't be replayed. */
   keep?: (channel: C, programme: EpgSearchHit<C>["programme"]) => boolean
   limit?: number
 }
@@ -41,25 +34,24 @@ export interface EpgSearchOptions<C extends EpgSearchChannel> {
 export const EPG_SEARCH_MIN_CHARS = 2
 const DESC_SCORE = 1
 
-// Normalizing every title on every keystroke is the hot path on large
-// guides; programme objects are stable between loads, so memoize per object.
+// Programme objects are stable between loads; memoize normalization per object.
 const titleNormCache = new WeakMap<object, string>()
 const descNormCache = new WeakMap<object, string>()
 
-function titleNorm(p: EpgSearchProgramme): string {
-  let norm = titleNormCache.get(p)
+function titleNorm(programme: EpgSearchProgramme): string {
+  let norm = titleNormCache.get(programme)
   if (norm === undefined) {
-    norm = normalize(p.title)
-    titleNormCache.set(p, norm)
+    norm = normalize(programme.title)
+    titleNormCache.set(programme, norm)
   }
   return norm
 }
 
-function descNorm(p: EpgSearchProgramme): string {
-  let norm = descNormCache.get(p)
+function descNorm(programme: EpgSearchProgramme): string {
+  let norm = descNormCache.get(programme)
   if (norm === undefined) {
-    norm = normalize(p.desc)
-    descNormCache.set(p, norm)
+    norm = normalize(programme.desc)
+    descNormCache.set(programme, norm)
   }
   return norm
 }
@@ -70,19 +62,14 @@ export function tokenizeEpgQuery(query: string): string[] {
   return norm.split(" ")
 }
 
-/**
- * Hits are sorted chronologically (ties broken by score, then channel order)
- * so the result list reads like a schedule. When more than `limit` match,
- * the best-scoring ones are kept before the chronological sort.
- */
+// Chronological; over `limit`, the best-scoring hits are kept first.
 export function searchProgrammes<C extends EpgSearchChannel>(
   channels: readonly C[],
-  programmes: Map<string, readonly EpgSearchProgramme[]>,
   query: string,
   opts: EpgSearchOptions<C>
 ): { hits: EpgSearchHit<C>[]; total: number } {
   const tokens = tokenizeEpgQuery(query)
-  if (!tokens.length || !programmes.size) return { hits: [], total: 0 }
+  if (!tokens.length) return { hits: [], total: 0 }
 
   const from = opts.from ?? -Infinity
   const to = opts.to ?? Infinity
@@ -90,29 +77,26 @@ export function searchProgrammes<C extends EpgSearchChannel>(
   const hits: Array<EpgSearchHit<C> & { order: number }> = []
 
   channels.forEach((channel, order) => {
-    const key = opts.resolveTvgId(channel)
-    if (!key) return
-    const list = programmes.get(String(key).toLowerCase())
+    const list = opts.programmesFor(channel)
     if (!list?.length) return
     const channelNorm = normalize(channel.name)
     const hours = Number(channel.tvgShift)
     const shiftMs = Number.isFinite(hours) ? hours * 60 * 60 * 1000 : 0
 
-    for (const p of list) {
-      const start = p.start + shiftMs
-      const stop = p.stop + shiftMs
+    for (const source of list) {
+      const start = source.start + shiftMs
+      const stop = source.stop + shiftMs
       if (stop <= from) continue
       if (start >= to) break
 
-      // The channel name can complete a query ("sports tennis") but never
-      // match on its own, or "news" would list every show on "News One".
-      const title = titleNorm(p)
+      // Channel name may complete a query but never match alone ("news" vs "News One").
+      const title = titleNorm(source)
       let score = tokens.some((token) => title.includes(token))
         ? scoreNormMatch(`${title} ${channelNorm}`, tokens)
         : 0
       let inDescription = false
-      if (!score && p.desc) {
-        const desc = descNorm(p)
+      if (!score && source.desc) {
+        const desc = descNorm(source)
         if (
           tokens.some((token) => desc.includes(token)) &&
           tokens.every((token) => title.includes(token) || channelNorm.includes(token) || desc.includes(token))
@@ -123,7 +107,7 @@ export function searchProgrammes<C extends EpgSearchChannel>(
       }
       if (!score) continue
 
-      const programme = { ...p, start, stop, rawStart: p.start, rawStop: p.stop }
+      const programme = { ...source, start, stop, rawStart: source.start, rawStop: source.stop }
       if (opts.keep && !opts.keep(channel, programme)) continue
       hits.push({ channel, programme, score, inDescription, order })
     }
@@ -132,13 +116,13 @@ export function searchProgrammes<C extends EpgSearchChannel>(
   const total = hits.length
   let kept = hits
   if (total > limit) {
-    kept = hits.slice().sort((a, b) => b.score - a.score).slice(0, limit)
+    kept = hits.slice().sort((left, right) => right.score - left.score).slice(0, limit)
   }
   kept.sort(
-    (a, b) =>
-      a.programme.start - b.programme.start ||
-      b.score - a.score ||
-      a.order - b.order
+    (left, right) =>
+      left.programme.start - right.programme.start ||
+      right.score - left.score ||
+      left.order - right.order
   )
   return {
     hits: kept.map(({ order: _order, ...hit }) => hit),

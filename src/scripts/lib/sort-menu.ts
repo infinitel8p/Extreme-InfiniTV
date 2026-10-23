@@ -136,10 +136,12 @@ function initSortMenu(wrapper: Element) {
             `[data-sort-menu-secondary-options="${secondarySelect.id}"]`
         )
         if (!section || !optionsContainer) return
+        const sectionEl = section
+        const optionsEl = optionsContainer
 
         function syncFromSecondarySelect() {
             const current = secondarySelect.value
-            for (const optionButton of Array.from(optionsContainer.children) as HTMLButtonElement[]) {
+            for (const optionButton of Array.from(optionsEl.children) as HTMLButtonElement[]) {
                 const matched = optionButton.dataset.value === current
                 optionButton.setAttribute("aria-selected", matched ? "true" : "false")
                 if (optionButton.hasAttribute("aria-checked")) {
@@ -149,16 +151,16 @@ function initSortMenu(wrapper: Element) {
         }
 
         function rebuildSecondaryOptions() {
-            optionsContainer.replaceChildren()
+            optionsEl.replaceChildren()
             for (const option of Array.from(secondarySelect.options)) {
                 const optionButton = buildSecondaryOptionButton(option, toggles.length > 0)
                 optionButton.addEventListener("click", () => {
                     selectSecondaryValue(secondarySelect, optionButton.dataset.value || "")
                     close()
                 })
-                optionsContainer.appendChild(optionButton)
+                optionsEl.appendChild(optionButton)
             }
-            section.hidden = secondarySelect.options.length <= 1
+            sectionEl.hidden = secondarySelect.options.length <= 1
             syncFromSecondarySelect()
         }
 

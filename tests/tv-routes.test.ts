@@ -74,6 +74,10 @@ describe("tvRouteFor", () => {
     expect(tvRouteFor("/search", "?q=news")).toBe("/tv/search?q=news")
   })
 
+  it("preserves the query string for the login route", () => {
+    expect(tvRouteFor("/login", "?edit=abc")).toBe("/tv/login?edit=abc")
+  })
+
   it("drops the query string for routes that do not preserve it", () => {
     expect(tvRouteFor("/livetv", "?q=news")).toBe("/tv/live")
     expect(tvRouteFor("/", "?foo=bar")).toBe("/tv")
@@ -108,6 +112,10 @@ describe("classicRouteFor", () => {
     expect(classicRouteFor("/tv/movies/detail", "?id=42")).toBe("/movies/detail?id=42")
     expect(classicRouteFor("/tv/series/detail", "id=7")).toBe("/series/detail?id=7")
     expect(classicRouteFor("/tv/search", "?q=news")).toBe("/search?q=news")
+  })
+
+  it("preserves the query string for the login route", () => {
+    expect(classicRouteFor("/tv/login", "?edit=abc")).toBe("/login?edit=abc")
   })
 
   it("drops the query string for routes that do not preserve it", () => {

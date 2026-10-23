@@ -28,6 +28,7 @@ export interface PickLocalSimilarOptions {
   sourcePrefix?: string | null
   preferredTags?: string[]
   groupKeyForEntry?: (candidate: LocalSimilarCandidate) => string
+  isCandidateAllowed?: (candidate: LocalSimilarCandidate) => boolean
 }
 
 const CAST_OVERLAP_CAP = 3 // 2 points each, so this caps the cast bonus at 6
@@ -68,12 +69,14 @@ export function pickLocalSimilar(
   candidates: LocalSimilarCandidate[],
   options: PickLocalSimilarOptions = {}
 ): LocalSimilarCandidate[] {
-  const { limit = 12, infoLookup, sourcePrefix, preferredTags = [], groupKeyForEntry } = options
+  const { limit = 12, infoLookup, sourcePrefix, preferredTags = [], groupKeyForEntry, isCandidateAllowed } = options
   const currentCategory = current.category?.trim() || ""
   const currentDirector = current.directorName ? normalizeName(current.directorName) : ""
   const currentCastNames = new Set(current.castNames.map(normalizeName).filter(Boolean))
 
-  const eligibleCandidates = candidates.filter((candidate) => Number(candidate.id) !== current.id)
+  const eligibleCandidates = candidates.filter(
+    (candidate) => Number(candidate.id) !== current.id && (!isCandidateAllowed || isCandidateAllowed(candidate))
+  )
   const pool = groupKeyForEntry
     ? dedupeByGroupKey(eligibleCandidates, groupKeyForEntry, sourcePrefix, preferredTags)
     : eligibleCandidates
