@@ -19,6 +19,8 @@ export interface VodAudioRemuxOptions {
 export interface VodAudioRemuxSession {
   sessionId: string
   playbackUrl: string
+  /** Actual output start (the keyframe at or before the requested start). */
+  startSeconds?: number
 }
 
 export interface VodAudioErrorPayload {
@@ -116,12 +118,12 @@ export async function startVodAudioRemux(
       startSeconds: options.startSeconds,
       transcodeAudio: options.transcodeAudio,
       ffmpegPath: getFfmpegPath() || null,
-    })) as { sessionId?: string; playbackUrl?: string }
+    })) as { sessionId?: string; playbackUrl?: string; startSeconds?: number }
     if (!result?.sessionId || !result?.playbackUrl) {
       throw new Error("register_vod_audio_remux returned an unexpected shape")
     }
     activeSessionId = result.sessionId
-    return { sessionId: result.sessionId, playbackUrl: result.playbackUrl }
+    return { sessionId: result.sessionId, playbackUrl: result.playbackUrl, startSeconds: result.startSeconds }
   } catch (err) {
     log.warn("[xt:vod-audio-proxy] register_vod_audio_remux failed:", err)
     return null

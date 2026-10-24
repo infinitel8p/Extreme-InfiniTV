@@ -436,7 +436,7 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
       type: "video/mp2t",
       isLive: false,
       durationSeconds: lastGoodDurationSeconds,
-      timelineOffsetSeconds: startSeconds,
+      timelineOffsetSeconds: session.startSeconds ?? startSeconds,
       subtitles: options.originalSubtitles ?? null,
       audio: sourceHandle,
     })

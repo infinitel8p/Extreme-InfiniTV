@@ -1807,6 +1807,11 @@ export function mpegtsRelativeTimestampOffset(nativeOffset: number, timelineOffs
   return nativeOffset - timelineOffset
 }
 
+/** Returns the buffered start to seek to when playback sits before it, else null. */
+export function startupJumpTarget(currentTime: number, bufferedStart: number): number | null {
+  return Number.isFinite(bufferedStart) && currentTime < bufferedStart - 0.1 ? bufferedStart : null
+}
+
 /** Rewraps a SourceBuffer's timestampOffset relative to baseSeconds; mpegts.js re-manages the native absolute value for audio drift. */
 export function defineRelativeTimestampOffset(
   sourceBuffer: { timestampOffset: number },
@@ -1858,6 +1863,7 @@ async function attachMpegts(
   let triedTauriLoader = false
   let durationRetryTimer: ReturnType<typeof setInterval> | null = null
   let offsetWrapTimer: ReturnType<typeof setInterval> | null = null
+  let startupJumpTimer: ReturnType<typeof setInterval> | null = null
 
   const { url: cleanUrl, authorization } = splitUrlAuth(url)
   const playbackUrl = wrapForDnsProxySync(cleanUrl)
@@ -1870,6 +1876,10 @@ async function attachMpegts(
     if (offsetWrapTimer) {
       clearInterval(offsetWrapTimer)
       offsetWrapTimer = null
+    }
+    if (startupJumpTimer) {
+      clearInterval(startupJumpTimer)
+      startupJumpTimer = null
     }
     if (!player) return
     try { player.unload() } catch {}
@@ -1886,6 +1896,22 @@ async function attachMpegts(
     const baseSeconds = timelineOffsetSeconds
     if (isLive || !Number.isFinite(baseSeconds) || (baseSeconds as number) <= 0) return
     if (offsetWrapTimer) clearInterval(offsetWrapTimer)
+    const wrap = (): boolean => {
+      const mediaSource = resolveMediaSource()
+      if (!mediaSource) return false
+      try {
+        const originalAdd = mediaSource.addSourceBuffer.bind(mediaSource)
+        mediaSource.addSourceBuffer = (mime: string) => {
+          const sourceBuffer = originalAdd(mime)
+          try {
+            defineRelativeTimestampOffset(sourceBuffer, baseSeconds as number)
+          } catch {}
+          return sourceBuffer
+        }
+      } catch {}
+      return true
+    }
+    if (wrap()) return
     let attempts = 0
     offsetWrapTimer = setInterval(() => {
       attempts++
@@ -1902,21 +1928,28 @@ async function attachMpegts(
         log.warn("[xt:player] timeline offset wrap gave up: mpegts.js internals not found after retry budget", { attempts })
         return
       }
-      const mediaSource = resolveMediaSource()
-      if (!mediaSource) return
+      if (!wrap()) return
       clearInterval(offsetWrapTimer!)
       offsetWrapTimer = null
-      try {
-        const originalAdd = mediaSource.addSourceBuffer.bind(mediaSource)
-        mediaSource.addSourceBuffer = (mime: string) => {
-          const sourceBuffer = originalAdd(mime)
-          try {
-            defineRelativeTimestampOffset(sourceBuffer, baseSeconds as number)
-          } catch {}
-          return sourceBuffer
-        }
-      } catch {}
     }, 25)
+  }
+
+  // mpegts.js' startup jumper never fires on WebKit for offset mounts.
+  const armStartupJump = () => {
+    if (isLive || !((timelineOffsetSeconds as number) > 0)) return
+    if (startupJumpTimer) clearInterval(startupJumpTimer)
+    startupJumpTimer = setInterval(() => {
+      if (disposed || !player) {
+        clearInterval(startupJumpTimer!)
+        startupJumpTimer = null
+        return
+      }
+      if (!videoEl.buffered.length) return
+      clearInterval(startupJumpTimer!)
+      startupJumpTimer = null
+      const jumpTarget = startupJumpTarget(videoEl.currentTime, videoEl.buffered.start(0))
+      if (jumpTarget !== null) videoEl.currentTime = jumpTarget
+    }, 250)
   }
 
   // mpegts.js never sets MediaSource.duration on the raw-TS path, so assign the known span directly (retried until source buffers are idle).
@@ -2034,6 +2067,7 @@ async function attachMpegts(
     )
     player.attachMediaElement(videoEl)
     armTimelineOffsetWrap()
+    armStartupJump()
     player.load()
     try {
       const playPromise = player.play?.()
