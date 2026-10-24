@@ -38,6 +38,8 @@ import {
   getTmdbApiKey,
   setTmdbApiKey,
   setSubtitleLangDefault,
+  getSubtitleScale,
+  setSubtitleScale,
   getSubtitleLangBackup,
   setSubtitleLangBackup,
   getSubtitleAutoSearch,
@@ -119,6 +121,7 @@ import { getOffsetSetting, setOffsetSetting } from "@/scripts/lib/epg-data.js"
 import { setLocale, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { listTvDevices, saveTvDevice } from "@/scripts/lib/tv-cast.js"
 import { log } from "@/scripts/lib/log.js"
+import { SUBTITLE_SCALE_SIZES } from "@/scripts/lib/subtitle-scale.ts"
 import { isSafeObjectKey } from "@/scripts/lib/safe-object-key.ts"
 
 const FORMAT_VERSION = 2
@@ -290,6 +293,7 @@ export async function exportAll() {
       tmdbKey: getTmdbApiKey(),
       subsLangDefault: readRawLS("xt_subs_lang_default") || "",
       subsLangBackup: getSubtitleLangBackup(),
+      subsScale: getSubtitleScale(),
       subsAutoSearch: getSubtitleAutoSearch(),
       tmdbEnabled: getTmdbEnabled(),
       tvdbEnabled: getTvdbEnabled(),
@@ -498,6 +502,10 @@ export async function importAll(blob, options = {}) {
     }
     if (typeof b.appSettings.subsLangDefault === "string") {
       setSubtitleLangDefault(b.appSettings.subsLangDefault)
+      summary.appSettings++
+    }
+    if (SUBTITLE_SCALE_SIZES.includes(b.appSettings.subsScale)) {
+      setSubtitleScale(b.appSettings.subsScale)
       summary.appSettings++
     }
     if (typeof b.appSettings.subsLangBackup === "string") {

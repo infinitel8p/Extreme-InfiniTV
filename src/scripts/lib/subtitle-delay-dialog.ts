@@ -6,14 +6,7 @@ import { t } from "@/scripts/lib/i18n.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { ICON_TEXT_SIZE } from "@/scripts/lib/icons.ts"
 import { SUBTITLE_SCALE_EVENT, getSubtitleScale, setSubtitleScale } from "@/scripts/lib/app-settings.js"
-import { SUBTITLE_SCALE_SIZES, type SubtitleScale } from "@/scripts/lib/subtitle-scale.ts"
-
-const SIZE_LABEL_KEYS: Record<SubtitleScale, string> = {
-  small: "player.mpv.subtitleStyle.sizeSmall",
-  normal: "player.mpv.subtitleStyle.sizeNormal",
-  large: "player.mpv.subtitleStyle.sizeLarge",
-  xlarge: "player.mpv.subtitleStyle.sizeXLarge",
-}
+import { SUBTITLE_SCALE_SIZES, SUBTITLE_SCALE_LABEL_KEYS, type SubtitleScale } from "@/scripts/lib/subtitle-scale.ts"
 
 export interface SubtitleDelayDialogOptions {
   dialogId: string
@@ -255,7 +248,7 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     if (sizeHeading) sizeHeading.textContent = t("player.subtitleSize")
     node.querySelector('[data-role="size-group"]')?.setAttribute("aria-label", t("player.subtitleSize"))
     for (const sizeButton of node.querySelectorAll<HTMLButtonElement>("[data-size]")) {
-      sizeButton.textContent = t(SIZE_LABEL_KEYS[sizeButton.dataset.size as SubtitleScale])
+      sizeButton.textContent = t(SUBTITLE_SCALE_LABEL_KEYS[sizeButton.dataset.size as SubtitleScale])
     }
     syncScaleButtons()
     node.querySelector('[data-role="minus"]')?.setAttribute("aria-label", t("detail.subtitleDelayEarlier"))

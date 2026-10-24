@@ -4,6 +4,13 @@ export type SubtitleScale = "small" | "normal" | "large" | "xlarge"
 
 export const SUBTITLE_SCALE_SIZES: readonly SubtitleScale[] = ["small", "normal", "large", "xlarge"]
 
+export const SUBTITLE_SCALE_LABEL_KEYS: Record<SubtitleScale, string> = {
+  small: "player.mpv.subtitleStyle.sizeSmall",
+  normal: "player.mpv.subtitleStyle.sizeNormal",
+  large: "player.mpv.subtitleStyle.sizeLarge",
+  xlarge: "player.mpv.subtitleStyle.sizeXLarge",
+}
+
 export const DEFAULT_SUBTITLE_SCALE: SubtitleScale = "normal"
 
 const FACTOR_BY_SCALE: Record<SubtitleScale, number> = { small: 0.8, normal: 1, large: 1.25, xlarge: 1.5 }

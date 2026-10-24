@@ -25,6 +25,7 @@ export interface PlaybackControls {
   selectSubtitleTrack(id: number | null): Promise<void>
   getPlaybackRate(): number
   setPlaybackRate(value: number): void
+  nudgeSubtitleDelay?(deltaSeconds: number): number | null
   onTracksChanged(listener: () => void): () => void
 }
 

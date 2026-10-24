@@ -1,6 +1,7 @@
 // Pure builder for mpv's native context menu, shown via the `mpv_embed_show_menu` Tauri command.
 
 import { t } from "@/scripts/lib/i18n"
+import { SUBTITLE_DELAY_STEPS_MS, formatDelayStepLabel, formatDelayValue } from "@/scripts/lib/subtitle-delay-steps"
 
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const
 
@@ -90,12 +91,6 @@ export interface MpvMenuBuildResult {
 
 type Register = (pick: MpvMenuPick) => number
 
-const DELAY_STEPS_MS = [-500, -250, -100, 100, 250, 500]
-
-function formatStepLabel(deltaMs: number): string {
-  return `${deltaMs >= 0 ? "+" : ""}${deltaMs} ms`
-}
-
 function titleSection(title: string): MenuItem[] {
   return [{ kind: "title", title }, { kind: "separator" }]
 }
@@ -153,18 +148,22 @@ function speedChoiceItems(currentRate: number, register: Register): MenuItem[] {
 }
 
 function delayTitle(kind: "subtitle" | "audio", currentSeconds: number): string {
+  if (kind === "subtitle") {
+    return t("player.subtitleDelay", { value: formatDelayValue(currentSeconds, t) })
+  }
   const roundedMs = Math.round(currentSeconds * 1000)
   const ms = `${roundedMs >= 0 ? "+" : ""}${roundedMs}`
-  if (kind === "subtitle") {
-    return t("player.subtitleDelay", { value: t("player.mpv.subtitleDelay.value", { ms }) })
-  }
   return t("player.mpv.audioDelay.titleWithValue", { value: t("player.mpv.audioDelay.value", { ms }) })
 }
 
+function audioStepLabel(deltaMs: number): string {
+  return `${deltaMs >= 0 ? "+" : ""}${deltaMs} ms`
+}
+
 function delayChoiceItems(kind: "subtitle" | "audio", register: Register): MenuItem[] {
-  const items: MenuItem[] = DELAY_STEPS_MS.map((deltaMs) => ({
+  const items: MenuItem[] = SUBTITLE_DELAY_STEPS_MS.map((deltaMs) => ({
     kind: "item",
-    title: formatStepLabel(deltaMs),
+    title: kind === "subtitle" ? formatDelayStepLabel(deltaMs, t) : audioStepLabel(deltaMs),
     id: register(kind === "subtitle" ? { kind: "subtitle-delay-step", deltaMs } : { kind: "audio-delay-step", deltaMs }),
   }))
   items.push({ kind: "separator" })

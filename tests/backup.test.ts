@@ -42,6 +42,7 @@ let settingsState: any = {
   tmdbEnabled: false,
   subsLangDefault: "",
   subsLangBackup: "",
+  subsScale: "normal",
   subsAutoSearch: false,
   tvdbEnabled: true,
   perfMode: false,
@@ -94,6 +95,8 @@ vi.mock("@/scripts/lib/app-settings.js", () => ({
   getTmdbEnabled: () => settingsState.tmdbEnabled,
   setTmdbEnabled: (enabled: boolean) => { settingsState.tmdbEnabled = enabled },
   setSubtitleLangDefault: (lang: string) => { settingsState.subsLangDefault = lang },
+  getSubtitleScale: () => settingsState.subsScale,
+  setSubtitleScale: (size: string) => { settingsState.subsScale = size },
   getSubtitleLangBackup: () => settingsState.subsLangBackup,
   setSubtitleLangBackup: (lang: string) => { settingsState.subsLangBackup = lang },
   getSubtitleAutoSearch: () => settingsState.subsAutoSearch,
@@ -255,6 +258,7 @@ beforeEach(() => {
     tmdbEnabled: false,
     subsLangDefault: "",
     subsLangBackup: "",
+    subsScale: "normal",
     subsAutoSearch: false,
     tvdbEnabled: true,
     perfMode: false,
@@ -462,22 +466,38 @@ describe("importAll", () => {
     expect(summary.appSettings).toBeGreaterThan(0)
   })
 
+  it("keeps the current subtitle size when the backup lacks it or holds an invalid one", async () => {
+    const snapshot = (await exportAll()) as any
+    settingsState.subsScale = "large"
+
+    delete snapshot.appSettings.subsScale
+    await importAll(snapshot)
+    expect(settingsState.subsScale).toBe("large")
+
+    snapshot.appSettings.subsScale = "huge"
+    await importAll(snapshot)
+    expect(settingsState.subsScale).toBe("large")
+  })
+
   it("round-trips the subtitle language settings through export then import", async () => {
     const storage = new SubsMemoryStorage()
     storage.setItem("xt_subs_lang_default", "fr")
     vi.stubGlobal("localStorage", storage as unknown as Storage)
     try {
       settingsState.subsLangBackup = "es"
+      settingsState.subsScale = "large"
       settingsState.subsAutoSearch = true
       const snapshot = await exportAll()
       settingsState.subsLangDefault = ""
       settingsState.subsLangBackup = ""
+      settingsState.subsScale = "normal"
       settingsState.subsAutoSearch = false
 
       await importAll(snapshot)
 
       expect(settingsState.subsLangDefault).toBe("fr")
       expect(settingsState.subsLangBackup).toBe("es")
+      expect(settingsState.subsScale).toBe("large")
       expect(settingsState.subsAutoSearch).toBe(true)
     } finally {
       vi.unstubAllGlobals()

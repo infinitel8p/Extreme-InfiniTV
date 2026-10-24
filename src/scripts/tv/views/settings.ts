@@ -43,7 +43,10 @@ import {
   setGlobalDns,
   getPerfMode,
   setPerfMode,
+  getSubtitleScale,
+  setSubtitleScale,
 } from "@/scripts/lib/app-settings.js"
+import { SUBTITLE_SCALE_SIZES, SUBTITLE_SCALE_LABEL_KEYS, type SubtitleScale } from "@/scripts/lib/subtitle-scale"
 import { getOffsetSetting, setOffsetSetting } from "@/scripts/lib/epg-data.js"
 import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
 import { dnsProxyAvailable } from "@/scripts/lib/dns-proxy.ts"
@@ -353,6 +356,15 @@ const view: TvView = {
           onActivate: () => openDnsDialog(),
         })
       }
+
+      rows.push({
+        id: "subtitle-size",
+        icon: ICON_TEXT_SIZE,
+        label: t("settings.subtitles.scale"),
+        value: t(SUBTITLE_SCALE_LABEL_KEYS[getSubtitleScale() as SubtitleScale]),
+        kind: "choice",
+        onActivate: () => void pickSubtitleScale(),
+      })
 
       const overscan = getTvOverscan()
       rows.push({
@@ -666,6 +678,21 @@ const view: TvView = {
       })
       if (picked == null) return
       setOffsetSetting(state.playlistId, picked === "auto" ? "auto" : Number(picked))
+      void renderRows()
+    }
+
+    async function pickSubtitleScale(): Promise<void> {
+      const options: ChoiceOption[] = SUBTITLE_SCALE_SIZES.map((size) => ({
+        id: size,
+        label: t(SUBTITLE_SCALE_LABEL_KEYS[size]),
+      }))
+      const picked = await openChoiceDialog({
+        title: t("settings.subtitles.scale"),
+        selectedId: getSubtitleScale(),
+        options,
+      })
+      if (picked == null) return
+      setSubtitleScale(picked as SubtitleScale)
       void renderRows()
     }
 

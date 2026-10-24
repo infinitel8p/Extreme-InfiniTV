@@ -32,7 +32,7 @@ import type { CatchupRequestChannel } from "@/scripts/lib/catchup-resolve.ts"
 import { buildMovieStreamUrl, buildSeriesStreamUrl, buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { markCompleted, pushRecent, setProgress, getTrackPrefs } from "@/scripts/lib/preferences.js"
 import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
-import { getPlayerBackend, getReceiverEngine, getSubtitleAutoSearch } from "@/scripts/lib/app-settings.js"
+import { getPlayerBackend, getReceiverEngine, getSubtitleAutoSearch, getSubtitleScale, setSubtitleScale } from "@/scripts/lib/app-settings.js"
 import { opensubtitlesAvailable } from "@/scripts/lib/opensubtitles.ts"
 import type { SubtitleSearchContext } from "@/scripts/lib/opensubtitles-params.ts"
 import {
@@ -63,6 +63,9 @@ import {
   type ThrottledProgressWriter,
 } from "@/scripts/tv/playback-progress"
 import { createOsd, type OsdHandle, type OsdLiveChannel } from "@/scripts/tv/ui/osd"
+import { openChoiceDialog } from "@/scripts/tv/ui/settings-list"
+import { SUBTITLE_SCALE_SIZES, SUBTITLE_SCALE_LABEL_KEYS, type SubtitleScale } from "@/scripts/lib/subtitle-scale"
+import { SUBTITLE_DELAY_STEPS_MS, formatDelayStepLabel, formatDelayValue } from "@/scripts/lib/subtitle-delay-steps"
 import { createActionSheet, type ActionSheetHandle, type ActionSheetItem } from "@/scripts/tv/ui/action-sheet"
 import { resolveZapTarget } from "@/scripts/tv/osd-zap"
 import { WHEEL_STEP_THROTTLE_MS, WHEEL_STEP_THRESHOLD } from "./focus"
@@ -380,6 +383,37 @@ function seekVodBy(deltaSeconds: number): void {
   seekVodTo(currentPositionSeconds + deltaSeconds, deltaSeconds)
 }
 
+const SUBTITLE_DELAY_RESET_ID = "reset"
+
+async function openSubtitleDelayChooser(controls: PlaybackControls): Promise<void> {
+  let currentSeconds = controls.nudgeSubtitleDelay?.(0)
+  while (currentSeconds != null) {
+    const picked = await openChoiceDialog({
+      title: t("player.subtitleDelay", { value: formatDelayValue(currentSeconds, t) }),
+      options: [
+        ...SUBTITLE_DELAY_STEPS_MS.map((deltaMs) => ({ id: String(deltaMs), label: formatDelayStepLabel(deltaMs, t) })),
+        { id: SUBTITLE_DELAY_RESET_ID, label: t("player.controls.reset") },
+      ],
+    })
+    if (picked == null) return
+    if (picked === SUBTITLE_DELAY_RESET_ID) {
+      const resetSeconds = controls.nudgeSubtitleDelay?.(0)
+      currentSeconds = resetSeconds == null ? null : controls.nudgeSubtitleDelay?.(-resetSeconds)
+    } else {
+      currentSeconds = controls.nudgeSubtitleDelay?.(Number(picked) / 1000)
+    }
+  }
+}
+
+async function openSubtitleSizeChooser(): Promise<void> {
+  const picked = await openChoiceDialog({
+    title: t("player.subtitleSize"),
+    selectedId: getSubtitleScale(),
+    options: SUBTITLE_SCALE_SIZES.map((size) => ({ id: size, label: t(SUBTITLE_SCALE_LABEL_KEYS[size]) })),
+  })
+  if (picked != null) setSubtitleScale(picked as SubtitleScale)
+}
+
 function buildPlaybackOptionsItems(controls: PlaybackControls | null): ActionSheetItem[] {
   const items: ActionSheetItem[] = []
   const searchController = subtitleController
@@ -417,6 +451,18 @@ function buildPlaybackOptionsItems(controls: PlaybackControls | null): ActionShe
       })
     }
   }
+
+  const currentDelaySeconds = controls.nudgeSubtitleDelay?.(0)
+  if (currentDelaySeconds != null) {
+    items.push({
+      label: t("player.subtitleDelay", { value: formatDelayValue(currentDelaySeconds, t) }),
+      onSelect: () => { void openSubtitleDelayChooser(controls) },
+    })
+  }
+  items.push({
+    label: t("player.subtitleSizeWithValue", { value: t(SUBTITLE_SCALE_LABEL_KEYS[getSubtitleScale() as SubtitleScale]) }),
+    onSelect: () => { void openSubtitleSizeChooser() },
+  })
 
   items.push({ label: t("player.controls.speed"), header: true })
   const currentRate = controls.getPlaybackRate()

@@ -1574,6 +1574,23 @@ const navStructure: NavSection[] = [
               </div>
             </div>
 
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.subtitles.scale" class="text-sm font-medium leading-snug">Subtitle size</h3>
+                <p data-i18n="settings.subtitles.scaleHelper" class="text-xs text-fg-3">
+                  Applies to the built-in player on this device.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <select id="settings-subs-scale" class="field-input">
+                  <option value="small" data-i18n="player.mpv.subtitleStyle.sizeSmall">Small</option>
+                  <option value="normal" data-i18n="player.mpv.subtitleStyle.sizeNormal">Normal</option>
+                  <option value="large" data-i18n="player.mpv.subtitleStyle.sizeLarge">Large</option>
+                  <option value="xlarge" data-i18n="player.mpv.subtitleStyle.sizeXLarge">Extra large</option>
+                </select>
+              </div>
+            </div>
+
             <div data-settings-item data-subs-opensubs class="settings-row scroll-mt-6 lg:scroll-mt-20">
               <div class="settings-row__text">
                 <h3 data-i18n="settings.subtitles.autoSearch" class="text-sm font-medium leading-snug">Search automatically when playback starts</h3>
@@ -2721,6 +2738,9 @@ const navStructure: NavSection[] = [
       setSubtitleLangDefault,
       setSubtitleLangBackup,
       getSubtitleAutoSearch,
+      getSubtitleScale,
+      setSubtitleScale,
+      SUBTITLE_SCALE_EVENT,
       setSubtitleAutoSearch,
       getOpenSubtitlesSession,
       SUBTITLE_SETTINGS_EVENT,
@@ -5487,6 +5507,9 @@ const navStructure: NavSection[] = [
     const subsLangBackupSelect = /** @type {HTMLSelectElement|null} */ (
       document.getElementById("settings-subs-lang-backup")
     )
+    const subsScaleSelect = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("settings-subs-scale")
+    )
     const subsAutoGroup = document.getElementById("settings-subs-auto")
     const subsSignInForm = document.getElementById("settings-subs-signin")
     const subsUsernameInput = /** @type {HTMLInputElement|null} */ (
@@ -5560,6 +5583,14 @@ const navStructure: NavSection[] = [
       }
     }
     syncSubsAuto()
+
+    if (subsScaleSelect) {
+      subsScaleSelect.value = getSubtitleScale()
+      subsScaleSelect.addEventListener("change", () => setSubtitleScale(subsScaleSelect.value))
+      document.addEventListener(SUBTITLE_SCALE_EVENT, () => {
+        subsScaleSelect.value = getSubtitleScale()
+      })
+    }
 
     subsAutoGroup?.addEventListener("click", (event) => {
       const btn = /** @type {HTMLElement} */ (event.target).closest(".subs-auto-btn")

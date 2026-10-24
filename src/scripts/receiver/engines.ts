@@ -215,6 +215,10 @@ function adaptPlaybackControls(handle: VjsLikeHandle | null): PlaybackControls |
       return typeof rate === "number" ? rate : 1
     },
     setPlaybackRate: (value) => { capable.playbackRate!(value) },
+    nudgeSubtitleDelay:
+      typeof capable.subtitleDelay === "function"
+        ? (deltaSeconds) => capable.subtitleDelay!(deltaSeconds)
+        : undefined,
     onTracksChanged: (listener) => {
       capable.on("trackschanged", listener)
       return () => capable.off?.("trackschanged", listener)
