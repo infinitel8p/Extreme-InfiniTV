@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">WebView Beta\'yı Al</string>
     <string name="webview_floor_developer_options">Geliştirici seçenekleri</string>
     <string name="webview_floor_continue">Yine de devam et</string>
+    <string name="xt_video_subtitle_size">Altyazı boyutu</string>
+    <string name="xt_video_subtitle_size_small">Küçük</string>
+    <string name="xt_video_subtitle_size_normal">Normal</string>
+    <string name="xt_video_subtitle_size_large">Büyük</string>
+    <string name="xt_video_subtitle_size_xlarge">Çok büyük</string>
+    <string name="xt_video_subtitle_delay">Altyazı gecikmesi</string>
+    <string name="xt_video_subtitle_delay_title">Altyazı gecikmesi %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">Sıfırla</string>
 </resources>

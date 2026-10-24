@@ -46,6 +46,7 @@ interface AndroidVideoBridge {
   setKeepScreenOn?: (enabled: boolean) => void
   setTvOverscan?: (percent: number) => void
   setTvAccent?: (hex: string) => void
+  setSubtitleScale?: (size: string) => void
 }
 
 interface AndroidIntentBridge {

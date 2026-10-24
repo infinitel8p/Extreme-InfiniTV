@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">WebView Beta ophalen</string>
     <string name="webview_floor_developer_options">Ontwikkelaarsopties</string>
     <string name="webview_floor_continue">Toch doorgaan</string>
+    <string name="xt_video_subtitle_size">Ondertitelgrootte</string>
+    <string name="xt_video_subtitle_size_small">Klein</string>
+    <string name="xt_video_subtitle_size_normal">Normaal</string>
+    <string name="xt_video_subtitle_size_large">Groot</string>
+    <string name="xt_video_subtitle_size_xlarge">Extra groot</string>
+    <string name="xt_video_subtitle_delay">Ondertitelvertraging</string>
+    <string name="xt_video_subtitle_delay_title">Ondertitelvertraging %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">Resetten</string>
 </resources>

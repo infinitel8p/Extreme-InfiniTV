@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">Dapatkan WebView Beta</string>
     <string name="webview_floor_developer_options">Opsi pengembang</string>
     <string name="webview_floor_continue">Tetap lanjutkan</string>
+    <string name="xt_video_subtitle_size">Ukuran subtitel</string>
+    <string name="xt_video_subtitle_size_small">Kecil</string>
+    <string name="xt_video_subtitle_size_normal">Normal</string>
+    <string name="xt_video_subtitle_size_large">Besar</string>
+    <string name="xt_video_subtitle_size_xlarge">Sangat besar</string>
+    <string name="xt_video_subtitle_delay">Tunda subtitel</string>
+    <string name="xt_video_subtitle_delay_title">Tunda subtitel %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">Setel ulang</string>
 </resources>

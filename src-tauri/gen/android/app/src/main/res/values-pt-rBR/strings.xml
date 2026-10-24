@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">Obter WebView Beta</string>
     <string name="webview_floor_developer_options">Opções do desenvolvedor</string>
     <string name="webview_floor_continue">Continuar mesmo assim</string>
+    <string name="xt_video_subtitle_size">Tamanho da legenda</string>
+    <string name="xt_video_subtitle_size_small">Pequeno</string>
+    <string name="xt_video_subtitle_size_normal">Normal</string>
+    <string name="xt_video_subtitle_size_large">Grande</string>
+    <string name="xt_video_subtitle_size_xlarge">Muito grande</string>
+    <string name="xt_video_subtitle_delay">Atraso da legenda</string>
+    <string name="xt_video_subtitle_delay_title">Atraso da legenda %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">Redefinir</string>
 </resources>

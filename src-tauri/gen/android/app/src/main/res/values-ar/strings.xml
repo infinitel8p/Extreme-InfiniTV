@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">احصل على WebView Beta</string>
     <string name="webview_floor_developer_options">خيارات المطورين</string>
     <string name="webview_floor_continue">المتابعة على أي حال</string>
+    <string name="xt_video_subtitle_size">حجم الترجمة</string>
+    <string name="xt_video_subtitle_size_small">صغير</string>
+    <string name="xt_video_subtitle_size_normal">عادي</string>
+    <string name="xt_video_subtitle_size_large">كبير</string>
+    <string name="xt_video_subtitle_size_xlarge">كبير جدًا</string>
+    <string name="xt_video_subtitle_delay">تأخير الترجمة</string>
+    <string name="xt_video_subtitle_delay_title">تأخير الترجمة %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s مللي ثانية</string>
+    <string name="xt_video_reset">إعادة ضبط</string>
 </resources>

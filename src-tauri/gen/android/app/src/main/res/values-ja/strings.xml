@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">WebView Beta を取得</string>
     <string name="webview_floor_developer_options">開発者向けオプション</string>
     <string name="webview_floor_continue">このまま続ける</string>
+    <string name="xt_video_subtitle_size">字幕のサイズ</string>
+    <string name="xt_video_subtitle_size_small">小</string>
+    <string name="xt_video_subtitle_size_normal">標準</string>
+    <string name="xt_video_subtitle_size_large">大</string>
+    <string name="xt_video_subtitle_size_xlarge">特大</string>
+    <string name="xt_video_subtitle_delay">字幕の遅延</string>
+    <string name="xt_video_subtitle_delay_title">字幕の遅延 %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">リセット</string>
 </resources>

@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">WebView Beta पाएं</string>
     <string name="webview_floor_developer_options">डेवलपर विकल्प</string>
     <string name="webview_floor_continue">फिर भी जारी रखें</string>
+    <string name="xt_video_subtitle_size">उपशीर्षक का आकार</string>
+    <string name="xt_video_subtitle_size_small">छोटा</string>
+    <string name="xt_video_subtitle_size_normal">सामान्य</string>
+    <string name="xt_video_subtitle_size_large">बड़ा</string>
+    <string name="xt_video_subtitle_size_xlarge">बहुत बड़ा</string>
+    <string name="xt_video_subtitle_delay">उपशीर्षक विलंब</string>
+    <string name="xt_video_subtitle_delay_title">उपशीर्षक विलंब %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">रीसेट करें</string>
 </resources>

@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">获取 WebView Beta</string>
     <string name="webview_floor_developer_options">开发者选项</string>
     <string name="webview_floor_continue">仍然继续</string>
+    <string name="xt_video_subtitle_size">字幕大小</string>
+    <string name="xt_video_subtitle_size_small">小</string>
+    <string name="xt_video_subtitle_size_normal">标准</string>
+    <string name="xt_video_subtitle_size_large">大</string>
+    <string name="xt_video_subtitle_size_xlarge">特大</string>
+    <string name="xt_video_subtitle_delay">字幕延迟</string>
+    <string name="xt_video_subtitle_delay_title">字幕延迟 %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s 毫秒</string>
+    <string name="xt_video_reset">重置</string>
 </resources>

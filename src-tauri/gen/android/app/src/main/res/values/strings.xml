@@ -44,4 +44,13 @@
     <string name="downloads_notification_pause_all">Pause all</string>
     <string name="downloads_notification_complete_title">Download complete</string>
     <string name="downloads_notification_complete_text">%1$s finished downloading</string>
+    <string name="xt_video_subtitle_size">Subtitle size</string>
+    <string name="xt_video_subtitle_size_small">Small</string>
+    <string name="xt_video_subtitle_size_normal">Normal</string>
+    <string name="xt_video_subtitle_size_large">Large</string>
+    <string name="xt_video_subtitle_size_xlarge">Extra large</string>
+    <string name="xt_video_subtitle_delay">Subtitle delay</string>
+    <string name="xt_video_subtitle_delay_title">Subtitle delay %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">Reset</string>
 </resources>

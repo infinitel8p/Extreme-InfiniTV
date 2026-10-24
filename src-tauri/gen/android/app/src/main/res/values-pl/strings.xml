@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">Pobierz WebView Beta</string>
     <string name="webview_floor_developer_options">Opcje deweloperskie</string>
     <string name="webview_floor_continue">Kontynuuj mimo to</string>
+    <string name="xt_video_subtitle_size">Rozmiar napisów</string>
+    <string name="xt_video_subtitle_size_small">Mały</string>
+    <string name="xt_video_subtitle_size_normal">Normalny</string>
+    <string name="xt_video_subtitle_size_large">Duży</string>
+    <string name="xt_video_subtitle_size_xlarge">Bardzo duży</string>
+    <string name="xt_video_subtitle_delay">Opóźnienie napisów</string>
+    <string name="xt_video_subtitle_delay_title">Opóźnienie napisów %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">Resetuj</string>
 </resources>

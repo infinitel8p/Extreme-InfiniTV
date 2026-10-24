@@ -275,6 +275,58 @@ describe("tracksLaunchOptionsFor / persistNativeTracksEvent", () => {
   })
 })
 
+describe("subtitle scale bridge", () => {
+  const localStorageStore = new Map<string, string>()
+  const localStorageMock: Storage = {
+    getItem: (key) => (localStorageStore.has(key) ? localStorageStore.get(key)! : null),
+    setItem: (key, value) => {
+      localStorageStore.set(key, String(value))
+    },
+    removeItem: (key) => {
+      localStorageStore.delete(key)
+    },
+    clear: () => {
+      localStorageStore.clear()
+    },
+    key: (index) => Array.from(localStorageStore.keys())[index] ?? null,
+    get length() {
+      return localStorageStore.size
+    },
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", localStorageMock)
+    localStorageStore.clear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("pushes the stored scale at init and again on the change event", async () => {
+    const setSubtitleScale = vi.fn<(size: string) => void>()
+    ;(window as any).AndroidVideo = { launchVod: vi.fn(), drainEvents: () => "[]", setSubtitleScale }
+    await import("@/scripts/lib/android-video-launcher.js")
+    const settings = await import("@/scripts/lib/app-settings.js")
+    expect(setSubtitleScale).toHaveBeenLastCalledWith(settings.getSubtitleScale())
+
+    settings.setSubtitleScale("large")
+    expect(setSubtitleScale).toHaveBeenLastCalledWith("large")
+  })
+
+  it("applies a scale picked inside the native player to app settings", async () => {
+    ;(window as any).AndroidVideo = { launchVod: vi.fn(), drainEvents: () => "[]", setSubtitleScale: vi.fn() }
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    const settings = await import("@/scripts/lib/app-settings.js")
+    mod.subscribeAndroidNativeEvents(() => {})
+
+    document.dispatchEvent(
+      new CustomEvent("xt:android-native-subtitle-scale", { detail: { size: "xlarge" } }),
+    )
+    expect(settings.getSubtitleScale()).toBe("xlarge")
+  })
+})
+
 describe("launchAndroidNativeVodWithProgress track prefs", () => {
   // preferences.js falls back to localStorage outside Tauri; Node 24's native
   // localStorage shadows jsdom's, so stub a real in-memory Storage.

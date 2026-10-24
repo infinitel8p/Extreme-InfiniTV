@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">WebView Beta حاصل کریں</string>
     <string name="webview_floor_developer_options">ڈویلپر آپشنز</string>
     <string name="webview_floor_continue">بہرحال جاری رکھیں</string>
+    <string name="xt_video_subtitle_size">سب ٹائٹل کا سائز</string>
+    <string name="xt_video_subtitle_size_small">چھوٹا</string>
+    <string name="xt_video_subtitle_size_normal">عام</string>
+    <string name="xt_video_subtitle_size_large">بڑا</string>
+    <string name="xt_video_subtitle_size_xlarge">بہت بڑا</string>
+    <string name="xt_video_subtitle_delay">سب ٹائٹل کی تاخیر</string>
+    <string name="xt_video_subtitle_delay_title">سب ٹائٹل کی تاخیر %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s ms</string>
+    <string name="xt_video_reset">ری سیٹ کریں</string>
 </resources>

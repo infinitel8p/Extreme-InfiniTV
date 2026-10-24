@@ -47,9 +47,19 @@ import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
@@ -124,6 +134,22 @@ class VideoActivity : AppCompatActivity() {
       R.string.xt_video_display_stretch,
     )
     private val PLAYBACK_SPEEDS = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+
+    private val SUBTITLE_SIZES = arrayOf("small", "normal", "large", "xlarge")
+    private val SUBTITLE_SIZE_FACTORS = floatArrayOf(0.8f, 1.0f, 1.25f, 1.5f)
+    private val SUBTITLE_SIZE_LABELS = intArrayOf(
+      R.string.xt_video_subtitle_size_small,
+      R.string.xt_video_subtitle_size_normal,
+      R.string.xt_video_subtitle_size_large,
+      R.string.xt_video_subtitle_size_xlarge,
+    )
+
+    private val SUBTITLE_DELAY_STEPS_MS = intArrayOf(-500, -250, -100, 100, 250, 500)
+    private const val SUBTITLE_DELAY_DEBOUNCE_MS = 400L
+    private const val SUBTITLE_FETCH_TIMEOUT_MS = 15_000
+    private const val SUBTITLE_MAX_BYTES = 5 * 1024 * 1024
+    private const val SUBTITLE_MAX_DELAY_MS = 60_000
+    private const val SUBTITLE_CACHE_DIR = "subs"
   }
 
   private var playerView: PlayerView? = null
@@ -155,6 +181,14 @@ class VideoActivity : AppCompatActivity() {
   private var tvOverscanPercent: Int = 0
   private var accentColor: Int = 0
   private var displayMode: Int = AspectRatioFrameLayout.RESIZE_MODE_FIT
+
+  private var subtitleDelayMs: Int = 0
+  private val sideloadedSubtitleText = ConcurrentHashMap<String, String>()
+  @Volatile private var subtitleFetchGeneration = 0
+  private val subtitleDelayHandler = Handler(Looper.getMainLooper())
+  private var subtitleDelayRunnable: Runnable? = null
+  private var rebuildingSubtitles = false
+  private val subtitleCacheDir by lazy { File(File(cacheDir, SUBTITLE_CACHE_DIR), UUID.randomUUID().toString()) }
 
   private var channels: List<ChannelLite> = emptyList()
   private var currentChannelIndex: Int = -1
@@ -255,6 +289,7 @@ class VideoActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_video)
+    File(cacheDir, SUBTITLE_CACHE_DIR).deleteRecursively()
     applyImmersiveBars()
 
     playerView = findViewById(R.id.player_view)
@@ -363,20 +398,169 @@ class VideoActivity : AppCompatActivity() {
 
   // Gear-button menu. Speed is VOD-only: a live edge has nowhere to run ahead to.
   private fun showPlayerSettings() {
-    if (mode == MODE_LIVE) {
-      showDisplayModeChooser()
-      return
+    val actions = ArrayList<Pair<String, () -> Unit>>()
+    actions.add(getString(R.string.xt_video_display_mode) to { showDisplayModeChooser() })
+    if (mode == MODE_VOD) {
+      actions.add(getString(R.string.xt_video_playback_speed) to { showPlaybackSpeedChooser() })
     }
-    val labels = arrayOf(
-      getString(R.string.xt_video_display_mode),
-      getString(R.string.xt_video_playback_speed),
-    )
+    actions.add(getString(R.string.xt_video_subtitle_size) to { showSubtitleSizeChooser() })
+    if (canShiftSubtitles()) {
+      actions.add(getString(R.string.xt_video_subtitle_delay) to { showSubtitleDelayChooser() })
+    }
     AlertDialog.Builder(this)
       .setTitle(R.string.xt_video_settings_title)
-      .setItems(labels) { _, which ->
-        if (which == 0) showDisplayModeChooser() else showPlaybackSpeedChooser()
-      }
+      .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
       .show()
+  }
+
+  private fun canShiftSubtitles(): Boolean =
+    mode == MODE_VOD &&
+      sideloadedSubtitles.isNotEmpty() &&
+      sideloadedSubtitleText.isNotEmpty() &&
+      sideloadedSubtitles.all { it.mimeType == MimeTypes.APPLICATION_SUBRIP || it.mimeType == MimeTypes.TEXT_VTT }
+
+  private fun applySubtitleScale(size: String) {
+    val index = SUBTITLE_SIZES.indexOf(size).coerceAtLeast(0)
+    playerView?.subtitleView?.setFractionalTextSize(
+      SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * SUBTITLE_SIZE_FACTORS[index]
+    )
+  }
+
+  private fun showSubtitleSizeChooser() {
+    val labels = SUBTITLE_SIZE_LABELS.map { getString(it) }.toTypedArray()
+    AlertDialog.Builder(this)
+      .setTitle(R.string.xt_video_subtitle_size)
+      .setSingleChoiceItems(labels, SUBTITLE_SIZES.indexOf(SubtitleScaleState.size).coerceAtLeast(0)) { dialog, which ->
+        val size = SUBTITLE_SIZES[which]
+        SubtitleScaleState.size = size
+        applySubtitleScale(size)
+        EventQueue.append(this, "xt:android-native-subtitle-scale", JSONObject().apply { put("size", size) })
+        dialog.dismiss()
+      }
+      .setOnDismissListener { playerView?.showController() }
+      .show()
+  }
+
+  private fun formatSubtitleDelay(delayMs: Int): String {
+    val sign = if (delayMs > 0) "+" else ""
+    return getString(R.string.xt_video_subtitle_delay_step, "$sign$delayMs")
+  }
+
+  private fun showSubtitleDelayChooser() {
+    val labels = SUBTITLE_DELAY_STEPS_MS.map { formatSubtitleDelay(it) }.toMutableList()
+    labels.add(getString(R.string.xt_video_reset))
+    AlertDialog.Builder(this)
+      .setTitle(getString(R.string.xt_video_subtitle_delay_title, formatSubtitleDelay(subtitleDelayMs)))
+      .setItems(labels.toTypedArray()) { _, which ->
+        if (which < SUBTITLE_DELAY_STEPS_MS.size) {
+          applySubtitleDelay(SUBTITLE_DELAY_STEPS_MS[which])
+        } else {
+          applySubtitleDelay(-subtitleDelayMs)
+        }
+        showSubtitleDelayChooser()
+      }
+      .setOnCancelListener { playerView?.showController() }
+      .show()
+  }
+
+  private fun applySubtitleDelay(deltaMs: Int) {
+    subtitleDelayMs = (subtitleDelayMs + deltaMs).coerceIn(-SUBTITLE_MAX_DELAY_MS, SUBTITLE_MAX_DELAY_MS)
+    subtitleDelayRunnable?.let { subtitleDelayHandler.removeCallbacks(it) }
+    val runnable = Runnable { rebuildMediaItemWithSubtitleDelay() }
+    subtitleDelayRunnable = runnable
+    subtitleDelayHandler.postDelayed(runnable, SUBTITLE_DELAY_DEBOUNCE_MS)
+  }
+
+  private fun rebuildMediaItemWithSubtitleDelay() {
+    val player = exoPlayer ?: return
+    if (mode != MODE_VOD || sideloadedSubtitles.isEmpty()) return
+    val delayMs = subtitleDelayMs
+    val configurations = sideloadedSubtitles.map { original ->
+      val url = original.uri.toString()
+      val text = sideloadedSubtitleText[url]
+      if (delayMs == 0 || text == null) return@map original
+      try {
+        val extension = if (original.mimeType == MimeTypes.TEXT_VTT) "vtt" else "srt"
+        val directory = subtitleCacheDir.apply { mkdirs() }
+        val shifted = File(directory, "${sha1Hex(url)}_$delayMs.$extension")
+        shifted.writeText(SubtitleTimeShift.shift(text, delayMs, original.mimeType))
+        MediaItem.SubtitleConfiguration.Builder(Uri.fromFile(shifted))
+          .setMimeType(original.mimeType)
+          .setLanguage(original.language)
+          .setLabel(original.label)
+          .setSelectionFlags(original.selectionFlags)
+          .build()
+      } catch (error: Throwable) {
+        Log.w(TAG, "subtitle shift failed: $error")
+        original
+      }
+    }
+    val item = buildMediaItem(intent.getStringExtra(EXTRA_URL) ?: "", initialTitle, posterUrl, configurations)
+    val wasPlaying = player.playWhenReady
+    val selectedLanguage = selectedTrackFormat(player.currentTracks, C.TRACK_TYPE_TEXT)?.language
+    rebuildingSubtitles = true
+    player.setMediaItem(item, player.currentPosition.coerceAtLeast(0))
+    if (selectedLanguage != null) {
+      player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+        .setPreferredTextLanguage(selectedLanguage)
+        .build()
+    }
+    player.prepare()
+    player.playWhenReady = wasPlaying
+  }
+
+  private fun sha1Hex(value: String): String =
+    MessageDigest.getInstance("SHA-1").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+
+  private fun fetchSideloadedSubtitleText() {
+    sideloadedSubtitleText.clear()
+    if (mode != MODE_VOD || sideloadedSubtitles.isEmpty()) return
+    val generation = ++subtitleFetchGeneration
+    val urls = sideloadedSubtitles.map { it.uri.toString() }
+    val ua = defaultUa
+    val referer = defaultReferer
+    thread(name = "xt-subtitle-fetch") {
+      for (url in urls) {
+        if (generation != subtitleFetchGeneration) return@thread
+        val text = readSubtitleText(url, ua, referer) ?: continue
+        if (generation == subtitleFetchGeneration) sideloadedSubtitleText[url] = text
+      }
+    }
+  }
+
+  private fun readBounded(stream: InputStream): String? {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    while (true) {
+      val read = stream.read(buffer)
+      if (read < 0) break
+      output.write(buffer, 0, read)
+      if (output.size() > SUBTITLE_MAX_BYTES) return null
+    }
+    return output.toString(Charsets.UTF_8.name())
+  }
+
+  private fun readSubtitleText(url: String, ua: String, referer: String): String? = try {
+    val scheme = Uri.parse(url).scheme?.lowercase()
+    if (scheme == "http" || scheme == "https") {
+      val connection = URL(url).openConnection() as HttpURLConnection
+      connection.connectTimeout = SUBTITLE_FETCH_TIMEOUT_MS
+      connection.readTimeout = SUBTITLE_FETCH_TIMEOUT_MS
+      connection.instanceFollowRedirects = true
+      if (ua.isNotBlank()) connection.setRequestProperty("User-Agent", ua)
+      if (referer.isNotBlank()) connection.setRequestProperty("Referer", referer)
+      try {
+        connection.inputStream.use { readBounded(it) }
+      } finally {
+        connection.disconnect()
+      }
+    } else {
+      contentResolver.openInputStream(Uri.parse(url))?.use { readBounded(it) }
+    }
+  } catch (error: Throwable) {
+    Log.w(TAG, "subtitle fetch failed: $error")
+    null
   }
 
   private fun showDisplayModeChooser() {
@@ -432,7 +616,11 @@ class VideoActivity : AppCompatActivity() {
 
   private fun initializeFromIntent(intent: Intent) {
     mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_VOD
-    contentKey = intent.getStringExtra(EXTRA_CONTENT_KEY) ?: ""
+    val newContentKey = intent.getStringExtra(EXTRA_CONTENT_KEY) ?: ""
+    subtitleDelayMs = 0
+    subtitleDelayRunnable?.let { subtitleDelayHandler.removeCallbacks(it) }
+    subtitleDelayRunnable = null
+    contentKey = newContentKey
     defaultUa = intent.getStringExtra(EXTRA_UA) ?: ""
     defaultReferer = intent.getStringExtra(EXTRA_REFERER) ?: ""
     defaultDns = intent.getStringExtra(EXTRA_DNS) ?: ""
@@ -604,6 +792,10 @@ class VideoActivity : AppCompatActivity() {
   override fun onDestroy() {
     progressHandler.removeCallbacks(progressTick)
     cancelLiveRetune()
+    subtitleDelayRunnable?.let { subtitleDelayHandler.removeCallbacks(it) }
+    subtitleFetchGeneration++
+    subtitleDelayMs = 0
+    subtitleCacheDir.deleteRecursively()
     NativePlayerControl.unregister(this)
     releasePlayer()
     if (!finishedEmitted) {
@@ -665,6 +857,7 @@ class VideoActivity : AppCompatActivity() {
     exoPlayer = player
     view.player = player
     lastEmittedTracks = null
+    applySubtitleScale(SubtitleScaleState.size)
 
     // VOD restores the remembered audio/subtitle choice; subs stay off unless a prior pick
     // enabled them. The controller's CC dialog can still override live.
@@ -724,12 +917,13 @@ class VideoActivity : AppCompatActivity() {
       // Re-wire after the control view hides trackless buttons, so the chain never points through a GONE view.
       override fun onTracksChanged(tracks: Tracks) {
         playerView?.post { wireControllerFocusChain(mode == MODE_LIVE) }
-        if (mode == MODE_VOD) emitTracksIfChanged(tracks)
+        if (mode == MODE_VOD && !rebuildingSubtitles) emitTracksIfChanged(tracks)
       }
 
       override fun onPlaybackStateChanged(state: Int) {
         updateKeepScreenOn(player)
         // STATE_READY knows the timeline; ticks only fire while playing, so report it right away.
+        if (state == Player.STATE_READY) rebuildingSubtitles = false
         if (state == Player.STATE_READY && mode == MODE_VOD) emitProgress(player)
         if (state == Player.STATE_READY && mode == MODE_LIVE && player.playWhenReady) {
           scheduleLiveRetuneStableCheck()
@@ -764,6 +958,7 @@ class VideoActivity : AppCompatActivity() {
         player.setMediaItem(item, resumeMs)
         player.prepare()
         player.playWhenReady = true
+        fetchSideloadedSubtitleText()
       }
       MODE_LIVE -> {
         val channel = channels.getOrNull(currentChannelIndex) ?: return
@@ -1419,6 +1614,15 @@ object NativePlayerPayload {
 object TvOverscanState {
   @Volatile
   var percent: Int = 0
+}
+
+// Subtitle size (small|normal|large|xlarge), pushed from JS via
+// AndroidVideoBridge.setSubtitleScale and updated by the in-player size chooser.
+val SUBTITLE_SCALE_SIZES = setOf("small", "normal", "large", "xlarge")
+
+object SubtitleScaleState {
+  @Volatile
+  var size: String = "normal"
 }
 
 // Current TV accent colour override, pushed from JS via AndroidVideoBridge.setTvAccent

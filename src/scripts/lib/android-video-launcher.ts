@@ -17,7 +17,13 @@
 import type { ChannelInput } from "@/scripts/lib/channel-lite.js"
 import { serializeChannelsJson } from "@/scripts/lib/channel-lite.js"
 import { setProgress, markCompleted, getTrackPrefs, setTrackPrefs } from "@/scripts/lib/preferences.js"
-import { getTvOverscan, TV_OVERSCAN_EVENT } from "@/scripts/lib/app-settings.js"
+import {
+  getSubtitleScale,
+  setSubtitleScale,
+  SUBTITLE_SCALE_EVENT,
+  getTvOverscan,
+  TV_OVERSCAN_EVENT,
+} from "@/scripts/lib/app-settings.js"
 import { resolveAccentHex } from "@/scripts/lib/playlist-accent.ts"
 import { normalizeLang } from "@/scripts/lib/track-match.js"
 import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
@@ -31,6 +37,7 @@ export type AndroidNativeEventType =
   | "xt:android-native-play-state"
   | "xt:android-native-volume"
   | "xt:android-native-tracks"
+  | "xt:android-native-subtitle-scale"
 
 export interface AndroidNativeEvent {
   type: AndroidNativeEventType
@@ -104,6 +111,14 @@ function pushTvOverscan(): void {
   }
 }
 
+function pushSubtitleScale(): void {
+  try {
+    window.AndroidVideo?.setSubtitleScale?.(getSubtitleScale())
+  } catch (err) {
+    log.warn("[xt:android-video] setSubtitleScale bridge call failed:", err)
+  }
+}
+
 // Keeps VideoActivity's launch intents in sync with the active accent colour.
 function pushTvAccent(): void {
   try {
@@ -117,8 +132,10 @@ function pushTvAccent(): void {
 if (androidNativePlayerAvailable) {
   pushTvOverscan()
   pushTvAccent()
+  pushSubtitleScale()
   if (typeof document !== "undefined") {
     document.addEventListener?.(TV_OVERSCAN_EVENT, pushTvOverscan)
+    document.addEventListener?.(SUBTITLE_SCALE_EVENT, pushSubtitleScale)
     if (typeof MutationObserver !== "undefined" && document.documentElement) {
       new MutationObserver(pushTvAccent).observe(document.documentElement, {
         attributes: true,
@@ -193,6 +210,10 @@ const subscribers = new Set<Subscriber>()
 let listenersInstalled = false
 
 function dispatchToSubscribers(type: AndroidNativeEventType, payload: unknown): void {
+  if (type === "xt:android-native-subtitle-scale") {
+    const size = (payload as { size?: string } | null)?.size
+    if (size) setSubtitleScale(size)
+  }
   const event: AndroidNativeEvent = {
     type,
     payload: (payload || {}) as AndroidNativeEvent["payload"],
@@ -213,6 +234,7 @@ function installListeners(): void {
     "xt:android-native-play-state",
     "xt:android-native-volume",
     "xt:android-native-tracks",
+    "xt:android-native-subtitle-scale",
   ]
   for (const type of types) {
     document.addEventListener(type, (event: Event) => {

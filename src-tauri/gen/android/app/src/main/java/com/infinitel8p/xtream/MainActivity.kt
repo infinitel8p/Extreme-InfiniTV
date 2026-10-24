@@ -1586,6 +1586,11 @@ class AndroidVideoBridge(
   }
 
   @JavascriptInterface
+  fun setSubtitleScale(size: String) {
+    SubtitleScaleState.size = if (size in SUBTITLE_SCALE_SIZES) size else "normal"
+  }
+
+  @JavascriptInterface
   fun setTvAccent(hex: String) {
     TvAccentState.color = try {
       if (hex.isBlank()) 0 else android.graphics.Color.parseColor(hex)

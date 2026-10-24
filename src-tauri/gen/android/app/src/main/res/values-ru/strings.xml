@@ -16,4 +16,13 @@
     <string name="webview_floor_get_beta">Получить WebView Beta</string>
     <string name="webview_floor_developer_options">Для разработчиков</string>
     <string name="webview_floor_continue">Всё равно продолжить</string>
+    <string name="xt_video_subtitle_size">Размер субтитров</string>
+    <string name="xt_video_subtitle_size_small">Маленький</string>
+    <string name="xt_video_subtitle_size_normal">Обычный</string>
+    <string name="xt_video_subtitle_size_large">Большой</string>
+    <string name="xt_video_subtitle_size_xlarge">Очень большой</string>
+    <string name="xt_video_subtitle_delay">Задержка субтитров</string>
+    <string name="xt_video_subtitle_delay_title">Задержка субтитров %1$s</string>
+    <string name="xt_video_subtitle_delay_step">%1$s мс</string>
+    <string name="xt_video_reset">Сбросить</string>
 </resources>
