@@ -545,3 +545,38 @@ describe("TMDb enabled legacy migration", () => {
     expect(localStorage.getItem("xt_tmdb_enabled_v2")).toBe("1")
   })
 })
+
+describe("subtitle scale", () => {
+  it("defaults to normal and persists it", async () => {
+    const { getSubtitleScale } = await import("@/scripts/lib/app-settings.js")
+    expect(getSubtitleScale()).toBe("normal")
+    expect(localStorage.getItem("xt_subs_scale")).toBe("normal")
+  })
+
+  it("round-trips a size", async () => {
+    const { getSubtitleScale, setSubtitleScale } = await import("@/scripts/lib/app-settings.js")
+    setSubtitleScale("xlarge")
+    expect(getSubtitleScale()).toBe("xlarge")
+    setSubtitleScale("bogus")
+    expect(getSubtitleScale()).toBe("normal")
+  })
+
+  it("migrates from the legacy mpv style size", async () => {
+    localStorage.setItem("xt_mpv_sub_style", JSON.stringify({ size: "large", position: "bottom", color: "white" }))
+    const { getSubtitleScale } = await import("@/scripts/lib/app-settings.js")
+    expect(getSubtitleScale()).toBe("large")
+    expect(localStorage.getItem("xt_subs_scale")).toBe("large")
+  })
+
+  it("dispatches on change but not on the same value", async () => {
+    const { setSubtitleScale, SUBTITLE_SCALE_EVENT } = await import("@/scripts/lib/app-settings.js")
+    const listener = vi.fn()
+    document.addEventListener(SUBTITLE_SCALE_EVENT, listener)
+    setSubtitleScale("large")
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ size: "large" })
+    setSubtitleScale("large")
+    expect(listener).toHaveBeenCalledTimes(1)
+    document.removeEventListener(SUBTITLE_SCALE_EVENT, listener)
+  })
+})

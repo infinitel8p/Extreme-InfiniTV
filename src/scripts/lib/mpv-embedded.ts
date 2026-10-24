@@ -4,7 +4,14 @@ import { log } from "@/scripts/lib/log.js"
 import { t, getActiveLocale } from "@/scripts/lib/i18n"
 import { toastError, toastSuccess } from "@/scripts/lib/toast.js"
 import { wrapForDnsProxyExternal } from "@/scripts/lib/player-runtime.js"
-import { getMpvStartConfig, getDownloadDir } from "@/scripts/lib/app-settings.js"
+import {
+  getMpvStartConfig,
+  getDownloadDir,
+  getSubtitleScale,
+  setSubtitleScale,
+  SUBTITLE_SCALE_EVENT,
+} from "@/scripts/lib/app-settings.js"
+import { subtitleScaleFactor } from "@/scripts/lib/subtitle-scale.ts"
 import { mountMpvControls } from "@/scripts/lib/mpv-controls.js"
 import { buildMpvMenu, toLegacyMpvMenuData, parseMpvMenuMessageId } from "@/scripts/lib/mpv-menu.js"
 import type { MpvMenuKind, MpvMenuPick } from "@/scripts/lib/mpv-menu.js"
@@ -403,7 +410,6 @@ const SUBTITLE_SIZES: MpvSubtitleStyle["size"][] = ["small", "normal", "large", 
 const SUBTITLE_POSITIONS: MpvSubtitleStyle["position"][] = ["bottom", "raised"]
 const SUBTITLE_COLORS: MpvSubtitleStyle["color"][] = ["white", "yellow"]
 
-const SUB_SCALE_BY_SIZE: Record<MpvSubtitleStyle["size"], number> = { small: 0.8, normal: 1, large: 1.25, xlarge: 1.5 }
 const SUB_POS_BY_POSITION: Record<MpvSubtitleStyle["position"], number> = { bottom: 100, raised: 80 }
 const SUB_COLOR_BY_COLOR: Record<MpvSubtitleStyle["color"], string> = { white: "#FFFFFF", yellow: "#FFFF00" }
 // ASS colours are &HAABBGGRR; empty string clears the override so the script's own colour returns.
@@ -421,7 +427,7 @@ export function subtitleStyleToMpvProperties(style: MpvSubtitleStyle): {
   "sub-ass-style-overrides": string
 } {
   return {
-    "sub-scale": SUB_SCALE_BY_SIZE[style.size] ?? SUB_SCALE_BY_SIZE.normal,
+    "sub-scale": subtitleScaleFactor(style.size),
     "sub-pos": SUB_POS_BY_POSITION[style.position] ?? SUB_POS_BY_POSITION.bottom,
     "sub-color": SUB_COLOR_BY_COLOR[style.color] ?? SUB_COLOR_BY_COLOR.white,
     "sub-ass-override": "scale",
@@ -592,7 +598,8 @@ function readPersistedSubtitleStyle(): string | null {
 
 function persistSubtitleStyle(style: MpvSubtitleStyle): void {
   try {
-    localStorage.setItem(SUBTITLE_STYLE_STORAGE_KEY, JSON.stringify(style))
+    const { size: _size, ...persisted } = style
+    localStorage.setItem(SUBTITLE_STYLE_STORAGE_KEY, JSON.stringify(persisted))
   } catch (err) {
     log.warn("[xt:mpv-embed] failed to persist subtitle style:", err)
   }
@@ -706,7 +713,10 @@ export async function createMpvEmbeddedHandle(
   let sessionRestart: Promise<boolean> | null = null
   let currentMediaTitle: string | null = null
   let currentAudioDelay = 0
-  let currentSubtitleStyle: MpvSubtitleStyle = parseSubtitleStyle(readPersistedSubtitleStyle())
+  let currentSubtitleStyle: MpvSubtitleStyle = {
+    ...parseSubtitleStyle(readPersistedSubtitleStyle()),
+    size: getSubtitleScale(),
+  }
 
   let hasLoadedSource = false
   let loadGeneration = 0
@@ -783,6 +793,7 @@ export async function createMpvEmbeddedHandle(
     loadOptions: LoadOptions
   }
   let lastLoadRequest: LastLoadRequest | null = null
+  let lastRequestedSrc: string | null = null
   let srcLoadInFlight = false
   let liveEofRetryCount = 0
   let liveEofReloadTimer: ReturnType<typeof setTimeout> | null = null
@@ -1324,10 +1335,18 @@ export async function createMpvEmbeddedHandle(
   // Matches every other backend: subtitles start off, mpv's own auto-selection would turn them on.
   void setProperty("sid", "no")
 
-  function applySubtitleStyleProperties(style: MpvSubtitleStyle): void {
-    for (const [name, value] of Object.entries(subtitleStyleToMpvProperties(style))) void setProperty(name, value)
+  function applySubtitleStyleProperties(style: MpvSubtitleStyle, includeScale = true): void {
+    for (const [name, value] of Object.entries(subtitleStyleToMpvProperties(style))) {
+      if (name === "sub-scale" && !includeScale) continue
+      void setProperty(name, value)
+    }
   }
   applySubtitleStyleProperties(currentSubtitleStyle)
+  const handleSubtitleScaleChange = () => {
+    currentSubtitleStyle = { ...currentSubtitleStyle, size: getSubtitleScale() }
+    void setProperty("sub-scale", subtitleScaleFactor(currentSubtitleStyle.size))
+  }
+  document.addEventListener(SUBTITLE_SCALE_EVENT, handleSubtitleScaleChange)
 
   function applyAudioTrackSelection(pickedId: number): Promise<void> {
     const raw = mpvTrackCandidates(props.trackList, "audio").find((entry) => entry.id === pickedId)
@@ -1603,6 +1622,8 @@ export async function createMpvEmbeddedHandle(
       const generation = ++loadGeneration
       trackMemoryLoadGeneration = generation
       const requestedSrc = opts.src
+      if (lastRequestedSrc !== null && requestedSrc !== lastRequestedSrc) resetSubtitleDelay()
+      lastRequestedSrc = requestedSrc
       srcLoadInFlight = true
       let loadSessionId = sessionId
       void (async () => {
@@ -1860,9 +1881,10 @@ export async function createMpvEmbeddedHandle(
     },
     subtitleStyle(patch) {
       if (patch) {
+        if (patch.size) setSubtitleScale(patch.size)
         currentSubtitleStyle = { ...currentSubtitleStyle, ...patch }
         persistSubtitleStyle(currentSubtitleStyle)
-        applySubtitleStyleProperties(currentSubtitleStyle)
+        applySubtitleStyleProperties(currentSubtitleStyle, !patch.size)
       }
       return currentSubtitleStyle
     },
@@ -1903,6 +1925,7 @@ export async function createMpvEmbeddedHandle(
     },
     dispose() {
       disposed = true
+      document.removeEventListener(SUBTITLE_SCALE_EVENT, handleSubtitleScaleChange)
       clearLiveEofTimers()
       clearLiveStallWatchdog()
       void setProperty("stream-record", "")

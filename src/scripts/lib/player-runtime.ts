@@ -33,8 +33,11 @@ import {
   getUserAgent,
   getNetworkTimeoutSeconds,
   getPerfMode,
+  getSubtitleScale,
+  SUBTITLE_SCALE_EVENT,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
+import { applySubtitleScaleStyle, applyVideoJsSubtitleScale } from "@/scripts/lib/subtitle-scale.ts"
 import { classifyEffectTier } from "@/scripts/tv/motion"
 import { getAndroidMemoryClassMb } from "@/scripts/lib/tv-detect.ts"
 import { bindMonoAudio, bindMonoAudioMpv, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
@@ -2161,6 +2164,10 @@ async function mountVideoJs(
     },
   }) as any
 
+  applyVideoJsSubtitleScale(player, getSubtitleScale())
+  const handleSubtitleScaleChange = () => applyVideoJsSubtitleScale(player, getSubtitleScale())
+  document.addEventListener(SUBTITLE_SCALE_EVENT, handleSubtitleScaleChange)
+
   let activeMpegts: MpegtsHandle | null = null
   let pendingMpegtsAttach: Promise<MpegtsHandle | null> | null = null
   let activeHls: { destroy: () => void } | null = null
@@ -2491,6 +2498,7 @@ async function mountVideoJs(
       try { player.reset() } catch {}
     },
     dispose() {
+      document.removeEventListener(SUBTITLE_SCALE_EVENT, handleSubtitleScaleChange)
       pendingSrc = null
       pendingAudioSource = null
       pendingUsesCallerSuppliedTracks = false
@@ -3471,11 +3479,21 @@ export async function resolveEffectiveBackend(
 // ---------------------------------------------------------------------------
 // Mount entry point
 // ---------------------------------------------------------------------------
+let subtitleScaleListenerBound = false
+
+function bindSubtitleScaleStyle(): void {
+  applySubtitleScaleStyle(getSubtitleScale())
+  if (subtitleScaleListenerBound || typeof document === "undefined") return
+  subtitleScaleListenerBound = true
+  document.addEventListener(SUBTITLE_SCALE_EVENT, () => applySubtitleScaleStyle(getSubtitleScale()))
+}
+
 export async function mountPlayer(
   videoEl: HTMLVideoElement,
   backend: PlayerBackend = getPlayerBackend(),
   options: MountOptions = {},
 ): Promise<Mounted> {
+  bindSubtitleScaleStyle()
   await ensurePlaybackDnsReady()
   const requestedBackend = backend
   backend = await resolveEffectiveBackend(backend)

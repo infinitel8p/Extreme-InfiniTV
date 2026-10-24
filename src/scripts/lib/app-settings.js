@@ -6,6 +6,7 @@ import { compareVersions } from "@/scripts/lib/version-compare.ts"
 import { normalizeDnsInput } from "@/scripts/lib/dns-config.ts"
 import { getActiveLocale } from "@/scripts/lib/i18n.ts"
 import { toOpenSubtitlesLanguage } from "@/scripts/lib/opensubtitles-params.ts"
+import { migrateSubtitleScale, normalizeSubtitleScale } from "@/scripts/lib/subtitle-scale.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -60,6 +61,7 @@ const KEY_DNS = "xt_dns"
 const KEY_SUBS_LANG_DEFAULT = "xt_subs_lang_default"
 const KEY_SUBS_LANG_BACKUP = "xt_subs_lang_backup"
 const KEY_SUBS_AUTO_SEARCH = "xt_subs_auto_search"
+export const KEY_SUBS_SCALE = "xt_subs_scale"
 const KEY_OPENSUBS_SESSION = "xt_opensubs_session"
 const EVT_CHANGED = "xt:settings-changed"
 
@@ -1348,6 +1350,22 @@ export function getSubtitleAutoSearch() {
 export function setSubtitleAutoSearch(enabled) {
   writeLS(KEY_SUBS_AUTO_SEARCH, enabled ? "1" : "")
   emitSubtitleSettings("autoSearch")
+}
+
+export const SUBTITLE_SCALE_EVENT = "xt:subtitle-scale-changed"
+
+export function getSubtitleScale() {
+  const stored = readLS(KEY_SUBS_SCALE, "")
+  const size = migrateSubtitleScale(stored || null, readLS("xt_mpv_sub_style", "") || null)
+  if (!stored) writeLS(KEY_SUBS_SCALE, size)
+  return size
+}
+
+export function setSubtitleScale(size) {
+  const next = normalizeSubtitleScale(size)
+  if (next === getSubtitleScale()) return
+  writeLS(KEY_SUBS_SCALE, next)
+  document.dispatchEvent(new CustomEvent(SUBTITLE_SCALE_EVENT, { detail: { size: next } }))
 }
 
 export function getOpenSubtitlesSession() {

@@ -471,7 +471,6 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     session = null
     currentSourceUrl = sourceUrl
     toastShownForSource = false
-    offsetSeconds = 0
     tracksReadyFired = false
     teardownTracks()
     embeddedPending = false
@@ -487,6 +486,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     if (!incomingIdentity || incomingIdentity !== selectionSourceIdentity) {
       rememberedTrackKey = null
       hasMadeSubtitleSelection = false
+      offsetSeconds = 0
     }
     selectionSourceIdentity = incomingIdentity
 

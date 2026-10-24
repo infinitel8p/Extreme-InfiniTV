@@ -3442,9 +3442,8 @@ function buildCurrentMoreMenuItems(channel, src, name): HTMLButtonElement[] {
   })
   items.push(healthItem)
 
-  // Mirrors the detail pages' subtitle-delay button: only offered while a subtitle track is showing.
-  if (vjs?.subtitleDelay?.(0) != null) {
-    const subtitleDelayItem = makeMoreMenuItem(t("detail.subtitleDelay"))
+  if (vjs) {
+    const subtitleDelayItem = makeMoreMenuItem(t("player.subtitles"))
     subtitleDelayItem.addEventListener("click", () => {
       closeCurrentMoreMenu()
       subtitleDelayProxyBtn.click()
