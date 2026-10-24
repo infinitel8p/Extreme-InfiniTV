@@ -7,7 +7,7 @@ import { clearKeyAvailable, isParseFailureDetail } from "@/scripts/lib/codec-hin
 import type { StartFailureKind } from "@/scripts/lib/codec-hints"
 import { t } from "@/scripts/lib/i18n.js"
 import { escapeHtml } from "@/scripts/lib/format.js"
-import { ICON_BADGE_CC } from "@/scripts/lib/icons.js"
+import { ICON_BADGE_CC, ICON_TEXT_SIZE } from "@/scripts/lib/icons.js"
 import {
   createSubtitleManager,
   createNativeTrackRegistrar,
@@ -189,6 +189,11 @@ export interface MountOptions {
   /** mpv-embedded only: mounts its own control bar. Defaults to true. */
   mpvControls?: boolean
   onSubtitleSearch?: () => void
+  onOpenSubtitles?: () => void
+}
+
+export function subtitlesControlSpec() {
+  return { name: "xtSubtitlesDialog", position: "right", index: 7, icon: ICON_TEXT_SIZE, label: t("player.subtitles") } as const
 }
 
 export const isTauri =
@@ -2164,6 +2169,23 @@ async function mountVideoJs(
     },
   }) as any
 
+  if (options.onOpenSubtitles) {
+    const spec = subtitlesControlSpec()
+    const bar = player.controlBar
+    const fullscreenIndex = bar.children().indexOf(bar.getChild("fullscreenToggle"))
+    const subtitlesButton = bar.addChild(
+      "button",
+      { controlText: spec.label, className: "vjs-xt-subtitles-button" },
+      fullscreenIndex >= 0 ? fullscreenIndex : undefined,
+    )
+    const placeholder = subtitlesButton.el().querySelector(".vjs-icon-placeholder")
+    if (placeholder) {
+      placeholder.classList.add("flex", "items-center", "justify-center")
+      placeholder.innerHTML = spec.icon.replace("<svg ", '<svg class="size-5" ')
+    }
+    subtitlesButton.on("click", options.onOpenSubtitles)
+  }
+
   applyVideoJsSubtitleScale(player, getSubtitleScale())
   const handleSubtitleScaleChange = () => applyVideoJsSubtitleScale(player, getSubtitleScale())
   document.addEventListener(SUBTITLE_SCALE_EVENT, handleSubtitleScaleChange)
@@ -2811,6 +2833,26 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     },
     onSelectionChanged: (track) => subtitleMemoryHooks.onSelectionChanged(track),
   })
+  if (options.onOpenSubtitles) {
+    const spec = subtitlesControlSpec()
+    const openSubtitles = options.onOpenSubtitles
+    const addDialogControl = () => {
+      try {
+        art.controls.add({
+          name: spec.name,
+          position: spec.position,
+          index: spec.index,
+          html: spec.icon.replace("<svg ", '<svg style="fill:none;width:22px;height:22px" '),
+          tooltip: spec.label,
+          click: () => openSubtitles(),
+        })
+      } catch (err) {
+        log.warn("[xt:player] artplayer subtitles dialog control add failed:", err)
+      }
+    }
+    if (art.isReady) addDialogControl()
+    else art.on("ready", addDialogControl)
+  }
   const audioControl = attachArtplayerAudioControl(art, t)
   const hlsSubtitleControl = attachArtplayerHlsSubtitleControl(art, t)
 
@@ -2819,6 +2861,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     subtitleManager.detach()
     audioControl.dispose()
     hlsSubtitleControl.dispose()
+    try { art.controls.remove(subtitlesControlSpec().name) } catch {}
   })
 
   function removeSubtitleControl(): void {
@@ -3044,6 +3087,34 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   return handle
 }
 
+const SHAKA_SUBTITLES_ELEMENT = "xt_subtitles"
+const shakaSubtitlesCallbacks = new WeakMap<HTMLElement, () => void>()
+let shakaSubtitlesRegistered = false
+
+function registerShakaSubtitlesElement(shaka: any): void {
+  if (shakaSubtitlesRegistered) return
+  shakaSubtitlesRegistered = true
+  class XtSubtitlesButton extends shaka.ui.Element {
+    constructor(parent: HTMLElement, controls: any) {
+      super(parent, controls)
+      const spec = subtitlesControlSpec()
+      const button = document.createElement("button")
+      button.type = "button"
+      button.className = "shaka-xt-subtitles-button shaka-tooltip flex items-center justify-center"
+      button.setAttribute("aria-label", spec.label)
+      button.title = spec.label
+      button.innerHTML = spec.icon.replace("<svg ", '<svg class="size-6" ')
+      parent.appendChild(button)
+      this.eventManager.listen(button, "click", () => {
+        shakaSubtitlesCallbacks.get(controls.getVideoContainer())?.()
+      })
+    }
+  }
+  shaka.ui.Controls.registerElement(SHAKA_SUBTITLES_ELEMENT, {
+    create: (rootElement: HTMLElement, controls: any) => new XtSubtitlesButton(rootElement, controls),
+  })
+}
+
 async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {}): Promise<VjsLikeHandle> {
   const [shakaModule] = await Promise.all([
     import("shaka-player/dist/shaka-player.ui.js"),
@@ -3083,6 +3154,10 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   try {
     player = new shaka.Player()
     await player.attach(video)
+    if (options.onOpenSubtitles) {
+      registerShakaSubtitlesElement(shaka)
+      shakaSubtitlesCallbacks.set(container, options.onOpenSubtitles)
+    }
     ui = new shaka.ui.Overlay(player, container, video)
     controls = ui.getControls()
 
@@ -3092,6 +3167,12 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       seekBarColors: { played: accentColor },
       volumeBarColors: { level: accentColor },
     })
+    if (options.onOpenSubtitles) {
+      const panelElements: string[] = [...ui.getConfiguration().controlPanelElements]
+      const fullscreenIndex = panelElements.indexOf("fullscreen")
+      panelElements.splice(fullscreenIndex >= 0 ? fullscreenIndex : panelElements.length, 0, SHAKA_SUBTITLES_ELEMENT)
+      ui.configure({ controlPanelElements: panelElements })
+    }
   } catch (err) {
     try { ui?.destroy?.() } catch {}
     try { player?.destroy?.() } catch {}

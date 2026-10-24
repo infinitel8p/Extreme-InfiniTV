@@ -878,6 +878,7 @@ async function ensureEmbeddedPlayer(backend) {
     pictureInPictureToggle: !hasNativePipBridge,
     userAgent: getUserAgent() || null,
     onSubtitleSearch: () => { void openSubtitleSearch() },
+    onOpenSubtitles: () => subtitleDelayController.open(),
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
@@ -1194,6 +1195,8 @@ const subtitleDelayController = createSubtitleDelayController({
   button: document.getElementById("movie-subtitle-delay-btn"),
   nudge: (deltaSeconds) => vjs?.subtitleDelay?.(deltaSeconds),
   getMediaElement: () => vjs?.getMediaElement?.() ?? null,
+  onSearch: () => { void openSubtitleSearch() },
+  canSearch: () => !!(movie && opensubtitlesAvailable()),
 })
 
 document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))

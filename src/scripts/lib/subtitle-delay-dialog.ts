@@ -22,12 +22,15 @@ export interface SubtitleDelayDialogOptions {
   nudge: (deltaSeconds: number) => number | null | undefined
   /** Video element hosting subtitle tracks; drives button visibility via textTracks events. */
   getMediaElement?: () => HTMLVideoElement | null
+  onSearch?: () => void
+  canSearch?: () => boolean
 }
 
 export interface SubtitleDelayController {
   setup(): void
   teardown(): void
   handleKeydown(event: KeyboardEvent): void
+  open(): void
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -45,7 +48,7 @@ export function formatSubtitleDelay(offsetSeconds: number): string {
 }
 
 export function createSubtitleDelayController(options: SubtitleDelayDialogOptions): SubtitleDelayController {
-  const { dialogId, button, nudge, getMediaElement } = options
+  const { dialogId, button, nudge, getMediaElement, onSearch, canSearch } = options
   let dialogEl: HTMLDialogElement | null = null
   let dialogValueEl: HTMLElement | null = null
   let dialogResetBtn: HTMLButtonElement | null = null
@@ -199,6 +202,12 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
         <div class="flex justify-end gap-2">
           <button
             type="button"
+            data-role="search"
+            hidden
+            class="inline-flex items-center justify-center min-h-11 rounded-xl border border-line px-4 text-sm transition-colors
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"></button>
+          <button
+            type="button"
             data-role="close"
             class="inline-flex items-center justify-center min-h-11 rounded-xl border border-line px-4 text-sm transition-colors
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"></button>
@@ -213,6 +222,10 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     node.querySelector('[data-role="close"]')?.addEventListener("click", () => node.close())
     node.addEventListener("click", (event) => {
       if (event.target === node) node.close()
+    })
+    node.querySelector('[data-role="search"]')?.addEventListener("click", () => {
+      node.close()
+      onSearch?.()
     })
     node.querySelector('[data-role="minus"]')?.addEventListener("click", () => nudgeDelay(-0.1))
     node.querySelector('[data-role="plus"]')?.addEventListener("click", () => nudgeDelay(0.1))
@@ -233,6 +246,7 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
 
   function openDialog(): void {
     const node = ensureDialog()
+    if (node.open) return
     const titleEl = node.querySelector<HTMLElement>('[data-role="title"]')
     if (titleEl) titleEl.textContent = t("player.subtitles")
     const delayHeading = node.querySelector<HTMLElement>('[data-role="delay-heading"]')
@@ -250,6 +264,11 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     if (resetBtn) resetBtn.textContent = t("detail.subtitleDelayReset")
     const closeBtn = node.querySelector<HTMLElement>('[data-role="close"]')
     if (closeBtn) closeBtn.textContent = t("common.close")
+    const searchBtn = node.querySelector<HTMLElement>('[data-role="search"]')
+    if (searchBtn) {
+      searchBtn.textContent = t("player.subtitles.search")
+      searchBtn.hidden = !onSearch || canSearch?.() === false
+    }
     updateDialogValue(currentOffset() ?? 0)
     for (const stale of node.querySelectorAll("[data-default-focus]")) stale.removeAttribute("data-default-focus")
     const focusTarget =
@@ -294,5 +313,5 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     nudgeDelay(key === "z" ? -0.1 : 0.1)
   }
 
-  return { setup, teardown, handleKeydown }
+  return { setup, teardown, handleKeydown, open: openDialog }
 }

@@ -25,6 +25,7 @@ import {
   resolveBackendFrom,
   createSubtitleTrackMemoryHooks,
   hlsSessionUserAgent,
+  subtitlesControlSpec,
 } from "../src/scripts/lib/player-runtime"
 import { chooseSubtitleTrackId, rememberSubtitleTrack } from "@/scripts/lib/track-memory.ts"
 import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
@@ -658,5 +659,15 @@ describe("hlsSessionUserAgent", () => {
     expect(hlsSessionUserAgent("", 1)).toBe(first)
     expect(first).toMatch(/ r1$/)
     expect(hlsSessionUserAgent(undefined, 2)).not.toBe(first)
+  })
+})
+
+describe("subtitlesControlSpec", () => {
+  it("sits right of the artplayer subtitle (5) and audio (6) controls", () => {
+    const spec = subtitlesControlSpec()
+    expect(spec.name).toBe("xtSubtitlesDialog")
+    expect(spec.position).toBe("right")
+    expect(spec.index).toBeGreaterThan(6)
+    expect(spec.icon).toContain("<svg")
   })
 })

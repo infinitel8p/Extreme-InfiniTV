@@ -2813,6 +2813,7 @@ async function mountEmbeddedPlayer(backend, opts) {
     },
     userAgent: opts.userAgent ?? null,
     referer: opts.referer ?? null,
+    onOpenSubtitles: () => subtitleDelayProxyBtn.click(),
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
