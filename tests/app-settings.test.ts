@@ -107,6 +107,43 @@ describe("downloadDirMatchesPlatform", () => {
   })
 })
 
+describe("getPlayerBackend (mpv-embedded clamp)", () => {
+  afterEach(() => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  })
+
+  it("clamps mpv-embedded to default outside Tauri", async () => {
+    setUserAgent(WINDOWS_UA)
+    localStorage.setItem("xt_player_backend", "mpv-embedded")
+    const { getPlayerBackend, DEFAULT_PLAYER_BACKEND } = await import("@/scripts/lib/app-settings.js")
+    expect(getPlayerBackend()).toBe(DEFAULT_PLAYER_BACKEND)
+  })
+
+  it("clamps mpv-embedded to default on non-Windows desktop", async () => {
+    setUserAgent(MACOS_UA)
+    ;(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
+    localStorage.setItem("xt_player_backend", "mpv-embedded")
+    const { getPlayerBackend, DEFAULT_PLAYER_BACKEND } = await import("@/scripts/lib/app-settings.js")
+    expect(getPlayerBackend()).toBe(DEFAULT_PLAYER_BACKEND)
+  })
+
+  it("keeps mpv-embedded on Windows desktop", async () => {
+    setUserAgent(WINDOWS_UA)
+    ;(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
+    localStorage.setItem("xt_player_backend", "mpv-embedded")
+    const { getPlayerBackend } = await import("@/scripts/lib/app-settings.js")
+    expect(getPlayerBackend()).toBe("mpv-embedded")
+  })
+
+  it("leaves storage untouched when clamping", async () => {
+    setUserAgent(MACOS_UA)
+    localStorage.setItem("xt_player_backend", "mpv-embedded")
+    const { getPlayerBackend } = await import("@/scripts/lib/app-settings.js")
+    getPlayerBackend()
+    expect(localStorage.getItem("xt_player_backend")).toBe("mpv-embedded")
+  })
+})
+
 describe("getDownloadDir", () => {
   it("self-heals a Windows path poisoned into localStorage on macOS", async () => {
     setUserAgent(MACOS_UA)
@@ -345,6 +382,51 @@ describe("language grouping", () => {
   })
 })
 
+describe("android native player toggle", () => {
+  it("parseAndroidNativePlayerSetting treats anything but \"0\" as on", async () => {
+    const { parseAndroidNativePlayerSetting } = await import("@/scripts/lib/app-settings.js")
+    expect(parseAndroidNativePlayerSetting("")).toBe(true)
+    expect(parseAndroidNativePlayerSetting("1")).toBe(true)
+    expect(parseAndroidNativePlayerSetting("0")).toBe(false)
+  })
+
+  it("defaults to enabled (unset means on)", async () => {
+    const { getAndroidNativePlayerEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getAndroidNativePlayerEnabled()).toBe(true)
+  })
+
+  it("stores nothing when explicitly enabled", async () => {
+    const { setAndroidNativePlayerEnabled } = await import("@/scripts/lib/app-settings.js")
+    setAndroidNativePlayerEnabled(true)
+    expect(localStorage.getItem("xt_android_native_player")).toBe(null)
+  })
+
+  it("writes an explicit off flag", async () => {
+    const { getAndroidNativePlayerEnabled, setAndroidNativePlayerEnabled } =
+      await import("@/scripts/lib/app-settings.js")
+    setAndroidNativePlayerEnabled(false)
+    expect(localStorage.getItem("xt_android_native_player")).toBe("0")
+    expect(getAndroidNativePlayerEnabled()).toBe(false)
+  })
+
+  it("fires ANDROID_NATIVE_PLAYER_EVENT with the correct detail.value in both directions", async () => {
+    const { ANDROID_NATIVE_PLAYER_EVENT, setAndroidNativePlayerEnabled } =
+      await import("@/scripts/lib/app-settings.js")
+    const received: boolean[] = []
+    const listener = (event: Event) => {
+      received.push((event as CustomEvent).detail.value)
+    }
+    document.addEventListener(ANDROID_NATIVE_PLAYER_EVENT, listener)
+    try {
+      setAndroidNativePlayerEnabled(false)
+      setAndroidNativePlayerEnabled(true)
+    } finally {
+      document.removeEventListener(ANDROID_NATIVE_PLAYER_EVENT, listener)
+    }
+    expect(received).toEqual([false, true])
+  })
+})
+
 describe("TMDb / TVDB enrichment toggles", () => {
   it("TMDb defaults to enabled (unset means on)", async () => {
     const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
@@ -461,5 +543,40 @@ describe("TMDb enabled legacy migration", () => {
     expect(getTmdbEnabled()).toBe(true)
     expect(localStorage.getItem("xt_tmdb_enabled")).toBe("")
     expect(localStorage.getItem("xt_tmdb_enabled_v2")).toBe("1")
+  })
+})
+
+describe("subtitle scale", () => {
+  it("defaults to normal and persists it", async () => {
+    const { getSubtitleScale } = await import("@/scripts/lib/app-settings.js")
+    expect(getSubtitleScale()).toBe("normal")
+    expect(localStorage.getItem("xt_subs_scale")).toBe("normal")
+  })
+
+  it("round-trips a size", async () => {
+    const { getSubtitleScale, setSubtitleScale } = await import("@/scripts/lib/app-settings.js")
+    setSubtitleScale("xlarge")
+    expect(getSubtitleScale()).toBe("xlarge")
+    setSubtitleScale("bogus")
+    expect(getSubtitleScale()).toBe("normal")
+  })
+
+  it("migrates from the legacy mpv style size", async () => {
+    localStorage.setItem("xt_mpv_sub_style", JSON.stringify({ size: "large", position: "bottom", color: "white" }))
+    const { getSubtitleScale } = await import("@/scripts/lib/app-settings.js")
+    expect(getSubtitleScale()).toBe("large")
+    expect(localStorage.getItem("xt_subs_scale")).toBe("large")
+  })
+
+  it("dispatches on change but not on the same value", async () => {
+    const { setSubtitleScale, SUBTITLE_SCALE_EVENT } = await import("@/scripts/lib/app-settings.js")
+    const listener = vi.fn()
+    document.addEventListener(SUBTITLE_SCALE_EVENT, listener)
+    setSubtitleScale("large")
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ size: "large" })
+    setSubtitleScale("large")
+    expect(listener).toHaveBeenCalledTimes(1)
+    document.removeEventListener(SUBTITLE_SCALE_EVENT, listener)
   })
 })

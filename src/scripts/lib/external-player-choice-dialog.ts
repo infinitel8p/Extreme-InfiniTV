@@ -5,7 +5,7 @@ import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { ICON_EXTERNAL_LINK } from "@/scripts/lib/icons.js"
 
-export type ExternalPlayerChoice = "mpv" | "vlc"
+export type ExternalPlayerChoice = "mpv" | "vlc" | "iina"
 
 const DIALOG_ID = "xt-external-player-choice-dialog"
 
@@ -31,13 +31,14 @@ const CANCEL_BUTTON_CLASS =
   "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
 
 function labelForChoice(choice: ExternalPlayerChoice): string {
-  return choice === "vlc" ? "VLC" : "MPV"
+  return choice === "vlc" ? "VLC" : choice.toUpperCase()
 }
 
-// Official upstream marks, bundled in public/ (mpv-player/mpv, videolan/vlc).
+// Official upstream marks, bundled in public/ (mpv-player/mpv, videolan/vlc, iina/iina).
 const ICON_SRC: Record<ExternalPlayerChoice, string> = {
   mpv: "/players/mpv.png",
   vlc: "/players/vlc.png",
+  iina: "/players/iina.png",
 }
 
 function ensureDialog(): HTMLDialogElement {

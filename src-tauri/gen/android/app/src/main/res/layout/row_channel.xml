@@ -10,7 +10,8 @@
     android:padding="8dp"
     android:focusable="true"
     android:clickable="true"
-    android:background="?android:attr/selectableItemBackground">
+    android:background="@drawable/bg_channel_row"
+    android:backgroundTint="@color/xt_accent">
 
     <ImageView
         android:id="@+id/channel_logo"

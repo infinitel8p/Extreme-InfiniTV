@@ -1,8 +1,12 @@
-import { log } from "@/scripts/lib/log.js"
+import { log, setVerboseLogging } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
 import { compareVersions } from "@/scripts/lib/version-compare.ts"
+import { normalizeDnsInput } from "@/scripts/lib/dns-config.ts"
+import { getActiveLocale } from "@/scripts/lib/i18n.ts"
+import { toOpenSubtitlesLanguage } from "@/scripts/lib/opensubtitles-params.ts"
+import { migrateSubtitleScale, normalizeSubtitleScale } from "@/scripts/lib/subtitle-scale.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -16,10 +20,16 @@ const KEY_NETWORK_TIMEOUT_S = "xt_network_timeout_s"
 const KEY_PLAYER_BACKEND = "xt_player_backend"
 const KEY_PLAYER_PATH_MPV = "xt_player_path_mpv"
 const KEY_PLAYER_PATH_VLC = "xt_player_path_vlc"
+const KEY_PLAYER_PATH_IINA = "xt_player_path_iina"
 const KEY_PLAYER_ARGS_MPV = "xt_player_args_mpv"
 const KEY_PLAYER_ARGS_VLC = "xt_player_args_vlc"
+const KEY_PLAYER_ARGS_IINA = "xt_player_args_iina"
 const KEY_PLAYER_REUSE_MPV = "xt_player_reuse_mpv"
 const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
+const KEY_PLAYER_REUSE_IINA = "xt_player_reuse_iina"
+const KEY_MPV_HWDEC = "xt_mpv_hwdec"
+const KEY_MPV_QUALITY = "xt_mpv_quality"
+const KEY_MPV_EXTRA_ARGS = "xt_mpv_extra_args"
 const KEY_FFMPEG_PATH = "xt_ffmpeg_path"
 const KEY_EXTERNAL_PLAYER_PREF = "xt_external_player_pref"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
@@ -38,6 +48,7 @@ const KEY_TMDB_KEY = "xt_tmdb_key"
 const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
 const KEY_TVDB_ENABLED = "xt_tvdb_enabled"
 const KEY_DEV_MODE = "xt_dev_mode"
+const KEY_VERBOSE_LOG = "xt_verbose_log"
 const KEY_RECEIVER_MODE = "xt_receiver_mode"
 const KEY_RECEIVER_BOOT = "xt_receiver_boot"
 const KEY_RECEIVER_NAME = "xt_receiver_name"
@@ -45,6 +56,13 @@ const KEY_RECEIVER_ENGINE = "xt_receiver_engine"
 const KEY_RECEIVER_ID = "xt_receiver_id"
 const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
+const KEY_SEARCH_VIEW = "xt_search_view"
+const KEY_DNS = "xt_dns"
+const KEY_SUBS_LANG_DEFAULT = "xt_subs_lang_default"
+const KEY_SUBS_LANG_BACKUP = "xt_subs_lang_backup"
+const KEY_SUBS_AUTO_SEARCH = "xt_subs_auto_search"
+export const KEY_SUBS_SCALE = "xt_subs_scale"
+const KEY_OPENSUBS_SESSION = "xt_opensubs_session"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -67,6 +85,8 @@ export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
 export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
 export const AUTO_UPDATE_EVENT = "xt:auto-update-changed"
 export const LANGUAGE_GROUPING_EVENT = "xt:language-grouping-changed"
+export const SEARCH_VIEW_EVENT = "xt:search-view-changed"
+export const SEARCH_VIEW_MODES = ["cards", "list"]
 export const UPDATE_CHANNELS = ["stable", "beta"]
 export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
@@ -109,12 +129,20 @@ export const DEFAULT_PROGRESS_RETENTION_DAYS = 90
 export const NETWORK_TIMEOUT_VALUES = [20, 45, 90, 180]
 export const DEFAULT_NETWORK_TIMEOUT_SECONDS = 20
 export const NETWORK_TIMEOUT_EVENT = "xt:network-timeout-changed"
+export const DNS_EVENT = "xt:dns-changed"
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
 export const MAX_DOWNLOAD_CONCURRENCY = 4
-export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv", "vlc"]
+export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv-embedded", "mpv", "vlc", "iina"]
 export const DEFAULT_PLAYER_BACKEND = "artplayer"
-export const EXTERNAL_PLAYER_BACKENDS = ["mpv", "vlc"]
-export const EXTERNAL_PLAYER_PREF_VALUES = ["mpv", "vlc", "ask"]
+
+// mpv-embedded only ships on Windows desktop (Rust commands + sidecar are Windows-only).
+export function isWindowsDesktopSync() {
+  if (typeof window === "undefined") return false
+  const isTauriRuntime = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__
+  return isTauriRuntime && /Windows/i.test(navigator.userAgent || "")
+}
+export const EXTERNAL_PLAYER_BACKENDS = ["mpv", "vlc", "iina"]
+export const EXTERNAL_PLAYER_PREF_VALUES = ["mpv", "vlc", "iina", "ask"]
 export const UA_PRESETS = [
   { id: "default", label: "Default (browser/WebView)", value: "" },
   {
@@ -260,7 +288,8 @@ export function getPerfMode() {
 }
 
 export function setPerfMode(on) {
-  writeLS(KEY_PERF_MODE, on ? "1" : "")
+  writeLS(KEY_PERF_MODE, on ? "1" : "0")
+  writeLS("xt_perf_mode_auto", "")
   if (typeof document !== "undefined") {
     if (on) document.documentElement.setAttribute("data-perf-mode", "on")
     else document.documentElement.removeAttribute("data-perf-mode")
@@ -436,22 +465,25 @@ export function setCloseToTray(on) {
   pushCloseToTrayToBackend(!!on)
 }
 
-// Android: opt-in toggle for the native ExoPlayer Activity. When on, plays
-// movies / series / live TV through the native VideoActivity instead of the
-// in-WebView Video.js player. Enables proper PiP, MediaSession lock-screen controls
-// and hardened HLS via ExoPlayer. Default off until on-device validation completes.
-//
-// Storage: "1" for opt-in. Default ("" / missing) keeps the existing
-// in-WebView path unchanged.
+// Android native ExoPlayer toggle for live / VOD / downloads. On by default, "0" opts out.
+export function parseAndroidNativePlayerSetting(raw) {
+  return raw !== "0"
+}
+
 export function getAndroidNativePlayerEnabled() {
-  return readLS(KEY_ANDROID_NATIVE_PLAYER, "") === "1"
+  return parseAndroidNativePlayerSetting(readLS(KEY_ANDROID_NATIVE_PLAYER, ""))
 }
 
 export function setAndroidNativePlayerEnabled(on) {
-  writeLS(KEY_ANDROID_NATIVE_PLAYER, on ? "1" : "")
+  writeLS(KEY_ANDROID_NATIVE_PLAYER, on ? "" : "0")
   document.dispatchEvent(
     new CustomEvent(ANDROID_NATIVE_PLAYER_EVENT, { detail: { value: !!on } })
   )
+}
+
+/** Raw opt-out flag (backup/restore needs to tell "explicitly off" from "never set"). */
+export function getAndroidNativePlayerOptedOut() {
+  return readLS(KEY_ANDROID_NATIVE_PLAYER, "") === "0"
 }
 
 // Android: when the user ticks "Always use this app" in the external-player
@@ -657,6 +689,21 @@ export function setNetworkTimeoutSeconds(seconds) {
   }
 }
 
+// Global default DNS server, overridden per-playlist via creds.js's `dns` field.
+export function getGlobalDns() {
+  return readLS(KEY_DNS, "") || null
+}
+
+export function setGlobalDns(value) {
+  const normalized = value ? normalizeDnsInput(String(value)) : null
+  writeLS(KEY_DNS, normalized || "")
+  if (typeof document !== "undefined") {
+    document.dispatchEvent(
+      new CustomEvent(DNS_EVENT, { detail: { value: normalized } })
+    )
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Discord Rich Presence
 // ---------------------------------------------------------------------------
@@ -729,11 +776,20 @@ export const SETTINGS_EVENT = EVT_CHANGED
 // ---------------------------------------------------------------------------
 // Player backend (desktop only - the picker UI hides on web/Android)
 // ---------------------------------------------------------------------------
+/** @returns {import("./player-backend.ts").PlayerBackend} */
 export function getPlayerBackend() {
   const raw = readLS(KEY_PLAYER_BACKEND, "")
   const backend = PLAYER_BACKENDS.includes(raw) ? raw : DEFAULT_PLAYER_BACKEND
   // Clamp mpv/vlc pick to default when sandboxed; storage stays untouched.
   if (EXTERNAL_PLAYER_BACKENDS.includes(backend) && sandboxRuntimeSync()) {
+    return DEFAULT_PLAYER_BACKEND
+  }
+  // Clamp mpv-embedded to default off Windows desktop; storage stays untouched.
+  if (backend === "mpv-embedded" && !isWindowsDesktopSync()) {
+    return DEFAULT_PLAYER_BACKEND
+  }
+  // IINA is macOS-only; a backup restored on another OS falls back the same way.
+  if (backend === "iina" && !(typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent || ""))) {
     return DEFAULT_PLAYER_BACKEND
   }
   return backend
@@ -751,18 +807,21 @@ export function setPlayerBackend(backend) {
 function pathKeyFor(kind) {
   if (kind === "mpv") return KEY_PLAYER_PATH_MPV
   if (kind === "vlc") return KEY_PLAYER_PATH_VLC
+  if (kind === "iina") return KEY_PLAYER_PATH_IINA
   return ""
 }
 
 function argsKeyFor(kind) {
   if (kind === "mpv") return KEY_PLAYER_ARGS_MPV
   if (kind === "vlc") return KEY_PLAYER_ARGS_VLC
+  if (kind === "iina") return KEY_PLAYER_ARGS_IINA
   return ""
 }
 
 function reuseKeyFor(kind) {
   if (kind === "mpv") return KEY_PLAYER_REUSE_MPV
   if (kind === "vlc") return KEY_PLAYER_REUSE_VLC
+  if (kind === "iina") return KEY_PLAYER_REUSE_IINA
   return ""
 }
 
@@ -841,6 +900,62 @@ export function setExternalPlayerPref(pref) {
   document.dispatchEvent(
     new CustomEvent(EVT_CHANGED, { detail: { key: "externalPlayerPref" } })
   )
+}
+
+// ---------------------------------------------------------------------------
+// Embedded mpv playback options (Windows desktop only)
+// ---------------------------------------------------------------------------
+export const MPV_HWDEC_MODES = ["auto-safe", "auto", "auto-copy", "no"]
+export const MPV_QUALITY_PROFILES = ["default", "performance", "quality"]
+export const MPV_SETTINGS_EVENT = "xt:mpv-settings-changed"
+
+export function getMpvHwdec() {
+  const raw = readLS(KEY_MPV_HWDEC, "")
+  return MPV_HWDEC_MODES.includes(raw) ? raw : "auto-safe"
+}
+
+export function setMpvHwdec(mode) {
+  const next = MPV_HWDEC_MODES.includes(mode) ? mode : "auto-safe"
+  writeLS(KEY_MPV_HWDEC, next === "auto-safe" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "hwdec", value: next } })
+  )
+}
+
+export function getMpvQuality() {
+  const raw = readLS(KEY_MPV_QUALITY, "")
+  return MPV_QUALITY_PROFILES.includes(raw) ? raw : "default"
+}
+
+export function setMpvQuality(profile) {
+  const next = MPV_QUALITY_PROFILES.includes(profile) ? profile : "default"
+  writeLS(KEY_MPV_QUALITY, next === "default" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "quality", value: next } })
+  )
+}
+
+export function getMpvExtraArgsText() {
+  return readLS(KEY_MPV_EXTRA_ARGS, "")
+}
+
+export function setMpvExtraArgsText(text) {
+  writeLS(KEY_MPV_EXTRA_ARGS, text || "")
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "extraArgs" } })
+  )
+}
+
+export function getMpvExtraArgs() {
+  return getMpvExtraArgsText()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("--"))
+}
+
+/** Shape consumed by the Rust `mpv_embed_start` command's `config` argument. */
+export function getMpvStartConfig() {
+  return { hwdec: getMpvHwdec(), quality: getMpvQuality(), extraArgs: getMpvExtraArgs() }
 }
 
 // Global default display mode (fit/fill/zoom/16:9/4:3) for the embedded
@@ -977,8 +1092,24 @@ export function getDevModeEnabled() {
 
 export function setDevModeEnabled(enabled) {
   writeLS(KEY_DEV_MODE, enabled ? "1" : "")
+  if (!enabled && getVerboseLogEnabled()) setVerboseLogEnabled(false)
   document.dispatchEvent(
     new CustomEvent(DEV_MODE_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const VERBOSE_LOG_EVENT = "xt:verbose-log-changed"
+
+/** Verbose logging: default off. */
+export function getVerboseLogEnabled() {
+  return readLS(KEY_VERBOSE_LOG, "") === "1"
+}
+
+export function setVerboseLogEnabled(enabled) {
+  writeLS(KEY_VERBOSE_LOG, enabled ? "1" : "")
+  setVerboseLogging(!!enabled)
+  document.dispatchEvent(
+    new CustomEvent(VERBOSE_LOG_EVENT, { detail: { value: !!enabled } })
   )
 }
 
@@ -990,7 +1121,8 @@ export function getReceiverModeEnabled() {
 }
 
 export function setReceiverModeEnabled(enabled) {
-  writeLS(KEY_RECEIVER_MODE, enabled ? "1" : "")
+  writeLS(KEY_RECEIVER_MODE, enabled ? "1" : "0")
+  writeLS("xt_receiver_mode_auto", "")
   document.dispatchEvent(
     new CustomEvent(RECEIVER_MODE_EVENT, { detail: { value: !!enabled } })
   )
@@ -1004,7 +1136,8 @@ export function getReceiverBootEnabled() {
 }
 
 export function setReceiverBootEnabled(enabled) {
-  writeLS(KEY_RECEIVER_BOOT, enabled ? "1" : "")
+  writeLS(KEY_RECEIVER_BOOT, enabled ? "1" : "0")
+  writeLS("xt_receiver_boot_auto", "")
   document.dispatchEvent(
     new CustomEvent(RECEIVER_BOOT_EVENT, { detail: { value: !!enabled } })
   )
@@ -1093,6 +1226,19 @@ export function setLanguageGroupingEnabled(enabled) {
   )
 }
 
+export function getSearchView() {
+  const stored = readLS(KEY_SEARCH_VIEW, "")
+  return SEARCH_VIEW_MODES.includes(stored) ? stored : "cards"
+}
+
+export function setSearchView(mode) {
+  const normalized = SEARCH_VIEW_MODES.includes(mode) ? mode : "cards"
+  writeLS(KEY_SEARCH_VIEW, normalized === "cards" ? "" : normalized)
+  document.dispatchEvent(
+    new CustomEvent(SEARCH_VIEW_EVENT, { detail: { value: normalized } })
+  )
+}
+
 export const TMDB_SETTINGS_EVENT = "xt:tmdb-settings-changed"
 
 export function getTmdbApiKey() {
@@ -1119,6 +1265,7 @@ const lastSeenVersionAtLoad = (() => {
   }
 })()
 ;(function migrateTmdbEnabledLegacy() {
+  if (typeof localStorage === "undefined") return
   try {
     if (localStorage.getItem(KEY_TMDB_ENABLED_MIGRATED) === "1") return
     const raw = localStorage.getItem(KEY_TMDB_ENABLED)
@@ -1166,4 +1313,77 @@ export function isTmdbActive() {
 
 export function isEnrichmentActive() {
   return getTvdbEnabled() || isTmdbActive()
+}
+
+export const SUBTITLE_SETTINGS_EVENT = "xt:subtitle-settings-changed"
+
+function emitSubtitleSettings(key) {
+  document.dispatchEvent(new CustomEvent(SUBTITLE_SETTINGS_EVENT, { detail: { key } }))
+}
+
+export function getSubtitleLangDefault() {
+  return readLS(KEY_SUBS_LANG_DEFAULT, "") || toOpenSubtitlesLanguage(getActiveLocale())
+}
+
+export function setSubtitleLangDefault(lang) {
+  writeLS(KEY_SUBS_LANG_DEFAULT, toOpenSubtitlesLanguage(lang || ""))
+  emitSubtitleSettings("langDefault")
+}
+
+export function getSubtitleLangBackup() {
+  const stored = readLS(KEY_SUBS_LANG_BACKUP, "")
+  if (stored === "none") return ""
+  if (stored) return stored
+  return getSubtitleLangDefault() === "en" ? "" : "en"
+}
+
+export function setSubtitleLangBackup(lang) {
+  const normalized = toOpenSubtitlesLanguage(lang || "")
+  writeLS(KEY_SUBS_LANG_BACKUP, normalized || "none")
+  emitSubtitleSettings("langBackup")
+}
+
+export function getSubtitleAutoSearch() {
+  return readLS(KEY_SUBS_AUTO_SEARCH, "") === "1"
+}
+
+export function setSubtitleAutoSearch(enabled) {
+  writeLS(KEY_SUBS_AUTO_SEARCH, enabled ? "1" : "")
+  emitSubtitleSettings("autoSearch")
+}
+
+export const SUBTITLE_SCALE_EVENT = "xt:subtitle-scale-changed"
+
+export function getSubtitleScale() {
+  const stored = readLS(KEY_SUBS_SCALE, "")
+  const size = migrateSubtitleScale(stored || null, readLS("xt_mpv_sub_style", "") || null)
+  if (!stored) writeLS(KEY_SUBS_SCALE, size)
+  return size
+}
+
+export function setSubtitleScale(size) {
+  const next = normalizeSubtitleScale(size)
+  if (next === getSubtitleScale()) return
+  writeLS(KEY_SUBS_SCALE, next)
+  document.dispatchEvent(new CustomEvent(SUBTITLE_SCALE_EVENT, { detail: { size: next } }))
+}
+
+export function getOpenSubtitlesSession() {
+  const raw = readLS(KEY_OPENSUBS_SESSION, "")
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed.token === "string" && parsed.token ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+export function setOpenSubtitlesSession(session) {
+  writeLS(KEY_OPENSUBS_SESSION, session ? JSON.stringify(session) : "")
+  emitSubtitleSettings("session")
+}
+
+export function clearOpenSubtitlesSession() {
+  setOpenSubtitlesSession(null)
 }

@@ -6,6 +6,7 @@ import { escapeHtml, fmtImdbRating } from "@/scripts/lib/format.ts"
 import { t } from "@/scripts/lib/i18n.js"
 import { ICON_DICE, ICON_REFRESH, ICON_X } from "@/scripts/lib/icons.ts"
 import { log } from "@/scripts/lib/log.js"
+import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
 import {
   getProgressFraction,
   getSeriesProgressSummary,
@@ -16,6 +17,7 @@ export type SurpriseKind = "vod" | "series"
 
 export interface SurpriseEntry {
   id: number | string
+  playlistId?: string
   name: string
   logo?: string | null
   year?: string
@@ -40,6 +42,10 @@ const YEAR_BUCKETS: YearBucket[] = [
 
 const DIALOG_ID = "xt-surprise-dialog"
 const RECENT_PICK_MEMORY = 8
+
+export function surpriseEntryKey(entry: SurpriseEntry): string {
+  return entry.playlistId ? `${entry.playlistId}:${entry.id}` : String(entry.id)
+}
 
 /** Providers put years in `year`, `releasedate` and free text, so take the first plausible 4-digit run. */
 export function parseEntryYear(entry: SurpriseEntry): number | null {
@@ -100,7 +106,7 @@ export function pickSurprise(
   const eligible = eligibleEntries(pool, options)
   if (!eligible.length) return null
   const excluded = new Set(options.excludeIds ?? [])
-  const fresh = eligible.filter((entry) => !excluded.has(String(entry.id)))
+  const fresh = eligible.filter((entry) => !excluded.has(surpriseEntryKey(entry)))
   const candidates = fresh.length ? fresh : eligible
   const random = options.random ?? Math.random
   const index = Math.floor(random() * candidates.length)
@@ -154,11 +160,6 @@ function bucketLabel(bucket: YearBucket): string {
   return bucket.id === "older" ? t("surprise.yearOlder") : bucket.label
 }
 
-function detailHref(kind: SurpriseKind, id: string | number, autoplay: boolean): string {
-  const base = kind === "vod" ? "/movies/detail" : "/series/detail"
-  return `${base}?id=${encodeURIComponent(String(id))}${autoplay ? "&autoplay=1" : ""}`
-}
-
 export function mountSurprisePicker(config: SurprisePickerConfig): SurprisePickerHandle {
   const trigger = document.getElementById(config.triggerId)
   let dialog: HTMLDialogElement | null = null
@@ -169,7 +170,7 @@ export function mountSurprisePicker(config: SurprisePickerConfig): SurprisePicke
 
   // No episode total is known without a per-series fetch, so "started" is as far as this can go.
   const isWatched = (entry: SurpriseEntry): boolean => {
-    const playlistId = config.getPlaylistId()
+    const playlistId = entry.playlistId || config.getPlaylistId()
     if (!playlistId) return false
     if (config.kind === "vod") return getProgressFraction(playlistId, "vod", entry.id) > 0
     return !!getSeriesProgressSummary(playlistId, entry.id) ||
@@ -328,7 +329,7 @@ export function mountSurprisePicker(config: SurprisePickerConfig): SurprisePicke
       excludeIds: recentPicks,
     })
     if (current) {
-      recentPicks.push(String(current.id))
+      recentPicks.push(surpriseEntryKey(current))
       while (recentPicks.length > RECENT_PICK_MEMORY) recentPicks.shift()
     }
     log.info("[xt:surprise] rolled", {
@@ -353,7 +354,10 @@ export function mountSurprisePicker(config: SurprisePickerConfig): SurprisePicke
   function navigate(autoplay: boolean): void {
     if (!current) return
     close()
-    window.location.href = detailHref(config.kind, current.id, autoplay)
+    window.location.href = detailHrefFor(config.kind, current.id, {
+      playlistId: current.playlistId,
+      autoplay,
+    })
   }
 
   function onClick(event: Event): void {

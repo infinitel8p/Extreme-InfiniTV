@@ -4,7 +4,9 @@
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { toast } from "@/scripts/lib/toast.js"
-import { ICON_CLOCK_EDIT } from "@/scripts/lib/icons.ts"
+import { ICON_TEXT_SIZE } from "@/scripts/lib/icons.ts"
+import { SUBTITLE_SCALE_EVENT, getSubtitleScale, setSubtitleScale } from "@/scripts/lib/app-settings.js"
+import { SUBTITLE_SCALE_SIZES, SUBTITLE_SCALE_LABEL_KEYS, type SubtitleScale } from "@/scripts/lib/subtitle-scale.ts"
 
 export interface SubtitleDelayDialogOptions {
   dialogId: string
@@ -13,12 +15,15 @@ export interface SubtitleDelayDialogOptions {
   nudge: (deltaSeconds: number) => number | null | undefined
   /** Video element hosting subtitle tracks; drives button visibility via textTracks events. */
   getMediaElement?: () => HTMLVideoElement | null
+  onSearch?: () => void
+  canSearch?: () => boolean
 }
 
 export interface SubtitleDelayController {
   setup(): void
   teardown(): void
   handleKeydown(event: KeyboardEvent): void
+  open(): void
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -36,10 +41,12 @@ export function formatSubtitleDelay(offsetSeconds: number): string {
 }
 
 export function createSubtitleDelayController(options: SubtitleDelayDialogOptions): SubtitleDelayController {
-  const { dialogId, button, nudge, getMediaElement } = options
+  const { dialogId, button, nudge, getMediaElement, onSearch, canSearch } = options
   let dialogEl: HTMLDialogElement | null = null
   let dialogValueEl: HTMLElement | null = null
   let dialogResetBtn: HTMLButtonElement | null = null
+  let delaySectionEl: HTMLElement | null = null
+  let scaleListenerBound = false
   let syncTimer: ReturnType<typeof setInterval> | null = null
   let dismissToast: (() => void) | null = null
   let buttonBound = false
@@ -49,11 +56,34 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     return nudge(0) ?? null
   }
 
-  // Hidden unless a subtitle track is currently showing, not just built.
+  function syncDelaySection(): void {
+    if (!delaySectionEl) return
+    const offset = currentOffset()
+    const enabled = offset != null
+    delaySectionEl.setAttribute("aria-disabled", String(!enabled))
+    delaySectionEl.classList.toggle("opacity-50", !enabled)
+    for (const control of delaySectionEl.querySelectorAll<HTMLButtonElement>("button")) {
+      control.disabled = !enabled || (control.dataset.role === "reset" && Math.abs(offset) < 0.05)
+    }
+  }
+
   function syncButton(): void {
     if (!button) return
-    if (currentOffset() == null) button.setAttribute("hidden", "")
-    else button.removeAttribute("hidden")
+    if (getMediaElement?.() || currentOffset() != null) button.removeAttribute("hidden")
+    else button.setAttribute("hidden", "")
+    syncDelaySection()
+  }
+
+  function syncScaleButtons(): void {
+    if (!dialogEl) return
+    const active = getSubtitleScale()
+    for (const sizeButton of dialogEl.querySelectorAll<HTMLButtonElement>("[data-size]")) {
+      const isActive = sizeButton.dataset.size === active
+      sizeButton.setAttribute("aria-checked", String(isActive))
+      sizeButton.classList.toggle("border-accent", isActive)
+      sizeButton.classList.toggle("bg-surface-2", isActive)
+      sizeButton.classList.toggle("border-line", !isActive)
+    }
   }
 
   function onTrackListEvent(): void {
@@ -63,18 +93,18 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
   // The video element (and its textTracks list) is swapped per playback session.
   function bindTrackList(): void {
     const list = getMediaElement?.()?.textTracks ?? null
+    if (!list) {
+      // No textTracks to observe (e.g. mpv-embedded) - resync from currentOffset() on each poll.
+      unbindTrackList()
+      syncButton()
+      return
+    }
     if (list === boundTrackList) return
-    if (boundTrackList) {
-      boundTrackList.removeEventListener("change", onTrackListEvent)
-      boundTrackList.removeEventListener("addtrack", onTrackListEvent)
-      boundTrackList.removeEventListener("removetrack", onTrackListEvent)
-    }
+    unbindTrackList()
     boundTrackList = list
-    if (boundTrackList) {
-      boundTrackList.addEventListener("change", onTrackListEvent)
-      boundTrackList.addEventListener("addtrack", onTrackListEvent)
-      boundTrackList.addEventListener("removetrack", onTrackListEvent)
-    }
+    boundTrackList.addEventListener("change", onTrackListEvent)
+    boundTrackList.addEventListener("addtrack", onTrackListEvent)
+    boundTrackList.addEventListener("removetrack", onTrackListEvent)
     syncButton()
   }
 
@@ -88,7 +118,7 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
 
   function updateDialogValue(offsetSeconds: number): void {
     if (dialogValueEl) dialogValueEl.textContent = formatSubtitleDelay(offsetSeconds)
-    if (dialogResetBtn) dialogResetBtn.disabled = Math.abs(offsetSeconds) < 0.05
+    syncDelaySection()
   }
 
   function nudgeDelay(deltaSeconds: number): void {
@@ -119,9 +149,11 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     node.innerHTML = `
       <div class="flex flex-col flex-auto min-h-0 gap-4 p-5 overflow-y-auto">
         <header class="flex items-center gap-3">
-          <span class="icon-mark" aria-hidden="true">${ICON_CLOCK_EDIT}</span>
+          <span class="icon-mark" aria-hidden="true">${ICON_TEXT_SIZE}</span>
           <h2 id="${dialogId}-title" data-role="title" class="text-base font-semibold"></h2>
         </header>
+        <section data-role="delay-section" class="flex flex-col gap-3">
+        <h3 data-role="delay-heading" class="text-sm font-medium text-fg-3"></h3>
         <div class="flex items-center justify-center gap-3">
           <button
             type="button"
@@ -137,13 +169,36 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
                    hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent
                    active:scale-[0.98] outline-none transition-colors">+</button>
         </div>
-        <div class="flex justify-between gap-2">
+        <div class="flex justify-start">
           <button
             type="button"
             data-role="reset"
             class="inline-flex items-center justify-center min-h-11 rounded-xl border border-line px-4 text-sm transition-colors
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    disabled:opacity-60 disabled:cursor-not-allowed disabled:pointer-events-none"></button>
+        </div>
+        </section>
+        <section class="flex flex-col gap-3">
+          <h3 data-role="size-heading" class="text-sm font-medium text-fg-3"></h3>
+          <div role="radiogroup" data-role="size-group" class="grid grid-cols-4 gap-2">
+            ${SUBTITLE_SCALE_SIZES.map(
+              (size) => `<button
+              type="button"
+              role="radio"
+              data-size="${size}"
+              class="min-h-11 rounded-lg border border-line px-1 text-sm transition-colors
+                     hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                     active:scale-[0.98] outline-none"></button>`,
+            ).join("")}
+          </div>
+        </section>
+        <div class="flex justify-end gap-2">
+          <button
+            type="button"
+            data-role="search"
+            hidden
+            class="inline-flex items-center justify-center min-h-11 rounded-xl border border-line px-4 text-sm transition-colors
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"></button>
           <button
             type="button"
             data-role="close"
@@ -154,15 +209,22 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     `
     document.body.appendChild(node)
     attachDialogSpatialNav(node, {
-      defaultElement: `#${dialogId} [data-role="minus"]`,
+      defaultElement: `#${dialogId} [data-default-focus]`,
     })
 
     node.querySelector('[data-role="close"]')?.addEventListener("click", () => node.close())
     node.addEventListener("click", (event) => {
       if (event.target === node) node.close()
     })
+    node.querySelector('[data-role="search"]')?.addEventListener("click", () => {
+      node.close()
+      onSearch?.()
+    })
     node.querySelector('[data-role="minus"]')?.addEventListener("click", () => nudgeDelay(-0.1))
     node.querySelector('[data-role="plus"]')?.addEventListener("click", () => nudgeDelay(0.1))
+    for (const sizeButton of node.querySelectorAll<HTMLButtonElement>("[data-size]")) {
+      sizeButton.addEventListener("click", () => setSubtitleScale(sizeButton.dataset.size as SubtitleScale))
+    }
     node.querySelector('[data-role="reset"]')?.addEventListener("click", () => {
       const current = currentOffset()
       if (current != null) nudgeDelay(Math.round(-current * 10) / 10)
@@ -171,20 +233,46 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     dialogEl = node
     dialogValueEl = node.querySelector('[data-role="value"]')
     dialogResetBtn = node.querySelector<HTMLButtonElement>('[data-role="reset"]')
+    delaySectionEl = node.querySelector<HTMLElement>('[data-role="delay-section"]')
     return node
   }
 
   function openDialog(): void {
     const node = ensureDialog()
+    if (node.open) return
     const titleEl = node.querySelector<HTMLElement>('[data-role="title"]')
-    if (titleEl) titleEl.textContent = t("detail.subtitleDelay")
+    if (titleEl) titleEl.textContent = t("player.subtitles")
+    const delayHeading = node.querySelector<HTMLElement>('[data-role="delay-heading"]')
+    if (delayHeading) delayHeading.textContent = t("detail.subtitleDelay")
+    const sizeHeading = node.querySelector<HTMLElement>('[data-role="size-heading"]')
+    if (sizeHeading) sizeHeading.textContent = t("player.subtitleSize")
+    node.querySelector('[data-role="size-group"]')?.setAttribute("aria-label", t("player.subtitleSize"))
+    for (const sizeButton of node.querySelectorAll<HTMLButtonElement>("[data-size]")) {
+      sizeButton.textContent = t(SUBTITLE_SCALE_LABEL_KEYS[sizeButton.dataset.size as SubtitleScale])
+    }
+    syncScaleButtons()
     node.querySelector('[data-role="minus"]')?.setAttribute("aria-label", t("detail.subtitleDelayEarlier"))
     node.querySelector('[data-role="plus"]')?.setAttribute("aria-label", t("detail.subtitleDelayLater"))
     const resetBtn = node.querySelector<HTMLElement>('[data-role="reset"]')
     if (resetBtn) resetBtn.textContent = t("detail.subtitleDelayReset")
     const closeBtn = node.querySelector<HTMLElement>('[data-role="close"]')
     if (closeBtn) closeBtn.textContent = t("common.close")
+    const searchBtn = node.querySelector<HTMLElement>('[data-role="search"]')
+    if (searchBtn) {
+      searchBtn.textContent = t("player.subtitles.search")
+      searchBtn.hidden = !onSearch || canSearch?.() === false
+    }
     updateDialogValue(currentOffset() ?? 0)
+    for (const stale of node.querySelectorAll("[data-default-focus]")) stale.removeAttribute("data-default-focus")
+    const focusTarget =
+      currentOffset() != null
+        ? node.querySelector('[data-role="minus"]')
+        : node.querySelector('[data-size][aria-checked="true"]')
+    focusTarget?.setAttribute("data-default-focus", "")
+    if (!scaleListenerBound) {
+      scaleListenerBound = true
+      document.addEventListener(SUBTITLE_SCALE_EVENT, syncScaleButtons)
+    }
     if (typeof node.showModal === "function") node.showModal()
     else node.setAttribute("open", "")
   }
@@ -204,6 +292,10 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
       syncTimer = null
     }
     unbindTrackList()
+    if (scaleListenerBound) {
+      document.removeEventListener(SUBTITLE_SCALE_EVENT, syncScaleButtons)
+      scaleListenerBound = false
+    }
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -214,5 +306,5 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     nudgeDelay(key === "z" ? -0.1 : 0.1)
   }
 
-  return { setup, teardown, handleKeydown }
+  return { setup, teardown, handleKeydown, open: openDialog }
 }

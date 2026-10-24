@@ -11,9 +11,18 @@
     setPlayerReuseInstance,
     getExternalPlayerPref,
     setExternalPlayerPref,
+    getMpvHwdec,
+    setMpvHwdec,
+    getMpvQuality,
+    setMpvQuality,
+    getMpvExtraArgsText,
+    setMpvExtraArgsText,
     PLAYER_BACKENDS,
     PLAYER_BACKEND_EVENT,
     EXTERNAL_PLAYER_PREF_VALUES,
+    MPV_HWDEC_MODES,
+    MPV_QUALITY_PROFILES,
+    isWindowsDesktopSync,
   } from "@/scripts/lib/app-settings.js"
   import {
     detectPlayer,
@@ -45,9 +54,21 @@
   let detectedVlc = $state(readDetectCache("vlc"))
   let statusMpv = $state(readDetectStatus("mpv"))
   let statusVlc = $state(readDetectStatus("vlc"))
+  let pathIina = $state(getPlayerPath("iina"))
+  let argsIina = $state(getPlayerExtraArgs("iina").join("\n"))
+  let reuseIina = $state(getPlayerReuseInstance("iina"))
+  let detectedIina = $state(readDetectCache("iina"))
+  let statusIina = $state(readDetectStatus("iina"))
   let externalPref = $state(getExternalPlayerPref())
+  let mpvHwdec = $state(getMpvHwdec())
+  let mpvQuality = $state(getMpvQuality())
+  let mpvExtraArgsText = $state(getMpvExtraArgsText())
   // externalPlayersAvailable already reflects sandbox state.
   const sandboxed = isDesktopTauriEnv && !externalPlayersAvailable
+  // mpv-embedded only ships on Windows desktop (Rust commands + sidecar are Windows-only).
+  const mpvEmbeddedAvailable = isDesktopTauriEnv && isWindowsDesktopSync()
+  // IINA is macOS-only.
+  const iinaAvailable = isDesktopTauriEnv && /Mac/i.test(navigator.userAgent || "")
 
   let titleLabel = $state(label("title", "Playback"))
   let videojsLabel = $state(label("backend.videojs", "Video.js"))
@@ -55,12 +76,16 @@
   let artplayerLabel = $state(label("backend.artplayer", "ArtPlayer (default)"))
   let shakaLabel = $state(label("backend.shaka", "Shaka Player"))
   let shakaHelper = $state(label("backend.shakaHelper", "Google's streaming player with strong DASH and DRM support."))
-  let mpvLabel = $state(label("backend.mpv", "MPV (external)"))
+  let mpvLabel = $state(label("backend.mpv", "MPV (separate window)"))
   let vlcLabel = $state(label("backend.vlc", "VLC (external)"))
+  let mpvEmbeddedLabel = $state(label("backend.mpvEmbedded", "mpv (embedded, experimental)"))
   let artplayerHelper = $state(label("backend.artplayerHelper", "Lightweight HTML5 player powered by ArtPlayer + hls.js."))
   let artplayerAndroidHelper = $state(label("backend.artplayerAndroidHelper", "Not supported on Android - Video.js is used instead."))
   let mpvHelper = $state(label("backend.mpvHelper", "Best for 4K and HDR."))
   let vlcHelper = $state(label("backend.vlcHelper", "Plays almost any format."))
+  let iinaLabel = $state(label("backend.iina", "IINA (external)"))
+  let iinaHelper = $state(label("backend.iinaHelper", "mpv-based macOS player."))
+  let mpvEmbeddedHelper = $state(label("backend.mpvEmbeddedHelper", "Plays almost any format in-app. Requires a restart to switch."))
   let pathLabel = $state(label("pathLabel", "Path"))
   let readyLabel = $state(label("ready", "Ready"))
   let activeLabel = $state(label("active", "Active"))
@@ -75,6 +100,22 @@
   let externalPrefHelper = $state(label("externalPref.helper", "Which player the 'Open in…' button uses when both MPV and VLC are set."))
   let externalPrefAskLabel = $state(label("externalPref.ask", "Ask each time"))
   let sandboxNoteLabel = $state(label("sandboxNote", "External players (MPV/VLC) aren't available in Snap or Flatpak installs."))
+  let mpvOptionsTitleLabel = $state(label("backend.mpvOptions.title", "Embedded mpv options"))
+  let mpvOptionsAppliesNextStartLabel = $state(label("backend.mpvOptions.appliesNextStart", "Applied when playback next starts."))
+  let mpvHwdecLabel = $state(label("backend.mpvOptions.hwdec.label", "Hardware decoding"))
+  let mpvHwdecHelperLabel = $state(label("backend.mpvOptions.hwdec.helper", "Turn off if video stutters or shows artefacts on this PC."))
+  let mpvHwdecAutoSafeLabel = $state(label("backend.mpvOptions.hwdec.autoSafe", "Auto (safe)"))
+  let mpvHwdecAutoLabel = $state(label("backend.mpvOptions.hwdec.auto", "Auto"))
+  let mpvHwdecAutoCopyLabel = $state(label("backend.mpvOptions.hwdec.autoCopy", "Auto (copy)"))
+  let mpvHwdecOffLabel = $state(label("backend.mpvOptions.hwdec.off", "Off"))
+  let mpvQualityLabel = $state(label("backend.mpvOptions.quality.label", "Quality profile"))
+  let mpvQualityHelperLabel = $state(label("backend.mpvOptions.quality.helper", "Performance lowers scaling quality for weak GPUs. Quality enables high-quality scaling and HDR peak detection."))
+  let mpvQualityDefaultLabel = $state(label("backend.mpvOptions.quality.default", "Default"))
+  let mpvQualityPerformanceLabel = $state(label("backend.mpvOptions.quality.performance", "Performance"))
+  let mpvQualityQualityLabel = $state(label("backend.mpvOptions.quality.quality", "Quality"))
+  let mpvExtraArgsLabel = $state(label("backend.mpvOptions.extraArgs.label", "Extra mpv options"))
+  let mpvExtraArgsHelperLabel = $state(label("backend.mpvOptions.extraArgs.helper", "One option per line, e.g. --deband=yes. Options that would break embedding (--vo, --wid, --osc, IPC, scripts) are ignored."))
+  let mpvExtraArgsPlaceholderLabel = $state(label("backend.mpvOptions.extraArgs.placeholder", "--deband=yes"))
 
   function label(suffix, fallback, params) {
     const key = `settings.playback.${suffix}`
@@ -121,12 +162,16 @@
     artplayerLabel = label("backend.artplayer", "ArtPlayer (default)")
     shakaLabel = label("backend.shaka", "Shaka Player")
     shakaHelper = label("backend.shakaHelper", "Google's streaming player with strong DASH and DRM support.")
-    mpvLabel = label("backend.mpv", "MPV (external)")
+    mpvLabel = label("backend.mpv", "MPV (separate window)")
     vlcLabel = label("backend.vlc", "VLC (external)")
+    mpvEmbeddedLabel = label("backend.mpvEmbedded", "mpv (embedded, experimental)")
     artplayerHelper = label("backend.artplayerHelper", "Lightweight HTML5 player powered by ArtPlayer + hls.js.")
     artplayerAndroidHelper = label("backend.artplayerAndroidHelper", "Not supported on Android - Video.js is used instead.")
     mpvHelper = label("backend.mpvHelper", "Best for 4K and HDR.")
     vlcHelper = label("backend.vlcHelper", "Plays almost any format.")
+    iinaLabel = label("backend.iina", "IINA (external)")
+    iinaHelper = label("backend.iinaHelper", "mpv-based macOS player.")
+    mpvEmbeddedHelper = label("backend.mpvEmbeddedHelper", "Plays almost any format in-app. Requires a restart to switch.")
     pathLabel = label("pathLabel", "Path")
     readyLabel = label("ready", "Ready")
     activeLabel = label("active", "Active")
@@ -141,6 +186,22 @@
     externalPrefHelper = label("externalPref.helper", "Which player the 'Open in…' button uses when both MPV and VLC are set.")
     externalPrefAskLabel = label("externalPref.ask", "Ask each time")
     sandboxNoteLabel = label("sandboxNote", "External players (MPV/VLC) aren't available in Snap or Flatpak installs.")
+    mpvOptionsTitleLabel = label("backend.mpvOptions.title", "Embedded mpv options")
+    mpvOptionsAppliesNextStartLabel = label("backend.mpvOptions.appliesNextStart", "Applied when playback next starts.")
+    mpvHwdecLabel = label("backend.mpvOptions.hwdec.label", "Hardware decoding")
+    mpvHwdecHelperLabel = label("backend.mpvOptions.hwdec.helper", "Turn off if video stutters or shows artefacts on this PC.")
+    mpvHwdecAutoSafeLabel = label("backend.mpvOptions.hwdec.autoSafe", "Auto (safe)")
+    mpvHwdecAutoLabel = label("backend.mpvOptions.hwdec.auto", "Auto")
+    mpvHwdecAutoCopyLabel = label("backend.mpvOptions.hwdec.autoCopy", "Auto (copy)")
+    mpvHwdecOffLabel = label("backend.mpvOptions.hwdec.off", "Off")
+    mpvQualityLabel = label("backend.mpvOptions.quality.label", "Quality profile")
+    mpvQualityHelperLabel = label("backend.mpvOptions.quality.helper", "Performance lowers scaling quality for weak GPUs. Quality enables high-quality scaling and HDR peak detection.")
+    mpvQualityDefaultLabel = label("backend.mpvOptions.quality.default", "Default")
+    mpvQualityPerformanceLabel = label("backend.mpvOptions.quality.performance", "Performance")
+    mpvQualityQualityLabel = label("backend.mpvOptions.quality.quality", "Quality")
+    mpvExtraArgsLabel = label("backend.mpvOptions.extraArgs.label", "Extra mpv options")
+    mpvExtraArgsHelperLabel = label("backend.mpvOptions.extraArgs.helper", "One option per line, e.g. --deband=yes. Options that would break embedding (--vo, --wid, --osc, IPC, scripts) are ignored.")
+    mpvExtraArgsPlaceholderLabel = label("backend.mpvOptions.extraArgs.placeholder", "--deband=yes")
   }
 
   function onBackendChange(event) {
@@ -153,22 +214,26 @@
 
   function onPathChange(kind, value) {
     if (kind === "mpv") pathMpv = value
+    else if (kind === "iina") pathIina = value
     else pathVlc = value
     setPlayerPath(kind, value)
     writeDetectCache(kind, "")
     writeDetectStatus(kind, "")
     if (kind === "mpv") { detectedMpv = ""; statusMpv = "" }
+    else if (kind === "iina") { detectedIina = ""; statusIina = "" }
     else { detectedVlc = ""; statusVlc = "" }
   }
 
   function onArgsChange(kind, value) {
     if (kind === "mpv") argsMpv = value
+    else if (kind === "iina") argsIina = value
     else argsVlc = value
     setPlayerExtraArgs(kind, value)
   }
 
   function onReuseChange(kind, value) {
     if (kind === "mpv") reuseMpv = value
+    else if (kind === "iina") reuseIina = value
     else reuseVlc = value
     setPlayerReuseInstance(kind, value)
   }
@@ -177,6 +242,23 @@
     if (!EXTERNAL_PLAYER_PREF_VALUES.includes(value)) return
     externalPref = value
     setExternalPlayerPref(value)
+  }
+
+  function onMpvHwdecChange(value) {
+    if (!MPV_HWDEC_MODES.includes(value)) return
+    mpvHwdec = value
+    setMpvHwdec(value)
+  }
+
+  function onMpvQualityChange(value) {
+    if (!MPV_QUALITY_PROFILES.includes(value)) return
+    mpvQuality = value
+    setMpvQuality(value)
+  }
+
+  function onMpvExtraArgsChange(value) {
+    mpvExtraArgsText = value
+    setMpvExtraArgsText(value)
   }
 
   async function browseFor(kind) {
@@ -200,7 +282,7 @@
     }
   }
 
-  let autoDetecting = $state({ mpv: false, vlc: false })
+  let autoDetecting = $state({ mpv: false, vlc: false, iina: false })
   let discoveryRan = false
 
   async function autoDetectFor(kind) {
@@ -233,12 +315,14 @@
       writeDetectCache(kind, version)
       writeDetectStatus(kind, "ok")
       if (kind === "mpv") { detectedMpv = version; statusMpv = "ok" }
+      else if (kind === "iina") { detectedIina = version; statusIina = "ok" }
       else { detectedVlc = version; statusVlc = "ok" }
       toastSuccess(`${kind.toUpperCase()}: ${version}`)
     } else {
       writeDetectCache(kind, "")
       writeDetectStatus(kind, "fail")
       if (kind === "mpv") { detectedMpv = ""; statusMpv = "fail" }
+      else if (kind === "iina") { detectedIina = ""; statusIina = "fail" }
       else { detectedVlc = ""; statusVlc = "fail" }
       surfaceLaunchError(result.error, kind)
     }
@@ -250,11 +334,12 @@
 
   async function autoFillEmptyPaths() {
     if (discoveryRan || !isDesktopTauriEnv || sandboxed) return
-    if (pathMpv && pathVlc) return
+    if (pathMpv && pathVlc && (pathIina || !iinaAvailable)) return
     discoveryRan = true
     const discovered = await discoverExternalPlayers()
     if (!pathMpv && discovered.mpv[0]) onPathChange("mpv", discovered.mpv[0])
     if (!pathVlc && discovered.vlc[0]) onPathChange("vlc", discovered.vlc[0])
+    if (!pathIina && discovered.iina[0]) onPathChange("iina", discovered.iina[0])
   }
 
   onMount(() => {
@@ -333,6 +418,135 @@
       {/if}
     </label>
 
+    {#if mpvEmbeddedAvailable}
+    <label class="player-row">
+      <input
+        type="radio"
+        name="player-backend"
+        value="mpv-embedded"
+        checked={backend === "mpv-embedded"}
+        onchange={onBackendChange}
+        aria-labelledby="playback-mpv-embedded-title"
+        aria-describedby="playback-mpv-embedded-helper"
+        class="mt-0.5"
+      />
+      <span class="flex flex-col gap-0.5 min-w-0 flex-1">
+        <span id="playback-mpv-embedded-title" class="player-row__title">{mpvEmbeddedLabel}</span>
+        <span id="playback-mpv-embedded-helper" class="text-xs text-fg-3">{mpvEmbeddedHelper}</span>
+      </span>
+      {#if backend === "mpv-embedded"}
+        <span class="active-pill" aria-hidden="true">{activeLabel}</span>
+      {/if}
+    </label>
+
+    {#if backend === "mpv-embedded"}
+      <div class="player-config">
+        <p class="text-eyebrow font-medium uppercase text-fg-2">{mpvOptionsTitleLabel}</p>
+
+        <fieldset class="flex flex-col gap-2">
+          <legend class="text-eyebrow font-medium uppercase text-fg-3">{mpvHwdecLabel}</legend>
+          <p class="text-xs text-fg-3">{mpvHwdecHelperLabel}</p>
+          <div class="flex flex-wrap gap-2">
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-hwdec"
+                value="auto-safe"
+                checked={mpvHwdec === "auto-safe"}
+                onchange={() => onMpvHwdecChange("auto-safe")}
+              />
+              <span>{mpvHwdecAutoSafeLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-hwdec"
+                value="auto"
+                checked={mpvHwdec === "auto"}
+                onchange={() => onMpvHwdecChange("auto")}
+              />
+              <span>{mpvHwdecAutoLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-hwdec"
+                value="auto-copy"
+                checked={mpvHwdec === "auto-copy"}
+                onchange={() => onMpvHwdecChange("auto-copy")}
+              />
+              <span>{mpvHwdecAutoCopyLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-hwdec"
+                value="no"
+                checked={mpvHwdec === "no"}
+                onchange={() => onMpvHwdecChange("no")}
+              />
+              <span>{mpvHwdecOffLabel}</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="flex flex-col gap-2">
+          <legend class="text-eyebrow font-medium uppercase text-fg-3">{mpvQualityLabel}</legend>
+          <p class="text-xs text-fg-3">{mpvQualityHelperLabel}</p>
+          <div class="flex flex-wrap gap-2">
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-quality"
+                value="default"
+                checked={mpvQuality === "default"}
+                onchange={() => onMpvQualityChange("default")}
+              />
+              <span>{mpvQualityDefaultLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-quality"
+                value="performance"
+                checked={mpvQuality === "performance"}
+                onchange={() => onMpvQualityChange("performance")}
+              />
+              <span>{mpvQualityPerformanceLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-quality"
+                value="quality"
+                checked={mpvQuality === "quality"}
+                onchange={() => onMpvQualityChange("quality")}
+              />
+              <span>{mpvQualityQualityLabel}</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <label class="flex flex-col gap-1.5">
+          <span class="text-eyebrow font-medium uppercase text-fg-3">{mpvExtraArgsLabel}</span>
+          <textarea
+            rows="3"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder={mpvExtraArgsPlaceholderLabel}
+            value={mpvExtraArgsText}
+            onchange={(event) => onMpvExtraArgsChange(event.target.value)}
+            onblur={(event) => onMpvExtraArgsChange(event.target.value)}
+            class="field-input font-mono"
+          ></textarea>
+          <span class="text-xs text-fg-3">{mpvExtraArgsHelperLabel}</span>
+        </label>
+
+        <p class="text-xs text-fg-3">{mpvOptionsAppliesNextStartLabel}</p>
+      </div>
+    {/if}
+    {/if}
+
     {#if externalPlayersAvailable && !sandboxed}
     <label class="player-row">
       <input
@@ -401,12 +615,47 @@
         </span>
       {/if}
     </label>
+    {#if iinaAvailable}
+    <label class="player-row">
+      <input
+        type="radio"
+        name="player-backend"
+        value="iina"
+        checked={backend === "iina"}
+        onchange={onBackendChange}
+        aria-labelledby="playback-iina-title"
+        aria-describedby={backend === "iina" ? "playback-iina-helper" : "playback-iina-helper playback-iina-status"}
+        class="mt-0.5"
+      />
+      <span class="flex flex-col gap-0.5 min-w-0 flex-1">
+        <span id="playback-iina-title" class="player-row__title">{iinaLabel}</span>
+        <span id="playback-iina-helper" class="text-xs text-fg-3">{iinaHelper}</span>
+      </span>
+      {#if backend === "iina"}
+        <span class="active-pill" aria-hidden="true">{activeLabel}</span>
+      {:else}
+        <span class="status-meta">
+          <span
+            id="playback-iina-status"
+            class="status-chip"
+            class:status-chip--ready={statusIina === "ok"}
+            class:status-chip--fail={statusIina === "fail"}>
+            <span class="status-chip__dot" aria-hidden="true"></span>
+            <span>{statusIina === "fail" ? notFoundLabel : statusIina === "ok" ? readyLabel : notDetectedLabel}</span>
+          </span>
+          {#if statusIina === "ok" && detectedIina}
+            <span class="status-meta__version" aria-hidden="true">{detectedIina}</span>
+          {/if}
+        </span>
+      {/if}
+    </label>
+    {/if}
     {:else if sandboxed}
     <p class="text-xs text-fg-3">{sandboxNoteLabel}</p>
     {/if}
   </fieldset>
 
-  {#if externalPlayersAvailable && !sandboxed && pathMpv && pathVlc}
+  {#if externalPlayersAvailable && !sandboxed && [pathMpv, pathVlc, iinaAvailable && pathIina].filter(Boolean).length > 1}
     <fieldset class="flex flex-col gap-2 player-config">
       <legend class="text-eyebrow font-medium uppercase text-fg-3">{externalPrefLabel}</legend>
       <p class="text-xs text-fg-3">{externalPrefHelper}</p>
@@ -431,6 +680,18 @@
           />
           <span>VLC</span>
         </label>
+        {#if iinaAvailable}
+        <label class="pref-option">
+          <input
+            type="radio"
+            name="external-player-pref"
+            value="iina"
+            checked={externalPref === "iina"}
+            onchange={() => onExternalPrefChange("iina")}
+          />
+          <span>IINA</span>
+        </label>
+        {/if}
         <label class="pref-option">
           <input
             type="radio"
@@ -497,6 +758,63 @@
             placeholder="--hwdec=auto&#10;--cache-secs=20"
             value={argsMpv}
             oninput={(event) => onArgsChange("mpv", event.target.value)}
+            class="field-input font-mono"
+          ></textarea>
+        </label>
+      </details>
+    </div>
+  {:else if backend === "iina" && !sandboxed}
+    <div class="player-config">
+      <label class="flex flex-col gap-1.5">
+        <span class="text-eyebrow font-medium uppercase text-fg-3">{pathLabel}</span>
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="/Applications/IINA.app/Contents/MacOS/iina-cli"
+            value={pathIina}
+            oninput={(event) => onPathChange("iina", event.target.value)}
+            class="field-input font-mono flex-1"
+          />
+          <button type="button" class="btn" onclick={() => browseFor("iina")}>{browseLabel}</button>
+          <button type="button" class="btn" onclick={() => detectFor("iina", pathIina)}>{detectLabel}</button>
+          <button
+            type="button"
+            class="btn"
+            disabled={autoDetecting.iina}
+            onclick={() => autoDetectFor("iina")}>{autoDetectLabel}</button>
+        </div>
+      </label>
+
+      <label class="flex items-start gap-2 text-xs text-fg-2 cursor-pointer" class:opacity-50={!pathIina}>
+        <input
+          type="checkbox"
+          checked={reuseIina}
+          disabled={!pathIina}
+          onchange={(event) => onReuseChange("iina", event.target.checked)}
+          class="mt-0.5"
+        />
+        <span class="flex flex-col gap-0.5">
+          <span>{label("reuse", "Reuse the same window")}</span>
+          <span class="text-fg-3">
+            {label("reuseHelperIina",
+              "Open new streams in the same IINA window.")}
+          </span>
+        </span>
+      </label>
+
+      <details class="player-config__advanced">
+        <summary class="cursor-pointer text-xs font-medium text-fg-3">{advancedLabel}</summary>
+        <label class="flex flex-col gap-1.5 mt-2">
+          <span class="text-eyebrow font-medium uppercase text-fg-3">{extraArgsLabel}</span>
+          <textarea
+            rows="3"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="--hwdec=auto&#10;--cache-secs=20"
+            value={argsIina}
+            oninput={(event) => onArgsChange("iina", event.target.value)}
             class="field-input font-mono"
           ></textarea>
         </label>

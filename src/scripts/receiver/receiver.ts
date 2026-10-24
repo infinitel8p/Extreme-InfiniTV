@@ -10,6 +10,7 @@ import { log, redactUrl } from "@/scripts/lib/log.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { isTvDevice } from "@/scripts/lib/tv-detect"
+import { getUiMode, resolveUiMode } from "@/scripts/lib/ui-mode"
 import { mountReceiverAmbient, type ReceiverAmbient } from "@/scripts/receiver/ambient"
 import { startReceiverKeepAlive, stopReceiverKeepAlive } from "@/scripts/lib/receiver-keep-alive"
 import { receiverWakeAvailable, receiverWakeBridgePresent, wakeReceiverApp } from "@/scripts/lib/receiver-wake"
@@ -18,6 +19,8 @@ import { setKeepScreenOn } from "@/scripts/lib/keep-screen-on"
 import {
   createAndroidNativeReceiverEngine,
   createEmbeddedReceiverEngine,
+  isNativeMirrorActive,
+  nativeMirrorGeneration,
   normalizeReportedDuration,
   type ReceiverControlAction,
   type ReceiverEngine,
@@ -158,6 +161,15 @@ function syncReceiverKeepAlive(status: ReceiverStatus): void {
   }
 }
 
+function showAddressMessage(message: string): void {
+  if (!addressesEl) return
+  addressesEl.textContent = ""
+  const note = document.createElement("p")
+  note.className = "text-[0.625rem] text-fg-2"
+  note.textContent = message
+  addressesEl.appendChild(note)
+}
+
 function renderStatus(status: ReceiverStatus): void {
   syncReceiverKeepAlive(status)
   if (statusRefreshTimer) {
@@ -170,23 +182,37 @@ function renderStatus(status: ReceiverStatus): void {
     readyBadgeEl?.classList.add("inline-flex")
   }
   const ips = pairableReceiverIps(status.ips || [])
-  if (ips.length > 0) latestPrimaryAddress = formatReceiverAddress(ips[0], status.port)
-  if (addressesEl && ips.length > 0) {
-    addressesEl.textContent = ""
-    const primary = document.createElement("div")
-    primary.textContent = formatReceiverAddress(ips[0], status.port)
-    addressesEl.appendChild(primary)
-    if (ips.length > 1) {
-      const alternates = document.createElement("div")
-      alternates.className = "mt-2 max-w-2xl text-sm font-normal tracking-normal text-fg-3"
-      alternates.textContent = t("receiver.idle.alsoReachable", {
-        list: ips.slice(1).map((ip) => formatReceiverAddress(ip, status.port)).join("  ·  "),
-      })
-      addressesEl.appendChild(alternates)
+  if (ips.length > 0) {
+    latestPrimaryAddress = formatReceiverAddress(ips[0], status.port)
+    if (addressesEl) {
+      addressesEl.textContent = ""
+      const primary = document.createElement("div")
+      primary.textContent = formatReceiverAddress(ips[0], status.port)
+      addressesEl.appendChild(primary)
+      if (ips.length > 1) {
+        const alternates = document.createElement("div")
+        alternates.className = "mt-1 max-w-[24rem] text-[0.625rem] font-normal tracking-normal text-fg-3"
+        alternates.textContent = t("receiver.idle.alsoReachable", {
+          list: ips.slice(1).map((ip) => formatReceiverAddress(ip, status.port)).join("  ·  "),
+        })
+        addressesEl.appendChild(alternates)
+      }
+    }
+  } else {
+    showAddressMessage(t("receiver.idle.noNetwork"))
+  }
+  if (status.pairCode) {
+    latestPairCode = formatReceiverPairCode(status.pairCode)
+    if (pairCodeEl) pairCodeEl.textContent = latestPairCode
+  } else {
+    latestPairCode = ""
+    if (pairCodeEl) {
+      pairCodeEl.textContent = ""
+      const skeleton = document.createElement("span")
+      skeleton.className = "skel inline-block h-11 w-40 rounded"
+      pairCodeEl.appendChild(skeleton)
     }
   }
-  latestPairCode = formatReceiverPairCode(status.pairCode)
-  if (pairCodeEl) pairCodeEl.textContent = latestPairCode
   ambient?.setPairingInfo(latestPrimaryAddress, latestPairCode)
   const expiresIn = status.pairCodeExpiresInSeconds
   if (typeof expiresIn === "number" && expiresIn > 0) {
@@ -216,9 +242,11 @@ async function startReceiver(): Promise<void> {
   try {
     const status = await invoke<ReceiverStatus>("receiver_status")
     renderStatus(status)
+    return
   } catch (err) {
     log.warn("[xt:receiver] receiver_status failed:", err)
   }
+  showAddressMessage(t("receiver.idle.startFailed"))
 }
 
 function showPairedFlash(deviceName: string): void {
@@ -273,6 +301,17 @@ function reportState(partial: ReceiverStatePartial): void {
     volume: partial.volume ?? lastKnownVolume,
     muted: partial.muted ?? lastKnownMuted,
   }
+  if (isNativeMirrorActive()) {
+    // The mirror already told Rust; a late report here is a replay, except errors.
+    if (reportedState !== "error") {
+      log.debug("[xt:receiver] native mirror active, skipping report", { state: reportedState })
+      return
+    }
+    void invoke("receiver_report_state", { payload, generation: nativeMirrorGeneration() }).catch((err) => {
+      log.warn("[xt:receiver] receiver_report_state failed:", err)
+    })
+    return
+  }
   void invoke("receiver_report_state", { payload }).catch((err) => {
     log.warn("[xt:receiver] receiver_report_state failed:", err)
   })
@@ -288,6 +327,7 @@ const engineCallbacks: ReceiverEngineCallbacks = {
 const embeddedEngine = createEmbeddedReceiverEngine(
   {
     idleEl,
+    exitEl: exitBtn,
     playerViewEl,
     videoEl,
     titleWrapEl,
@@ -345,6 +385,7 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
   const descriptor = validateCastDescriptor(rawDescriptor)
   if (!descriptor) {
     log.warn("[xt:receiver] play rejected: descriptor failed validation")
+    embeddedEngine.showError("receiver.error.rejected")
     reportState({ state: "error", error: "bad-descriptor", positionSeconds: 0 })
     return
   }
@@ -356,6 +397,7 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
       const woke = receiverWakeAvailable() && wakeReceiverApp()
       if (!woke) {
         log.warn("[xt:receiver] play rejected: app is backgrounded and could not be woken")
+        embeddedEngine.showError("receiver.error.notReady")
         reportState({ state: "error", error: "app-not-foreground", positionSeconds: 0 })
         return
       }
@@ -403,12 +445,14 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
     if (started) return
 
     log.error("[xt:receiver] no engine could start playback")
+    embeddedEngine.showError("receiver.error.notReady")
     reportState({ state: "error", error: "player-unavailable", positionSeconds: 0 })
   } catch (err) {
     if (generationAtStart !== playGeneration) return
     log.error("[xt:receiver] play threw unexpectedly:", err)
     embeddedEngine.teardown()
     activeEngine = null
+    embeddedEngine.showError("receiver.error.rejected", err instanceof Error ? err.message : null)
     reportState({ state: "error", error: "play-failed", positionSeconds: 0 })
   } finally {
     playInFlight--
@@ -483,6 +527,16 @@ document.addEventListener("keydown", (event) => {
     }
     return
   }
+  if (key === "ArrowDown" || key === "ArrowUp" || key === "ArrowLeft" || key === "ArrowRight") {
+    // This page skips the spatial-nav polyfill, so arrow keys must move focus by hand.
+    const errorVisible = !!errorRetryEl?.isConnected && !errorEl?.classList.contains("hidden")
+    const target = errorVisible ? errorRetryEl : (!isKioskBuild && exitBtn?.isConnected ? exitBtn : null)
+    if (target && document.activeElement !== target) {
+      event.preventDefault()
+      target.focus()
+    }
+    return
+  }
   if ((key === "Escape" || key === "GoBack" || key === "BrowserBack") && !isKioskBuild) {
     event.preventDefault()
     exitReceiver()
@@ -497,7 +551,10 @@ function exitReceiver(): void {
   activeEngine = null
   // Server keeps running in the background; only auto-boot-in is suppressed.
   try { sessionStorage.setItem("xt_receiver_exited", "1") } catch {}
-  window.location.href = isTvDevice() ? "/tv" : "/"
+  let realTv = false
+  try { realTv = window.AndroidDeviceInfo?.isTv?.() === true } catch {}
+  const resolved = resolveUiMode({ stored: getUiMode(), realTv, detectedTv: isTvDevice() })
+  window.location.href = resolved === "tv" ? "/tv" : "/"
 }
 
 window.addEventListener("pagehide", () => {
@@ -506,7 +563,7 @@ window.addEventListener("pagehide", () => {
 })
 
 if (isKioskBuild) {
-  exitBtn?.classList.add("hidden")
+  exitBtn?.remove()
 } else {
   exitBtn?.addEventListener("click", () => exitReceiver())
 }
@@ -517,10 +574,14 @@ function prefersReducedMotion(): boolean {
 
 setInterval(() => {
   if (!idleEl || idleEl.classList.contains("hidden")) return
-  if (document.documentElement.dataset.perfMode === "on" || prefersReducedMotion()) return
+  if (prefersReducedMotion()) return
   const dx = Math.round((Math.random() - 0.5) * 2 * OLED_NUDGE_MAX_PX)
   const dy = Math.round((Math.random() - 0.5) * 2 * OLED_NUDGE_MAX_PX)
+  // Jump, not drift, so perf mode still shifts pixels; restore transition after.
+  idleEl.style.transition = "none"
   idleEl.style.transform = `translate(${dx}px, ${dy}px)`
+  void idleEl.offsetWidth
+  idleEl.style.transition = ""
 }, OLED_NUDGE_INTERVAL_MS)
 
 // Mounted synchronously (no receiver-status dependency) so no pushed manifest/cast event is dropped.
