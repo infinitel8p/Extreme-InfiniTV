@@ -3318,7 +3318,7 @@ details[open] > summary .changelog-chevron {
 /* -------------------------------------------------------------------------
  * Performance mode: opt-in toggle aimed at low-end TV WebViews. Skips the
  * decorative animations that are cheap on a desktop GPU but compound on
- * older Mali / Adreno hardware (the brand-mark SMIL comet, the focus-glide
+ * older Mali / Adreno hardware (the brand-mark comet, the focus-glide
  * indicator, the per-strip stagger entry, hub tile entry). Spatial-nav
  * already paints a focus ring, so hiding focus-glide does not regress
  * D-pad usability.
