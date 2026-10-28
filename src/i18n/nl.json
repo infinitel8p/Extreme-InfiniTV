@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "Normaal",
   "player.mpv.subtitleStyle.sizeLarge": "Groot",
   "player.mpv.subtitleStyle.sizeXLarge": "Extra groot",
+  "player.mpv.subtitleStyle.sizeHuge": "Enorm",
   "player.mpv.subtitleStyle.position": "Positie",
   "player.mpv.subtitleStyle.positionBottom": "Onderaan",
   "player.mpv.subtitleStyle.positionRaised": "Verhoogd",

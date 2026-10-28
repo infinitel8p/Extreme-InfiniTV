@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "Normalny",
   "player.mpv.subtitleStyle.sizeLarge": "Duży",
   "player.mpv.subtitleStyle.sizeXLarge": "Bardzo duży",
+  "player.mpv.subtitleStyle.sizeHuge": "Ogromny",
   "player.mpv.subtitleStyle.position": "Pozycja",
   "player.mpv.subtitleStyle.positionBottom": "Na dole",
   "player.mpv.subtitleStyle.positionRaised": "Podniesiona",

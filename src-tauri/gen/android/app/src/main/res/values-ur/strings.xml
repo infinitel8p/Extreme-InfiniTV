@@ -21,6 +21,7 @@
     <string name="xt_video_subtitle_size_normal">عام</string>
     <string name="xt_video_subtitle_size_large">بڑا</string>
     <string name="xt_video_subtitle_size_xlarge">بہت بڑا</string>
+    <string name="xt_video_subtitle_size_huge">انتہائی بڑا</string>
     <string name="xt_video_subtitle_delay">سب ٹائٹل کی تاخیر</string>
     <string name="xt_video_subtitle_delay_title">سب ٹائٹل کی تاخیر %1$s</string>
     <string name="xt_video_subtitle_delay_step">%1$s ms</string>

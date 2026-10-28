@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "Обычный",
   "player.mpv.subtitleStyle.sizeLarge": "Крупный",
   "player.mpv.subtitleStyle.sizeXLarge": "Очень крупный",
+  "player.mpv.subtitleStyle.sizeHuge": "Огромный",
   "player.mpv.subtitleStyle.position": "Положение",
   "player.mpv.subtitleStyle.positionBottom": "Внизу",
   "player.mpv.subtitleStyle.positionRaised": "Приподнято",

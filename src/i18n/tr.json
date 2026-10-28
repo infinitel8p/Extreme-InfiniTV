@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "Normal",
   "player.mpv.subtitleStyle.sizeLarge": "Büyük",
   "player.mpv.subtitleStyle.sizeXLarge": "Çok büyük",
+  "player.mpv.subtitleStyle.sizeHuge": "Devasa",
   "player.mpv.subtitleStyle.position": "Konum",
   "player.mpv.subtitleStyle.positionBottom": "Alt",
   "player.mpv.subtitleStyle.positionRaised": "Yükseltilmiş",

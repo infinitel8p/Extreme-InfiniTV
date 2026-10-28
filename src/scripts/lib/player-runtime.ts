@@ -37,7 +37,7 @@ import {
   SUBTITLE_SCALE_EVENT,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
-import { applySubtitleScaleStyle, applyVideoJsSubtitleScale } from "@/scripts/lib/subtitle-scale.ts"
+import { applyVideoJsSubtitleScale, observeSubtitleScale } from "@/scripts/lib/subtitle-scale.ts"
 import { classifyEffectTier } from "@/scripts/tv/motion"
 import { getAndroidMemoryClassMb } from "@/scripts/lib/tv-detect.ts"
 import { bindMonoAudio, bindMonoAudioMpv, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
@@ -3594,13 +3594,13 @@ export async function resolveEffectiveBackend(
 // ---------------------------------------------------------------------------
 // Mount entry point
 // ---------------------------------------------------------------------------
-let subtitleScaleListenerBound = false
-
-function bindSubtitleScaleStyle(): void {
-  applySubtitleScaleStyle(getSubtitleScale())
-  if (subtitleScaleListenerBound || typeof document === "undefined") return
-  subtitleScaleListenerBound = true
-  document.addEventListener(SUBTITLE_SCALE_EVENT, () => applySubtitleScaleStyle(getSubtitleScale()))
+function wireSubtitleScaleObserver(handle: VjsLikeHandle, fallbackVideo: HTMLVideoElement): void {
+  const stopObserving = observeSubtitleScale(handle.getMediaElement?.() ?? fallbackVideo, getSubtitleScale)
+  const originalDispose = handle.dispose?.bind(handle)
+  handle.dispose = () => {
+    stopObserving()
+    return originalDispose?.()
+  }
 }
 
 export async function mountPlayer(
@@ -3608,7 +3608,6 @@ export async function mountPlayer(
   backend: PlayerBackend = getPlayerBackend(),
   options: MountOptions = {},
 ): Promise<Mounted> {
-  bindSubtitleScaleStyle()
   await ensurePlaybackDnsReady()
   const requestedBackend = backend
   backend = await resolveEffectiveBackend(backend)
@@ -3645,6 +3644,7 @@ export async function mountPlayer(
   if (backend === "videojs") {
     const handle = await mountVideoJs(videoEl, options)
     wireMonoAudioDisposal(handle)
+    wireSubtitleScaleObserver(handle, videoEl)
     return {
       kind: "embedded",
       backend: "videojs",
@@ -3654,6 +3654,7 @@ export async function mountPlayer(
   if (backend === "shaka") {
     const handle = await mountShaka(videoEl, options)
     wireMonoAudioDisposal(handle)
+    wireSubtitleScaleObserver(handle, videoEl)
     return {
       kind: "embedded",
       backend: "shaka",
@@ -3663,6 +3664,7 @@ export async function mountPlayer(
   // artplayer (default)
   const handle = await mountArtPlayer(videoEl, options)
   wireMonoAudioDisposal(handle)
+  wireSubtitleScaleObserver(handle, videoEl)
   return {
     kind: "embedded",
     backend: "artplayer",

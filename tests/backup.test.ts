@@ -474,7 +474,7 @@ describe("importAll", () => {
     await importAll(snapshot)
     expect(settingsState.subsScale).toBe("large")
 
-    snapshot.appSettings.subsScale = "huge"
+    snapshot.appSettings.subsScale = "gigantic"
     await importAll(snapshot)
     expect(settingsState.subsScale).toBe("large")
   })

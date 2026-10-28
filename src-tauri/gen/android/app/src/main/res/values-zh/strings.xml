@@ -21,6 +21,7 @@
     <string name="xt_video_subtitle_size_normal">标准</string>
     <string name="xt_video_subtitle_size_large">大</string>
     <string name="xt_video_subtitle_size_xlarge">特大</string>
+    <string name="xt_video_subtitle_size_huge">超大</string>
     <string name="xt_video_subtitle_delay">字幕延迟</string>
     <string name="xt_video_subtitle_delay_title">字幕延迟 %1$s</string>
     <string name="xt_video_subtitle_delay_step">%1$s 毫秒</string>

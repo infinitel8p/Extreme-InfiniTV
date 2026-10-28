@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "標準",
   "player.mpv.subtitleStyle.sizeLarge": "大",
   "player.mpv.subtitleStyle.sizeXLarge": "特大",
+  "player.mpv.subtitleStyle.sizeHuge": "超特大",
   "player.mpv.subtitleStyle.position": "位置",
   "player.mpv.subtitleStyle.positionBottom": "下部",
   "player.mpv.subtitleStyle.positionRaised": "上寄せ",

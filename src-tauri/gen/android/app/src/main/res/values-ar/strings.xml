@@ -21,6 +21,7 @@
     <string name="xt_video_subtitle_size_normal">عادي</string>
     <string name="xt_video_subtitle_size_large">كبير</string>
     <string name="xt_video_subtitle_size_xlarge">كبير جدًا</string>
+    <string name="xt_video_subtitle_size_huge">ضخم</string>
     <string name="xt_video_subtitle_delay">تأخير الترجمة</string>
     <string name="xt_video_subtitle_delay_title">تأخير الترجمة %1$s</string>
     <string name="xt_video_subtitle_delay_step">%1$s مللي ثانية</string>

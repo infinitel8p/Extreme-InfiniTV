@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "सामान्य",
   "player.mpv.subtitleStyle.sizeLarge": "बड़ा",
   "player.mpv.subtitleStyle.sizeXLarge": "बहुत बड़ा",
+  "player.mpv.subtitleStyle.sizeHuge": "विशाल",
   "player.mpv.subtitleStyle.position": "स्थिति",
   "player.mpv.subtitleStyle.positionBottom": "नीचे",
   "player.mpv.subtitleStyle.positionRaised": "ऊपर उठा हुआ",

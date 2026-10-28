@@ -135,13 +135,14 @@ class VideoActivity : AppCompatActivity() {
     )
     private val PLAYBACK_SPEEDS = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
-    private val SUBTITLE_SIZES = arrayOf("small", "normal", "large", "xlarge")
-    private val SUBTITLE_SIZE_FACTORS = floatArrayOf(0.8f, 1.0f, 1.25f, 1.5f)
+    private val SUBTITLE_SIZES = arrayOf("small", "normal", "large", "xlarge", "huge")
+    private val SUBTITLE_SIZE_FACTORS = floatArrayOf(0.8f, 1.0f, 1.3f, 1.6f, 2.0f)
     private val SUBTITLE_SIZE_LABELS = intArrayOf(
       R.string.xt_video_subtitle_size_small,
       R.string.xt_video_subtitle_size_normal,
       R.string.xt_video_subtitle_size_large,
       R.string.xt_video_subtitle_size_xlarge,
+      R.string.xt_video_subtitle_size_huge,
     )
 
     private val SUBTITLE_DELAY_STEPS_MS = intArrayOf(-500, -250, -100, 100, 250, 500)
@@ -1616,9 +1617,9 @@ object TvOverscanState {
   var percent: Int = 0
 }
 
-// Subtitle size (small|normal|large|xlarge), pushed from JS via
+// Subtitle size (small|normal|large|xlarge|huge), pushed from JS via
 // AndroidVideoBridge.setSubtitleScale and updated by the in-player size chooser.
-val SUBTITLE_SCALE_SIZES = setOf("small", "normal", "large", "xlarge")
+val SUBTITLE_SCALE_SIZES = setOf("small", "normal", "large", "xlarge", "huge")
 
 object SubtitleScaleState {
   @Volatile

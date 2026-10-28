@@ -562,7 +562,7 @@ describe("subtitleStyleToMpvProperties", () => {
       "sub-ass-style-overrides": "PrimaryColour=&H0000FFFF",
     })
     expect(subtitleStyleToMpvProperties({ size: "xlarge", position: "bottom", color: "white" })).toEqual({
-      "sub-scale": 1.5,
+      "sub-scale": 1.6,
       "sub-pos": 100,
       "sub-color": "#FFFFFF",
       "sub-ass-override": "scale",
@@ -600,7 +600,7 @@ describe("parseSubtitleStyle", () => {
 
   it("defaults on invalid JSON or an unrecognized field value", () => {
     expect(parseSubtitleStyle("not json")).toEqual(DEFAULT_MPV_SUBTITLE_STYLE)
-    expect(parseSubtitleStyle(JSON.stringify({ size: "huge", position: "bottom", color: "white" }))).toEqual(
+    expect(parseSubtitleStyle(JSON.stringify({ size: "gigantic", position: "bottom", color: "white" }))).toEqual(
       DEFAULT_MPV_SUBTITLE_STYLE,
     )
   })

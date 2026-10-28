@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "عادي",
   "player.mpv.subtitleStyle.sizeLarge": "كبير",
   "player.mpv.subtitleStyle.sizeXLarge": "كبير جداً",
+  "player.mpv.subtitleStyle.sizeHuge": "ضخم",
   "player.mpv.subtitleStyle.position": "الموضع",
   "player.mpv.subtitleStyle.positionBottom": "أسفل",
   "player.mpv.subtitleStyle.positionRaised": "مرتفع",

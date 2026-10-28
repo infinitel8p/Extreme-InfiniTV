@@ -21,6 +21,7 @@
     <string name="xt_video_subtitle_size_normal">Обычный</string>
     <string name="xt_video_subtitle_size_large">Большой</string>
     <string name="xt_video_subtitle_size_xlarge">Очень большой</string>
+    <string name="xt_video_subtitle_size_huge">Огромный</string>
     <string name="xt_video_subtitle_delay">Задержка субтитров</string>
     <string name="xt_video_subtitle_delay_title">Задержка субтитров %1$s</string>
     <string name="xt_video_subtitle_delay_step">%1$s мс</string>

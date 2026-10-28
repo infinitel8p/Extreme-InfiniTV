@@ -6,6 +6,8 @@ import {
   DEFAULT_SUBTITLE_SCALE,
   applySubtitleScaleStyle,
   applyVideoJsSubtitleScale,
+  observeSubtitleScale,
+  subtitleCuePx,
   SUBTITLE_SCALE_SIZES,
   migrateSubtitleScale,
   normalizeSubtitleScale,
@@ -19,7 +21,7 @@ describe("normalizeSubtitleScale", () => {
   })
 
   it("falls back to normal for invalid input", () => {
-    expect(normalizeSubtitleScale("huge")).toBe("normal")
+    expect(normalizeSubtitleScale("gigantic")).toBe("normal")
     expect(normalizeSubtitleScale(undefined)).toBe("normal")
     expect(normalizeSubtitleScale(null)).toBe("normal")
     expect(normalizeSubtitleScale(3)).toBe("normal")
@@ -31,15 +33,70 @@ describe("subtitleScaleFactor", () => {
   it("maps each size", () => {
     expect(subtitleScaleFactor("small")).toBe(0.8)
     expect(subtitleScaleFactor("normal")).toBe(1)
-    expect(subtitleScaleFactor("large")).toBe(1.25)
-    expect(subtitleScaleFactor("xlarge")).toBe(1.5)
+    expect(subtitleScaleFactor("large")).toBe(1.3)
+    expect(subtitleScaleFactor("xlarge")).toBe(1.6)
+    expect(subtitleScaleFactor("huge")).toBe(2)
   })
 })
 
 describe("subtitleCueStyleCss", () => {
-  it("emits the cue font-size rule", () => {
-    expect(subtitleCueStyleCss("large")).toBe("video::cue { font-size: 125%; }")
+  it("falls back to a percentage without a video height", () => {
+    expect(subtitleCueStyleCss("large")).toBe("video::cue { font-size: 130%; }")
     expect(subtitleCueStyleCss("small")).toContain("80%")
+    expect(subtitleCueStyleCss("small", 0)).toContain("80%")
+  })
+
+  it("emits pixels relative to the video height", () => {
+    expect(subtitleCueStyleCss("normal", 1000)).toBe("video::cue { font-size: 50px; }")
+    expect(subtitleCueStyleCss("huge", 1000)).toBe("video::cue { font-size: 100px; }")
+  })
+})
+
+describe("subtitleCuePx", () => {
+  it("scales with height and clamps", () => {
+    expect(subtitleCuePx("normal", 1000)).toBe(50)
+    expect(subtitleCuePx("huge", 1000)).toBe(100)
+    expect(subtitleCuePx("small", 100)).toBe(14)
+    expect(subtitleCuePx("huge", 5000)).toBe(200)
+  })
+})
+
+describe("observeSubtitleScale", () => {
+  it("applies, reacts to resize and scale events, and cleans up", () => {
+    const observers: Array<{ callback: () => void; disconnect: ReturnType<typeof vi.fn> }> = []
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        callback: () => void
+        disconnect = vi.fn()
+        constructor(callback: () => void) {
+          this.callback = callback
+          observers.push(this)
+        }
+        observe() {}
+      },
+    )
+    const video = document.createElement("video")
+    let height = 1000
+    video.getBoundingClientRect = () => ({ height }) as DOMRect
+    let size: "normal" | "huge" = "normal"
+    const stop = observeSubtitleScale(video, () => size)
+    const styleText = () => document.getElementById("xt-subtitle-scale-style")?.textContent
+    expect(styleText()).toBe("video::cue { font-size: 50px; }")
+    height = 500
+    observers[0].callback()
+    expect(styleText()).toBe("video::cue { font-size: 25px; }")
+    size = "huge"
+    document.dispatchEvent(new CustomEvent("xt:subtitle-scale-changed"))
+    expect(styleText()).toBe("video::cue { font-size: 50px; }")
+    stop()
+    expect(observers[0].disconnect).toHaveBeenCalled()
+    size = "normal"
+    document.dispatchEvent(new CustomEvent("xt:subtitle-scale-changed"))
+    expect(styleText()).toBe("video::cue { font-size: 50px; }")
+    document.dispatchEvent(new Event("fullscreenchange"))
+    expect(styleText()).toBe("video::cue { font-size: 50px; }")
+    vi.unstubAllGlobals()
   })
 })
 

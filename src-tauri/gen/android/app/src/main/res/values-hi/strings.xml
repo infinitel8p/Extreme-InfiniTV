@@ -21,6 +21,7 @@
     <string name="xt_video_subtitle_size_normal">सामान्य</string>
     <string name="xt_video_subtitle_size_large">बड़ा</string>
     <string name="xt_video_subtitle_size_xlarge">बहुत बड़ा</string>
+    <string name="xt_video_subtitle_size_huge">विशाल</string>
     <string name="xt_video_subtitle_delay">उपशीर्षक विलंब</string>
     <string name="xt_video_subtitle_delay_title">उपशीर्षक विलंब %1$s</string>
     <string name="xt_video_subtitle_delay_step">%1$s ms</string>

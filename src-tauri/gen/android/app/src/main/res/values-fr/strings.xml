@@ -21,6 +21,7 @@
     <string name="xt_video_subtitle_size_normal">Normale</string>
     <string name="xt_video_subtitle_size_large">Grande</string>
     <string name="xt_video_subtitle_size_xlarge">Très grande</string>
+    <string name="xt_video_subtitle_size_huge">Énorme</string>
     <string name="xt_video_subtitle_delay">Décalage des sous-titres</string>
     <string name="xt_video_subtitle_delay_title">Décalage des sous-titres %1$s</string>
     <string name="xt_video_subtitle_delay_step">%1$s ms</string>

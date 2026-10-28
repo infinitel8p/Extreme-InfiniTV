@@ -399,14 +399,14 @@ export function shouldReloadForStall(input: StallCheckInput): boolean {
 }
 
 export interface MpvSubtitleStyle {
-  size: "small" | "normal" | "large" | "xlarge"
+  size: "small" | "normal" | "large" | "xlarge" | "huge"
   position: "bottom" | "raised"
   color: "white" | "yellow"
 }
 
 export const DEFAULT_MPV_SUBTITLE_STYLE: MpvSubtitleStyle = { size: "normal", position: "bottom", color: "white" }
 
-const SUBTITLE_SIZES: MpvSubtitleStyle["size"][] = ["small", "normal", "large", "xlarge"]
+const SUBTITLE_SIZES: MpvSubtitleStyle["size"][] = ["small", "normal", "large", "xlarge", "huge"]
 const SUBTITLE_POSITIONS: MpvSubtitleStyle["position"][] = ["bottom", "raised"]
 const SUBTITLE_COLORS: MpvSubtitleStyle["color"][] = ["white", "yellow"]
 

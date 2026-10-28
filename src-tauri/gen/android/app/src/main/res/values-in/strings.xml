@@ -21,6 +21,7 @@
     <string name="xt_video_subtitle_size_normal">Normal</string>
     <string name="xt_video_subtitle_size_large">Besar</string>
     <string name="xt_video_subtitle_size_xlarge">Sangat besar</string>
+    <string name="xt_video_subtitle_size_huge">Besar sekali</string>
     <string name="xt_video_subtitle_delay">Tunda subtitel</string>
     <string name="xt_video_subtitle_delay_title">Tunda subtitel %1$s</string>
     <string name="xt_video_subtitle_delay_step">%1$s ms</string>

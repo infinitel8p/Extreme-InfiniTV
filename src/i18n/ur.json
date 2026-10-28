@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "نارمل",
   "player.mpv.subtitleStyle.sizeLarge": "بڑا",
   "player.mpv.subtitleStyle.sizeXLarge": "بہت بڑا",
+  "player.mpv.subtitleStyle.sizeHuge": "انتہائی بڑا",
   "player.mpv.subtitleStyle.position": "پوزیشن",
   "player.mpv.subtitleStyle.positionBottom": "نیچے",
   "player.mpv.subtitleStyle.positionRaised": "اونچا",

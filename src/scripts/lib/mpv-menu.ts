@@ -26,7 +26,7 @@ export interface MpvMenuTrack {
 }
 
 export interface MpvMenuSubtitleStyleValue {
-  size: "small" | "normal" | "large" | "xlarge"
+  size: "small" | "normal" | "large" | "xlarge" | "huge"
   position: "bottom" | "raised"
   color: "white" | "yellow"
 }
@@ -184,6 +184,7 @@ const SUBTITLE_SIZE_LABEL_KEYS: Record<MpvMenuSubtitleStyleValue["size"], string
   normal: "player.mpv.subtitleStyle.sizeNormal",
   large: "player.mpv.subtitleStyle.sizeLarge",
   xlarge: "player.mpv.subtitleStyle.sizeXLarge",
+  huge: "player.mpv.subtitleStyle.sizeHuge",
 }
 const SUBTITLE_POSITION_LABEL_KEYS: Record<MpvMenuSubtitleStyleValue["position"], string> = {
   bottom: "player.mpv.subtitleStyle.positionBottom",

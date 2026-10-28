@@ -1861,6 +1861,7 @@
   "player.mpv.subtitleStyle.sizeNormal": "Normal",
   "player.mpv.subtitleStyle.sizeLarge": "Besar",
   "player.mpv.subtitleStyle.sizeXLarge": "Sangat besar",
+  "player.mpv.subtitleStyle.sizeHuge": "Besar sekali",
   "player.mpv.subtitleStyle.position": "Posisi",
   "player.mpv.subtitleStyle.positionBottom": "Bawah",
   "player.mpv.subtitleStyle.positionRaised": "Dinaikkan",
