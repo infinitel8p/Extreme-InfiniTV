@@ -35,7 +35,7 @@ importers:
         specifier: ^2.12.4
         version: 2.12.4
       '@tauri-apps/plugin-clipboard-manager':
-        specifier: ~2.5.0
+        specifier: ^2.5.0
         version: 2.5.0
       '@tauri-apps/plugin-dialog':
         specifier: ^2.8.4
