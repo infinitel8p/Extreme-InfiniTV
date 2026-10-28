@@ -1,6 +1,7 @@
 ---
 import TitleBar from "@/components/TitleBar.astro"
 import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
+import WebViewFloorNotice from "@/components/WebViewFloorNotice.astro"
 import "../styles/global.css"
 
 interface Props {
@@ -46,6 +47,10 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
     <script is:inline>
       document.documentElement.dataset.receiverUi = "1";
       try {
+        // Video-first surface: always dark
+        document.documentElement.style.colorScheme = "dark";
+        document.documentElement.setAttribute("data-theme", "dark");
+
         var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
         if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1;
         document.documentElement.style.setProperty("--xt-font-scale", String(fontScale));
@@ -133,9 +138,6 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
           }
         }
 
-        // Video-first surface: always dark
-        document.documentElement.style.colorScheme = "dark";
-
         var uaPlatform = (navigator.userAgent || "").toLowerCase();
         var hasTauri = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__;
         if (hasTauri && uaPlatform.indexOf("android") === -1) {
@@ -143,6 +145,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         }
       } catch (e) {}
     </script>
+    <WebViewFloorNotice />
   </head>
 
   <body class="antialiased bg-bg text-fg h-dvh overflow-hidden">
@@ -155,7 +158,8 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
 <style is:global>
   /* Design canvas is 40rem x 22.5rem; root font size scales that canvas to fill the viewport. */
   html[data-receiver-ui] {
-    font-size: max(12px, calc(min(100vw / 40, 100vh / 22.5) * var(--xt-font-scale, 1)));
+    font-size: max(12px, calc(min(100vw / 40, (100vh - var(--xt-titlebar-h, 0px)) / 22.5) * var(--xt-font-scale, 1)));
+    color-scheme: dark;
   }
 
   /* px, not rem: this is a native OS titlebar height, not part of the scaled canvas. */

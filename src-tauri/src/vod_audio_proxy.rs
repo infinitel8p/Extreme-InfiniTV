@@ -88,6 +88,8 @@ struct VodAudioSession {
     client_gone: AtomicBool,
     // New GET replaces the previous client's sender.
     current_client: Mutex<Option<mpsc::Sender<Bytes>>>,
+    held_previous_client: Mutex<Option<mpsc::Sender<Bytes>>>,
+    held_previous_client_timer: Mutex<Option<tokio::task::JoinHandle<()>>>,
     // Wakes stdout delivery on client connect or replace.
     client_notify: Notify,
     stderr_tail: Mutex<VecDeque<String>>,
@@ -141,6 +143,8 @@ pub async fn vod_audio_remux_available(
 pub struct RegisterVodAudioRemuxResponse {
     pub session_id: String,
     pub playback_url: String,
+    /// Actual output start: the keyframe at or before the requested start.
+    pub start_seconds: f64,
 }
 
 #[tauri::command]
@@ -160,13 +164,14 @@ pub async fn register_vod_audio_remux(
         return Err("OTHER:url must be http or https".to_string());
     }
 
-    // A loopback tee (e.g. vod_proxy) already applies user_agent/authorization.
-    let is_loopback = is_loopback_http(&url);
+    // A loopback tee (e.g. vod_proxy) already applies user_agent/authorization;
+    // a dns_proxy-wrapped loopback URL still needs them to forward upstream.
+    let is_loopback_tee = is_loopback_http(&url) && !crate::dns_proxy::is_dns_proxy_url(&url);
 
     let _register_guard = state.register_lock.lock().await;
 
     // One live session at a time; tear down before starting the next.
-    teardown_active_session(&state).await;
+    let held_previous_client = teardown_active_session(&state).await;
 
     let resolved_ffmpeg_path = match ensure_probed(&state, ffmpeg_path).await {
         (Some(probe), _) => probe.path,
@@ -184,11 +189,13 @@ pub async fn register_vod_audio_remux(
     let session = Arc::new(VodAudioSession {
         session_id: token.clone(),
         upstream_url: url.clone(),
-        user_agent: if is_loopback { None } else { user_agent },
-        authorization: if is_loopback { None } else { authorization },
+        user_agent: if is_loopback_tee { None } else { user_agent },
+        authorization: if is_loopback_tee { None } else { authorization },
         torn_down: AtomicBool::new(false),
         client_gone: AtomicBool::new(false),
         current_client: Mutex::new(None),
+        held_previous_client: Mutex::new(None),
+        held_previous_client_timer: Mutex::new(None),
         client_notify: Notify::new(),
         stderr_tail: Mutex::new(VecDeque::new()),
         child: tokio::sync::Mutex::new(None),
@@ -204,11 +211,19 @@ pub async fn register_vod_audio_remux(
     // Inserted before spawn so ffmpeg's request can resolve this token.
     insert_session(&state, session.clone());
 
-    let input_url = if is_loopback {
+    let input_url = if is_loopback_tee {
         url
     } else {
         format!("http://127.0.0.1:{port}/forward/{token}/stream")
     };
+    let actual_start_seconds = if start_seconds > 0.1 {
+        probe_seek_keyframe_seconds(&resolved_ffmpeg_path, &input_url, start_seconds)
+            .await
+            .unwrap_or(start_seconds)
+    } else {
+        start_seconds
+    };
+
     let ffmpeg_args = build_ffmpeg_args(&input_url, audio_stream_index, start_seconds, transcode_audio);
 
     let mut command = TokioCommand::new(&resolved_ffmpeg_path);
@@ -274,12 +289,87 @@ pub async fn register_vod_audio_remux(
         *watchdog = Some(watchdog_handle);
     }
 
+    hold_previous_client(&session, held_previous_client, HELD_CLIENT_TIMEOUT);
     set_active_session(&state, session);
 
     Ok(RegisterVodAudioRemuxResponse {
         session_id: token.clone(),
         playback_url: format!("http://127.0.0.1:{port}/live/{token}"),
+        start_seconds: actual_start_seconds,
     })
+}
+
+const HELD_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Keeps the old response open until the new player attaches, a teardown, or timeout.
+fn hold_previous_client(
+    session: &Arc<VodAudioSession>,
+    held: Option<mpsc::Sender<Bytes>>,
+    timeout: Duration,
+) {
+    let Some(held) = held else { return };
+    *session
+        .held_previous_client
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(held);
+    let weak_session = Arc::downgrade(session);
+    let timer = tokio::spawn(async move {
+        tokio::time::sleep(timeout).await;
+        if let Some(session) = weak_session.upgrade() {
+            release_held_previous_client(&session);
+        }
+    });
+    *session
+        .held_previous_client_timer
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(timer);
+}
+
+fn release_held_previous_client(session: &VodAudioSession) {
+    session
+        .held_previous_client
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    let timer = session
+        .held_previous_client_timer
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    if let Some(timer) = timer {
+        timer.abort();
+    }
+}
+
+async fn probe_seek_keyframe_seconds(ffmpeg_path: &str, input_url: &str, start_seconds: f64) -> Option<f64> {
+    let mut command = TokioCommand::new(ffmpeg_path);
+    command
+        .args(["-hide_banner", "-loglevel", "verbose", "-debug_ts", "-noaccurate_seek", "-ss"])
+        .arg(format!("{start_seconds}"))
+        .args(["-probesize", "1M", "-analyzeduration", "0"])
+        .args(["-i", input_url, "-map", "0:v:0", "-c", "copy", "-frames:v", "1", "-f", "mpegts", "pipe:1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = tokio::time::timeout(Duration::from_secs(5), command.output()).await.ok()?.ok()?;
+    let relative = parse_seek_relative_video_pts(&String::from_utf8_lossy(&output.stderr))?;
+    let actual = start_seconds + relative;
+    (actual.is_finite() && actual >= 0.0 && actual <= start_seconds + 0.5).then_some(actual)
+}
+
+fn parse_seek_relative_video_pts(stderr: &str) -> Option<f64> {
+    let line = stderr
+        .lines()
+        .find(|line| line.contains("demuxer+tsfixup -> ") && line.contains("type:video"))?;
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix("pkt_pts_time:"))?
+        .parse()
+        .ok()
 }
 
 #[tauri::command]
@@ -333,7 +423,8 @@ fn remove_session(state: &VodAudioProxyState, token: &str) {
     sessions.remove(token);
 }
 
-async fn teardown_active_session(state: &VodAudioProxyState) {
+/// Returns the old client's sender; the caller drops it to end that response.
+async fn teardown_active_session(state: &VodAudioProxyState) -> Option<mpsc::Sender<Bytes>> {
     let previous = {
         let mut active = state
             .active
@@ -341,16 +432,21 @@ async fn teardown_active_session(state: &VodAudioProxyState) {
             .unwrap_or_else(|poison| poison.into_inner());
         active.take()
     };
-    if let Some(session) = previous {
-        {
-            let mut sessions = state
-                .sessions
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            sessions.remove(&session.session_id);
-        }
-        teardown_session(&session).await;
+    let session = previous?;
+    {
+        let mut sessions = state
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        sessions.remove(&session.session_id);
     }
+    let held_client = session
+        .current_client
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    teardown_session(&session).await;
+    held_client
 }
 
 fn generate_token() -> String {
@@ -947,6 +1043,7 @@ async fn handle_live(
     // Fresh channel per client; storing the sender ends any previous one.
     let (sender, mut receiver) = mpsc::channel::<Bytes>(OUTPUT_CHANNEL_CAPACITY);
     set_current_client(&session, sender.clone());
+    release_held_previous_client(&session);
 
     // A teardown racing the store must not leave a dead sender in place.
     if session.torn_down.load(Ordering::SeqCst) {
@@ -1356,6 +1453,7 @@ async fn teardown_io(session: &Arc<VodAudioSession>) {
             .unwrap_or_else(|poison| poison.into_inner());
         guard.take();
     }
+    release_held_previous_client(session);
     session.kill_notify.notify_one();
     session.client_notify.notify_one();
 
@@ -1605,6 +1703,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_seek_relative_video_pts_reads_the_tsfixup_line() {
+        let stderr = "[vist#0:0/h264 @ 0x1] demuxer -> ist_index:0:0 type:video pkt_pts:400000 pkt_pts_time:400 pkt_dts:400000
+            [vist#0:0/h264 @ 0x1] demuxer+tsfixup -> ist_index:0:0 type:video pkt_pts:-4977 pkt_pts_time:-4.977
+";
+        assert_eq!(parse_seek_relative_video_pts(stderr), Some(-4.977));
+        assert_eq!(parse_seek_relative_video_pts("no packets"), None);
+        let raw_only = "[vist#0:0/h264 @ 0x1] demuxer -> ist_index:0:0 type:video pkt_pts:400000 pkt_pts_time:400
+";
+        assert_eq!(parse_seek_relative_video_pts(raw_only), None);
+        assert!((400.0 + parse_seek_relative_video_pts(stderr).unwrap() - 395.023).abs() < 1e-9);
+    }
+
+    #[test]
     fn http_input_reconnect_args_covers_http_and_https() {
         assert_eq!(
             http_input_reconnect_args("http://127.0.0.1:9000/forward/abc/stream"),
@@ -1838,6 +1949,8 @@ mod tests {
             torn_down: AtomicBool::new(false),
             client_gone: AtomicBool::new(false),
             current_client: Mutex::new(None),
+            held_previous_client: Mutex::new(None),
+            held_previous_client_timer: Mutex::new(None),
             client_notify: Notify::new(),
             stderr_tail: Mutex::new(VecDeque::new()),
             child: tokio::sync::Mutex::new(None),
@@ -1865,6 +1978,8 @@ mod tests {
             torn_down: AtomicBool::new(false),
             client_gone: AtomicBool::new(false),
             current_client: Mutex::new(None),
+            held_previous_client: Mutex::new(None),
+            held_previous_client_timer: Mutex::new(None),
             client_notify: Notify::new(),
             stderr_tail: Mutex::new(tail),
             child: tokio::sync::Mutex::new(None),
@@ -1891,6 +2006,8 @@ mod tests {
             torn_down: AtomicBool::new(false),
             client_gone: AtomicBool::new(false),
             current_client: Mutex::new(None),
+            held_previous_client: Mutex::new(None),
+            held_previous_client_timer: Mutex::new(None),
             client_notify: Notify::new(),
             stderr_tail: Mutex::new(VecDeque::new()),
             child: tokio::sync::Mutex::new(None),
@@ -1915,10 +2032,11 @@ mod tests {
         spawn_delay: Duration,
     ) {
         let _register_guard = state.register_lock.lock().await;
-        teardown_active_session(state).await;
+        let held = teardown_active_session(state).await;
         let session = test_vod_audio_session_with_id(session_id);
         insert_session(state, session.clone());
         tokio::time::sleep(spawn_delay).await;
+        hold_previous_client(&session, held, Duration::from_secs(60));
         set_active_session(state, session);
     }
 
@@ -2155,6 +2273,99 @@ mod tests {
 
         let wake_result = tokio::time::timeout(Duration::from_millis(500), woken).await;
         assert!(wake_result.is_ok(), "kill_notify must wake a task already parked on notified()");
+    }
+
+    #[tokio::test]
+    async fn teardown_active_session_returns_a_sender_that_keeps_the_response_open() {
+        let state = VodAudioProxyState::default();
+        let session = test_vod_audio_session();
+        let (sender, mut receiver) = held_pair();
+        set_current_client(&session, sender);
+        insert_session(&state, session.clone());
+        set_active_session(&state, session);
+
+        let held = teardown_active_session(&state).await;
+        assert!(held.is_some());
+        assert_open(&mut receiver).await;
+
+        drop(held);
+        assert_ended(&mut receiver).await;
+    }
+
+    #[tokio::test]
+    async fn live_handler_releases_the_hold_when_the_first_client_attaches() {
+        let state = Arc::new(VodAudioProxyState::default());
+        register_under_lock(&state, "old", Duration::from_millis(0)).await;
+        let old_session = state
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+            .expect("old session active");
+        let (old_sender, mut old_receiver) = held_pair();
+        set_current_client(&old_session, old_sender);
+
+        register_under_lock(&state, "new", Duration::from_millis(0)).await;
+        assert_open(&mut old_receiver).await;
+
+        let server_state = Arc::new(ServerState {
+            active: state.active.clone(),
+            sessions: state.sessions.clone(),
+            port: 1234,
+            client: reqwest::Client::new(),
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::HOST, "127.0.0.1:1234".parse().unwrap());
+        let _response =
+            handle_live(State(server_state), AxumPath("new".to_string()), headers).await;
+
+        assert_ended(&mut old_receiver).await;
+    }
+
+    fn held_pair() -> (mpsc::Sender<Bytes>, mpsc::Receiver<Bytes>) {
+        mpsc::channel::<Bytes>(4)
+    }
+
+    async fn assert_open(receiver: &mut mpsc::Receiver<Bytes>) {
+        let idle = tokio::time::timeout(Duration::from_millis(50), receiver.recv()).await;
+        assert!(idle.is_err(), "old response must still be open");
+    }
+
+    async fn assert_ended(receiver: &mut mpsc::Receiver<Bytes>) {
+        let ended = tokio::time::timeout(Duration::from_millis(500), receiver.recv()).await;
+        assert!(matches!(ended, Ok(None)), "old response must have ended");
+    }
+
+    #[tokio::test]
+    async fn hold_survives_register_and_ends_when_new_client_attaches() {
+        let session = test_vod_audio_session();
+        let (held, mut old_receiver) = held_pair();
+        hold_previous_client(&session, Some(held), Duration::from_secs(60));
+        assert_open(&mut old_receiver).await;
+
+        let (sender, _receiver) = held_pair();
+        set_current_client(&session, sender);
+        release_held_previous_client(&session);
+        assert_ended(&mut old_receiver).await;
+    }
+
+    #[tokio::test]
+    async fn hold_is_released_by_the_fallback_timeout() {
+        let session = test_vod_audio_session();
+        let (held, mut old_receiver) = held_pair();
+        hold_previous_client(&session, Some(held), Duration::from_millis(100));
+        assert_open(&mut old_receiver).await;
+        assert_ended(&mut old_receiver).await;
+    }
+
+    #[tokio::test]
+    async fn hold_is_released_when_the_new_session_is_torn_down() {
+        let session = test_vod_audio_session();
+        let (held, mut old_receiver) = held_pair();
+        hold_previous_client(&session, Some(held), Duration::from_secs(60));
+        assert_open(&mut old_receiver).await;
+        teardown_session(&session).await;
+        assert_ended(&mut old_receiver).await;
     }
 
     #[tokio::test]

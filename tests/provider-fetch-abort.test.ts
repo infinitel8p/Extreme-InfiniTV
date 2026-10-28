@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 vi.mock("@/scripts/lib/app-settings.js", () => ({
   getUserAgent: () => "",
   getNetworkTimeoutSeconds: () => networkTimeoutSeconds,
+  getGlobalDns: () => null,
+  DNS_EVENT: "xt:dns-changed",
 }))
 
 let networkTimeoutSeconds = 15

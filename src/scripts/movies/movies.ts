@@ -3,21 +3,15 @@
 // /movies/detail?id=<id> via src/scripts/movies/detail.ts.
 import { log } from "@/scripts/lib/log.js"
 import {
-  loadCreds,
   getActiveEntry,
+  getMergedEntries,
+  entryToCreds,
   isTauri,
+  MERGED_CHANGED_EVENT,
 } from "@/scripts/lib/creds.js"
-import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
-import {
-  cachedFetch,
-  getCached,
-  hydrate as hydrateCache,
-} from "@/scripts/lib/cache.js"
-import { rowsNeedTmdbBackfill } from "@/scripts/lib/catalog-mappers.js"
-import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
 import {
   ensureLoaded as ensurePrefsLoaded,
   isCompleted,
@@ -36,7 +30,6 @@ import { mountCategoryPicker, genreLabelForCategory } from "@/scripts/lib/catego
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
 import { mountPersonSuggestStrip } from "@/scripts/lib/person-suggest.ts"
-import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { fmtImdbRating, ratingSortValue } from "@/scripts/lib/format.js"
 import {
@@ -50,14 +43,17 @@ import {
 } from "@/scripts/lib/entry-card.js"
 import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { castXtreamVodToTv } from "@/scripts/lib/tv-cast.ts"
-import { buildGroupingIndex, pickPreferredEntryId, groupPassesLanguageFilter } from "@/scripts/lib/language-groups.ts"
+import {
+  buildGroupingIndexesByPlaylist,
+  pickPreferredEntryId,
+  groupPassesLanguageFilter,
+} from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, languageTagLabel, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
 import {
   fmtAge,
   posterSkeletonCount,
   renderPosterSkeletons,
-  fetchCategoryMap,
   groupHasFavorite,
   groupHasWatchlist,
   toggleGroupFavorite,
@@ -67,18 +63,28 @@ import {
   createGridSecondaryControls,
   personFilterGridSignature,
 } from "@/scripts/lib/grid-view.ts"
-
-const VOD_TTL_MS = 24 * 60 * 60 * 1000
+import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
+import { selectRowsForCategory } from "@/scripts/lib/grid-filter.ts"
+import { rowKey, parseMergedCategoryKey, categoryLabel } from "@/scripts/lib/merged-catalog-core.ts"
+import { ensureMergedRows, hydrateMergedRows, readMergedRows, isMergedView } from "@/scripts/lib/merged-catalog.ts"
+import { createMergedLoadIndicator } from "@/scripts/lib/merged-load-indicator.ts"
+import { toastWarn } from "@/scripts/lib/toast.ts"
 
 if (typeof history !== "undefined") history.scrollRestoration = "manual"
-
-let creds = { host: "", port: "", user: "", pass: "" }
 
 // ----------------------------
 // UI refs
 // ----------------------------
 const gridEl = document.getElementById("movie-grid")
 const listStatus = document.getElementById("movie-list-status")
+const mergeStatusEl = document.getElementById("movie-merge-status")
+const mergeIndicator = mergeStatusEl
+  ? createMergedLoadIndicator({
+      host: mergeStatusEl,
+      getTitle: (playlistId) => playlistTitleById.get(playlistId) || "",
+      t,
+    })
+  : null
 
 const searchEl = /** @type {HTMLInputElement|null} */ (
   document.getElementById("movie-search")
@@ -93,44 +99,45 @@ let all = []
 let filtered = []
 
 // Rebuilt whenever `all` is reassigned; independent of the group-languages toggle.
-let groupingIndex = buildGroupingIndex([])
-
-/** @type {Map<string,string> | null} */
-let categoryMap = null
+let groupingIndexByPlaylist = new Map()
 
 let activePlaylistId = ""
-let activePlaylistTitle = ""
+let mergedPlaylistIds = []
+let mergedPlaylistIdSet = new Set()
+let playlistTitleById = new Map()
+let credsByPlaylistId = new Map()
+let loadRunToken = 0
 
-// Genre index is async and rebuilt local-only; snapshot + playlist guard avoid races on quick playlist switches.
-let genreSets = null
-let genreSetsPlaylistId = ""
-let genreSetsLoadingId = ""
+// Genre index is async and rebuilt local-only; per-playlist snapshots avoid races on quick switches.
+const genreSetsByPlaylist = new Map()
+const genreSetsLoading = new Set()
 
 async function refreshGenreSets(playlistId) {
   if (!playlistId) return
-  genreSetsLoadingId = playlistId
+  genreSetsLoading.add(playlistId)
   try {
     const index = await getGenreIndex(playlistId, "vod")
-    if (playlistId !== activePlaylistId) return
-    genreSets = index.sets
-    genreSetsPlaylistId = playlistId
+    if (!mergedPlaylistIdSet.has(playlistId)) return
+    genreSetsByPlaylist.set(playlistId, index.sets)
     applyFilter()
   } finally {
-    if (genreSetsLoadingId === playlistId) genreSetsLoadingId = ""
+    genreSetsLoading.delete(playlistId)
   }
 }
 
 // applyFilter can hit a genre category before any paint loaded the snapshot (back-nav, bfcache, playlist switch).
 function ensureGenreSets() {
-  if (!activePlaylistId || genreSetsLoadingId === activePlaylistId) return
-  refreshGenreSets(activePlaylistId).catch(() => {})
+  for (const playlistId of mergedPlaylistIds) {
+    if (genreSetsByPlaylist.has(playlistId) || genreSetsLoading.has(playlistId)) continue
+    refreshGenreSets(playlistId).catch(() => {})
+  }
 }
 
 document.addEventListener(GENRE_INDEX_EVENT, (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
   if (!detail || detail.kind !== "vod") return
-  if (detail.playlistId !== activePlaylistId) return
-  refreshGenreSets(activePlaylistId)
+  if (!mergedPlaylistIdSet.has(detail.playlistId)) return
+  refreshGenreSets(detail.playlistId)
 })
 
 const CAT_FAVORITES = "__favorites__"
@@ -142,12 +149,19 @@ const picker = mountCategoryPicker({
   activeCatStorageKey: "xt_vod_active_cat",
   activeCatChangedEvent: "xt:movie-cat-changed",
   getActivePlaylistId: () => activePlaylistId,
+  getSources: () =>
+    mergedPlaylistIds.map((playlistId) => ({
+      playlistId,
+      title: playlistTitleById.get(playlistId) || "",
+    })),
   getItems: () => all,
 })
 document.addEventListener("xt:movie-cat-changed", (ev) => {
   const activeCat = /** @type {CustomEvent} */ (ev).detail
-  if (activePlaylistId && typeof activeCat === "string" && activeCat.startsWith(GENRE_CAT_PREFIX)) {
-    ensureGenreBoost(activePlaylistId, "vod", activeCat.slice(GENRE_CAT_PREFIX.length)).catch(() => {})
+  if (typeof activeCat === "string" && activeCat.startsWith(GENRE_CAT_PREFIX)) {
+    for (const playlistId of mergedPlaylistIds) {
+      ensureGenreBoost(playlistId, "vod", activeCat.slice(GENRE_CAT_PREFIX.length)).catch(() => {})
+    }
   }
   applyFilter()
 })
@@ -163,23 +177,23 @@ mountSurprisePicker({
 
 document.addEventListener("xt:favorites-changed", (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "vod") return
   if (picker.getActiveCat() === CAT_FAVORITES) applyFilter()
-  else updateGridStarFor(detail.id)
+  else updateGridStarFor(detail.playlistId, detail.id)
   picker.refreshPseudoRows()
 })
 
 document.addEventListener("xt:watchlist-changed", (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "vod") return
-  updateGridWatchBadgeFor(detail.id)
+  updateGridWatchBadgeFor(detail.playlistId, detail.id)
 })
 
 document.addEventListener("xt:recents-changed", (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "vod") return
   if (picker.getActiveCat() === CAT_RECENTS) applyFilter()
   picker.refreshPseudoRows()
@@ -187,34 +201,24 @@ document.addEventListener("xt:recents-changed", (ev) => {
 
 document.addEventListener("xt:progress-changed", (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "vod") return
   if (getHideWatched(activePlaylistId, "vod")) {
     applyFilter()
     return
   }
-  updateGridWatchedBadgeFor(detail.id)
+  updateGridWatchedBadgeFor(detail.playlistId, detail.id)
 })
 
 const onMovieFilterChange = (ev: Event) => {
   const detail = /** @type {CustomEvent} */ (ev as any).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "vod") return
   applyFilter()
 }
 document.addEventListener("xt:hidden-categories-changed", onMovieFilterChange)
 document.addEventListener("xt:allowed-categories-changed", onMovieFilterChange)
 document.addEventListener("xt:category-mode-changed", onMovieFilterChange)
-
-// ----------------------------
-// Categories
-// ----------------------------
-async function ensureVodCategoryMap() {
-  if (categoryMap) return categoryMap
-  categoryMap = await fetchCategoryMap("get_vod_categories")
-  return categoryMap
-}
-
 
 // ----------------------------
 // Poster grid
@@ -225,8 +229,8 @@ const AUTO_LOAD_CAP = 1500
 const RESUME_MIN_SECONDS = 30
 
 /** Resume/duration for a cast descriptor, from saved progress. */
-function vodCastResume(vodId) {
-  const saved = activePlaylistId ? getProgress(activePlaylistId, "vod", vodId) : null
+function vodCastResume(playlistId, vodId) {
+  const saved = playlistId ? getProgress(playlistId, "vod", vodId) : null
   if (!saved || saved.completed) return {}
   return {
     resumeSeconds: saved.position > RESUME_MIN_SECONDS ? saved.position : 0,
@@ -238,9 +242,12 @@ let infiniteObs = null
 let renderedCount = 0
 
 function makeCard(group, idx) {
+  const playlistId = group.playlistId
   const displayEntry = group.displayEntry
+  const groupingIndex = groupingIndexByPlaylist.get(playlistId)
+  const creds = credsByPlaylistId.get(playlistId) || { host: "", port: "", user: "", pass: "" }
   // Strip the tag prefix (redundant once the language shows as a chip) only when 2+ languages are grouped.
-  const stripPrefix = group.tags.length >= 2 && groupingIndex.tagByEntryId.get(displayEntry.id)
+  const stripPrefix = group.tags.length >= 2 && groupingIndex?.tagByEntryId.get(displayEntry.id)
   const cardEntry = stripPrefix
     ? { ...displayEntry, name: parseNamePrefix(displayEntry.name).rest }
     : displayEntry
@@ -249,20 +256,21 @@ function makeCard(group, idx) {
     entry: cardEntry,
     idx,
     kind: "vod",
-    activePlaylistId,
-    detailHref: (entry) =>
-      `/movies/detail?id=${encodeURIComponent(entry.id)}`,
+    playlistId,
+    detailHref: (entry) => detailHrefFor("vod", entry.id, { playlistId }),
     fallbackTitle: (entry) => t("list.movieFallback", { id: entry.id }),
     metaText: (entry) => {
       const parts = []
       if (entry.year) parts.push(entry.year)
       if ((entry as any).duration) parts.push((entry as any).duration)
       if (entry.category) parts.push(entry.category)
+      const playlistTitle = isMergedView() ? playlistTitleById.get(playlistId) : ""
+      if (playlistTitle) parts.push(playlistTitle)
       return parts.join(" \u2022 ")
     },
     decoratePoster: (posterWrap, _entry) => {
       let badgePresent = false
-      if (activePlaylistId && group.globalEntryIds.some((id) => isCompleted(activePlaylistId, "vod", id))) {
+      if (playlistId && group.globalEntryIds.some((id) => isCompleted(playlistId, "vod", id))) {
         posterWrap.appendChild(buildWatchedBadge())
         badgePresent = true
       }
@@ -270,7 +278,7 @@ function makeCard(group, idx) {
         group.tags,
         group.globalEntryIds.length,
         getActiveLocale(),
-        groupingIndex.tagByEntryId.get(displayEntry.id)
+        groupingIndex?.tagByEntryId.get(displayEntry.id)
       )
       if (chips) {
         posterWrap.appendChild(chips)
@@ -281,24 +289,24 @@ function makeCard(group, idx) {
       fav
         ? `Remove ${entry.name || "movie"} from favorites`
         : `Add ${entry.name || "movie"} to favorites`,
-    favoriteState: () => groupHasFavorite(activePlaylistId, "vod", group),
+    favoriteState: () => groupHasFavorite(playlistId, "vod", group),
     onToggleFavorite: (entry, currentlyFavorited) => {
-      toggleGroupFavorite(activePlaylistId, "vod", group, entry, currentlyFavorited)
+      toggleGroupFavorite(playlistId, "vod", group, entry, currentlyFavorited)
     },
-    watchlistState: () => groupHasWatchlist(activePlaylistId, "vod", group),
+    watchlistState: () => groupHasWatchlist(playlistId, "vod", group),
     onContextMenu: (entry, anchor, point) => {
       import("@/scripts/lib/poster-menu").then(({ openPosterMenu }) => {
         openPosterMenu({
           kind: "vod",
           entry,
-          activePlaylistId,
+          playlistId,
           anchor,
           point,
           onOpen: () => {
-            window.location.href = `/movies/detail?id=${encodeURIComponent(entry.id)}`
+            window.location.href = detailHrefFor("vod", entry.id, { playlistId })
           },
           onDownload: () => {
-            window.location.href = `/movies/detail?id=${encodeURIComponent(entry.id)}&download=1`
+            window.location.href = detailHrefFor("vod", entry.id, { playlistId, download: true })
           },
           buildStreamUrl: () => {
             if (!creds.host || !creds.user || !creds.pass) return null
@@ -308,33 +316,33 @@ function makeCard(group, idx) {
           onPlayOnTv: isTauri && creds.host && creds.user && creds.pass
             ? castXtreamVodToTv({
                 creds,
-                playlistId: activePlaylistId,
+                playlistId: playlistId,
                 vodId: entry.id,
                 containerExt: (entry as any).container_extension || null,
                 title: entry.name || null,
                 logo: entry.logo || undefined,
-                ...vodCastResume(entry.id),
+                ...vodCastResume(playlistId, entry.id),
               })
             : undefined,
-          favoriteActive: () => groupHasFavorite(activePlaylistId, "vod", group),
+          favoriteActive: () => groupHasFavorite(playlistId, "vod", group),
           onToggleFavorite: (currentlyFavorited) => {
-            toggleGroupFavorite(activePlaylistId, "vod", group, entry, currentlyFavorited)
+            toggleGroupFavorite(playlistId, "vod", group, entry, currentlyFavorited)
           },
-          watchlistActive: () => groupHasWatchlist(activePlaylistId, "vod", group),
+          watchlistActive: () => groupHasWatchlist(playlistId, "vod", group),
           onToggleWatchlist: (currentlyOnWatchlist) => {
-            toggleGroupWatchlist(activePlaylistId, "vod", group, entry, currentlyOnWatchlist)
+            toggleGroupWatchlist(playlistId, "vod", group, entry, currentlyOnWatchlist)
           },
           watchedActive: () =>
-            activePlaylistId
-              ? group.globalEntryIds.some((id) => isCompleted(activePlaylistId, "vod", id))
+            playlistId
+              ? group.globalEntryIds.some((id) => isCompleted(playlistId, "vod", id))
               : false,
           onToggleWatched: (currentlyWatched) => {
-            if (!activePlaylistId) return
+            if (!playlistId) return
             if (!currentlyWatched) {
               for (const variantId of group.globalEntryIds) {
-                if (isCompleted(activePlaylistId, "vod", variantId)) continue
+                if (isCompleted(playlistId, "vod", variantId)) continue
                 const variantEntry = group.entries.find((movie) => movie.id === variantId) || entry
-                markCompleted(activePlaylistId, "vod", variantId, {
+                markCompleted(playlistId, "vod", variantId, {
                   name: variantEntry.name || "",
                   logo: variantEntry.logo || null,
                 })
@@ -342,8 +350,8 @@ function makeCard(group, idx) {
               return
             }
             for (const variantId of group.globalEntryIds) {
-              if (isCompleted(activePlaylistId, "vod", variantId)) {
-                clearProgress(activePlaylistId, "vod", variantId)
+              if (isCompleted(playlistId, "vod", variantId)) {
+                clearProgress(playlistId, "vod", variantId)
               }
             }
           },
@@ -502,15 +510,17 @@ function renderGridInner() {
 }
 
 // movieId may be any variant id in the group, not just the displayed one.
-function updateGridStarFor(movieId) {
+function updateGridStarFor(playlistId, movieId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(movieId))
+  const idx = filtered.findIndex(
+    (group) => group.playlistId === playlistId && group.globalEntryIds.includes(movieId)
+  )
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
   const group = filtered[idx]
   const displayEntry = group.displayEntry
-  const fav = groupHasFavorite(activePlaylistId, "vod", group)
+  const fav = groupHasFavorite(group.playlistId, "vod", group)
   const star = /** @type {HTMLButtonElement|null} */ (
     card.querySelector(".star-btn")
   )
@@ -529,14 +539,16 @@ function updateGridStarFor(movieId) {
 }
 
 // movieId may be any variant id in the group; see updateGridStarFor.
-function updateGridWatchBadgeFor(movieId) {
+function updateGridWatchBadgeFor(playlistId, movieId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(movieId))
+  const idx = filtered.findIndex(
+    (group) => group.playlistId === playlistId && group.globalEntryIds.includes(movieId)
+  )
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
   const group = filtered[idx]
-  const onWatchlist = groupHasWatchlist(activePlaylistId, "vod", group)
+  const onWatchlist = groupHasWatchlist(group.playlistId, "vod", group)
   const badge = /** @type {HTMLElement|null} */ (
     card.querySelector('[data-role="watch-badge"]')
   )
@@ -545,9 +557,11 @@ function updateGridWatchBadgeFor(movieId) {
 }
 
 // movieId may be any variant id in the group, not just the displayed one.
-function updateGridWatchedBadgeFor(movieId) {
+function updateGridWatchedBadgeFor(playlistId, movieId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(movieId))
+  const idx = filtered.findIndex(
+    (group) => group.playlistId === playlistId && group.globalEntryIds.includes(movieId)
+  )
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
@@ -555,8 +569,7 @@ function updateGridWatchedBadgeFor(movieId) {
   if (!wrap) return
   wrap.querySelector(`.${WATCHED_BADGE_CLASS}`)?.remove()
   const group = filtered[idx]
-  const anyWatched =
-    activePlaylistId && group.globalEntryIds.some((id) => isCompleted(activePlaylistId, "vod", id))
+  const anyWatched = group.globalEntryIds.some((id) => isCompleted(group.playlistId, "vod", id))
   if (anyWatched) wrap.appendChild(buildWatchedBadge())
   setLanguageChipsOffset(wrap, !!anyWatched)
 }
@@ -585,7 +598,7 @@ const personFilter = createPersonFilterController({
   labelId: "movie-person-filter-label",
   clearButtonId: "movie-person-filter-clear",
   logTag: "xt:movies",
-  getActivePlaylistId: () => activePlaylistId,
+  getPlaylistIds: () => mergedPlaylistIds,
   getCatalogEntries: () => all,
   applyFilter: () => applyFilter(),
 })
@@ -597,7 +610,7 @@ const personSuggest = mountPersonSuggestStrip({
   searchEl,
   insertBeforeEl: listStatus,
   basePath: "/movies",
-  getActivePlaylistId: () => activePlaylistId,
+  getPlaylistIds: () => mergedPlaylistIds,
 })
 
 // ----------------------------
@@ -607,50 +620,34 @@ function applyFilter() {
   if (!listStatus) return
   // An active-but-unresolved person filter must never paint the unfiltered grid.
   if (personFilter.guardUnresolved()) return
-  const qnorm = normalize(searchEl?.value || "")
-  const tokens = qnorm.length ? qnorm.split(" ") : []
+  const tokens = parseSearchQuery(searchEl?.value || "")
 
   const activeCat = picker.getActiveCat()
-  let out
-  if (activeCat === CAT_FAVORITES && activePlaylistId) {
-    const favs = getFavorites(activePlaylistId, "vod")
-    out = all.filter((m) => favs.has(m.id))
-  } else if (activeCat === CAT_RECENTS && activePlaylistId) {
-    const byId = new Map(all.map((m) => [m.id, m]))
-    const recs = getRecents(activePlaylistId, "vod")
-    out = []
-    for (const r of recs) {
-      const m = byId.get(r.id)
-      if (m) out.push(m)
-    }
-  } else if (activeCat.startsWith(GENRE_CAT_PREFIX)) {
-    const genreId = activeCat.slice(GENRE_CAT_PREFIX.length)
-    const snapshotReady = !!genreSets && genreSetsPlaylistId === activePlaylistId
-    if (!snapshotReady) ensureGenreSets()
-    const idsForGenre = snapshotReady ? genreSets.get(genreId) : null
-    out = idsForGenre ? all.filter((m) => idsForGenre.has(m.id)) : []
-  } else {
-    out = all.filter((m) => {
-      if (activeCat && (m.category || "") !== activeCat) return false
-      return picker.categoryPassesFilter((m.category || "").toString())
-    })
-  }
+  if (activeCat.startsWith(GENRE_CAT_PREFIX)) ensureGenreSets()
+  let out = selectRowsForCategory(all, activeCat, {
+    favoritesFor: (playlistId) => getFavorites(playlistId, "vod"),
+    recentsFor: (playlistId) => getRecents(playlistId, "vod"),
+    genreSetFor: (playlistId, genreId) => genreSetsByPlaylist.get(playlistId)?.get(genreId),
+    categoryPassesFilter: picker.categoryPassesFilter,
+    fallbackPlaylistId: activePlaylistId,
+    fallbackCategoryName: t("stream.uncategorized"),
+  })
 
   const personTitleIds = personFilter.getTitleIds()
   if (personFilter.isActive() && personTitleIds) {
-    out = out.filter((movie) => personTitleIds.has(movie.id))
+    out = out.filter((movie) => personTitleIds.has(rowKey(movie)))
   }
 
-  /** @type {Map<number, number> | null} */
+  /** @type {Map<string, number> | null} */
   let scoreById = null
   if (tokens.length) {
     scoreById = new Map()
     const scored = []
     for (const movie of out) {
-      const score = scoreNormMatch(movie.norm, tokens)
+      const score = scoreNormMatch(movie.norm, tokens, movie.name)
       if (score > 0) {
         scored.push(movie)
-        scoreById.set(movie.id, score)
+        scoreById.set(rowKey(movie), score)
       }
     }
     out = scored
@@ -672,34 +669,43 @@ function applyFilter() {
   const groupOrder = []
   const survivorsByKey = new Map()
   for (const movie of out) {
-    const groupKey = groupingEnabled ? groupingIndex.keyByEntryId.get(movie.id) ?? `e:${movie.id}` : `e:${movie.id}`
+    const groupingIndex = groupingIndexByPlaylist.get(movie.playlistId)
+    const innerKey = groupingEnabled ? groupingIndex?.keyByEntryId.get(movie.id) ?? `e:${movie.id}` : `e:${movie.id}`
+    const groupKey = `${movie.playlistId}:${innerKey}`
     let survivors = survivorsByKey.get(groupKey)
     if (!survivors) {
       survivors = []
       survivorsByKey.set(groupKey, survivors)
-      groupOrder.push(groupKey)
+      groupOrder.push({ groupKey, innerKey })
     }
     survivors.push(movie)
   }
 
   const displayGroups = []
-  for (const groupKey of groupOrder) {
+  for (const { groupKey, innerKey } of groupOrder) {
     const survivors = survivorsByKey.get(groupKey)
-    const globalInfo = groupingEnabled ? groupingIndex.groupsByKey.get(groupKey) : null
-    const ownTag = groupingIndex.tagByEntryId.get(survivors[0].id) ?? null
+    const playlistId = survivors[0].playlistId
+    const groupingIndex = groupingIndexByPlaylist.get(playlistId)
+    const globalInfo = groupingEnabled ? groupingIndex?.groupsByKey.get(innerKey) : null
+    const ownTag = groupingIndex?.tagByEntryId.get(survivors[0].id) ?? null
     const tags = globalInfo ? globalInfo.tags : (ownTag ? [ownTag] : [])
     const globalEntryIds = globalInfo ? globalInfo.entryIds : [survivors[0].id]
 
     if (!groupPassesLanguageFilter(tags, selectedLang)) continue
-    if (hideWatched && globalEntryIds.some((id) => isCompleted(activePlaylistId, "vod", id))) continue
+    if (hideWatched && globalEntryIds.some((id) => isCompleted(playlistId, "vod", id))) continue
 
     const survivorIds = survivors.map((movie) => movie.id)
-    const displayEntryId = pickPreferredEntryId(survivorIds, groupingIndex.tagByEntryId, preferredTags, groupingIndex.qualityRankByEntryId)
+    const displayEntryId = pickPreferredEntryId(
+      survivorIds,
+      groupingIndex?.tagByEntryId ?? new Map(),
+      preferredTags,
+      groupingIndex?.qualityRankByEntryId ?? new Map()
+    )
     const displayEntry = survivors.find((movie) => movie.id === displayEntryId) || survivors[0]
-    const maxScore = scoreById ? Math.max(...survivors.map((movie) => scoreById.get(movie.id) || 0)) : 0
+    const maxScore = scoreById ? Math.max(...survivors.map((movie) => scoreById.get(rowKey(movie)) || 0)) : 0
     const maxAdded = Math.max(...survivors.map((movie) => Number(movie.added) || 0))
 
-    displayGroups.push({ key: groupKey, entries: survivors, tags, globalEntryIds, displayEntry, maxScore, maxAdded })
+    displayGroups.push({ key: groupKey, playlistId, entries: survivors, tags, globalEntryIds, displayEntry, maxScore, maxAdded })
   }
 
   const mode = activePlaylistId
@@ -727,7 +733,11 @@ function applyFilter() {
   }
 
   filtered = displayGroups
-  const totalGroups = groupingEnabled ? groupingIndex.groupsByKey.size : all.length
+  let totalGroups = all.length
+  if (groupingEnabled) {
+    totalGroups = 0
+    for (const groupingIndex of groupingIndexByPlaylist.values()) totalGroups += groupingIndex.groupsByKey.size
+  }
   listStatus.textContent = t("movies.ofMovies", {
     shown: filtered.length.toLocaleString(),
     total: totalGroups.toLocaleString(),
@@ -736,12 +746,22 @@ function applyFilter() {
   if (heroCount) heroCount.textContent = filtered.length.toLocaleString()
   const heroCat = document.getElementById("movie-hero-cat")
   if (heroCat) {
+    const selectedCategory = parseMergedCategoryKey(activeCat, activePlaylistId)
     heroCat.textContent =
       activeCat === CAT_FAVORITES
         ? t("list.heroFavorites")
         : activeCat === CAT_RECENTS
           ? t("list.heroRecents")
-          : genreLabelForCategory(activeCat) || (activeCat as string) || t("list.allCategories")
+          : genreLabelForCategory(activeCat) ||
+            (selectedCategory
+              ? categoryLabel(
+                  selectedCategory.name,
+                  playlistTitleById.get(selectedCategory.playlistId) || "",
+                  isMergedView()
+                )
+              : isMergedView()
+                ? t("list.allPlaylists")
+                : t("list.allCategories"))
   }
   renderGrid(gridRestore.consumePending)
 }
@@ -775,9 +795,11 @@ function populateLanguageFilterOptions() {
   const languageGroupingEnabled = getLanguageGroupingEnabled()
   const frequencyByTag = new Map()
   if (languageGroupingEnabled) {
-    for (const tag of groupingIndex.tagByEntryId.values()) {
-      if (!tag) continue
-      frequencyByTag.set(tag, (frequencyByTag.get(tag) || 0) + 1)
+    for (const groupingIndex of groupingIndexByPlaylist.values()) {
+      for (const tag of groupingIndex.tagByEntryId.values()) {
+        if (!tag) continue
+        frequencyByTag.set(tag, (frequencyByTag.get(tag) || 0) + 1)
+      }
     }
   }
   const tags = Array.from(frequencyByTag.keys()).sort(
@@ -827,135 +849,128 @@ function showEmptyState() {
   if (listStatus) {
     listStatus.innerHTML = `${t("list.noPlaylistAddOne")} <a href="/login" class="text-accent underline">${t("list.addOne")}</a>.`
   }
+  mergeIndicator?.clear()
   filtered = []
   renderGrid()
 }
 
-function paintMovies(data, fromCache, age) {
-  all = data
-  groupingIndex = buildGroupingIndex(all)
+function paintMovies(read, fromCache) {
+  all = read.rows
+  groupingIndexByPlaylist = buildGroupingIndexesByPlaylist(all)
   if (listStatus) {
+    const sourcesText = isMergedView()
+      ? ` · ${t("list.merged.sources", { count: mergedPlaylistIds.length })}`
+      : ""
+    const ageText =
+      fromCache && read.newestFetchedAt ? ` · ${fmtAge(Date.now() - read.newestFetchedAt)}` : ""
     listStatus.textContent =
-      t("movies.totalMovies", { count: all.length.toLocaleString() }) +
-      (fromCache ? ` · ${fmtAge(age)}` : "")
+      t("movies.totalMovies", { count: all.length.toLocaleString() }) + sourcesText + ageText
   }
   picker.rerender()
   populateLanguageFilterOptions()
-  refreshGenreSets(activePlaylistId)
+  for (const playlistId of mergedPlaylistIds) refreshGenreSets(playlistId).catch(() => {})
   applyFilter()
 }
 
-async function fetchMovieRows() {
-  const catMap = await ensureVodCategoryMap()
-  const r = await xtreamApiFetch("get_vod_streams")
-  const body = await r.text()
-  if (!r.ok) {
-    log.error("Upstream error body:", body)
-    throw new Error(`API ${r.status}: ${body}`)
-  }
-  const parsed = JSON.parse(body)
-  const arr = Array.isArray(parsed)
-    ? parsed
-    : parsed?.movies || parsed?.results || []
-  return (arr || [])
-    .map((movie) => {
-      const name = String(movie.name || movie.title || "")
-      const id = Number(movie.stream_id || movie.id)
-      const logo = movie.stream_icon || movie.cover || null
-      const year = String(movie.year || movie.releaseDate || "").trim() || ""
-      const rating = movie.rating || movie.rating_5based || movie.vote_average || ""
-      const duration = movie.duration || movie.runtime || movie.duration_secs || ""
-      const categoryId =
-        (Array.isArray(movie.category_ids) &&
-          movie.category_ids.length &&
-          movie.category_ids[0]) ||
-        movie.category_id
-      let category = String(movie.category_name || "").trim()
-      if (!category && categoryId != null && catMap?.size) {
-        category = catMap.get(String(categoryId)) || ""
-      }
-      const added = Number(movie.added) || 0
-      const tmdb = Number(movie.tmdb) || Number(movie.tmdb_id) || null
-      return {
-        id,
-        name,
-        logo: logo || null,
-        year,
-        rating: rating ? String(rating) : "",
-        duration: duration ? String(duration) : "",
-        category,
-        plot: "",
-        added,
-        norm: normalize(`${name} ${category} ${year}`),
-        tmdb,
-      }
-    })
-    .filter((movie) => movie.id && movie.name)
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-    )
+function sameRowSets(first, second) {
+  return mergedPlaylistIds.every((playlistId) => first.byPlaylist.get(playlistId) === second.byPlaylist.get(playlistId))
 }
+
+const toastedFailures = new Set<string>()
 
 async function loadMovies() {
   if (!listStatus) return
-  const active = await getActiveEntry()
-  if (!active) {
+  const runToken = ++loadRunToken
+  const entries = await getMergedEntries()
+  const activeEntry = await getActiveEntry()
+  if (runToken !== loadRunToken) return
+  if (!entries.length || !activeEntry) {
     activePlaylistId = ""
-    activePlaylistTitle = ""
+    mergedPlaylistIds = []
+    mergedPlaylistIdSet = new Set()
+    all = []
     showEmptyState()
     return
   }
-  activePlaylistId = active._id
-  activePlaylistTitle = active.title || ""
+  activePlaylistId = activeEntry._id
+  mergedPlaylistIds = entries.map((entry) => entry._id)
+  mergedPlaylistIdSet = new Set(mergedPlaylistIds)
+  playlistTitleById = new Map(entries.map((entry) => [entry._id, entry.title || ""]))
+  credsByPlaylistId = new Map(entries.map((entry) => [entry._id, entryToCreds(entry)]))
+  for (const playlistId of [...genreSetsByPlaylist.keys()]) {
+    if (!mergedPlaylistIdSet.has(playlistId)) genreSetsByPlaylist.delete(playlistId)
+  }
+  mergeIndicator?.setPlaylists(mergedPlaylistIds)
+
   gridRestore.attemptRestore()
   await ensurePrefsLoaded()
   syncSortControl()
   syncHideWatchedControl()
   syncGroupLangsControl()
   syncLangFilterControl()
-  await hydrateCache(active._id, "vod")
+  await hydrateMergedRows("vod")
+  if (runToken !== loadRunToken) return
 
-  const hit = getCached(active._id, "vod")
-  if (hit) {
-    paintMovies(hit.data, true, hit.age)
-    if (rowsNeedTmdbBackfill(hit.data)) {
-      triggerTmdbBackfillOnce(active._id, "vod", VOD_TTL_MS, fetchMovieRows)
-    }
+  const credsList = [...credsByPlaylistId.values()]
+  if (!credsList.some((creds) => creds.host)) {
+    showEmptyState()
+    return
+  }
+  if (!credsList.some((creds) => creds.user && creds.pass)) {
+    listStatus.textContent = t("movies.requiresXtream")
+    mergeIndicator?.clear()
+    filtered = []
+    renderGrid()
+    return
+  }
+
+  const cached = readMergedRows("vod")
+  const paintedFromCache = cached.rows.length > 0
+  if (paintedFromCache) {
+    paintMovies(cached, true)
+    if (!isMergedView()) return
   } else {
     listStatus.textContent = t("common.loading")
     if (!gridEl?.querySelector("[data-skeleton]")) renderPosterSkeletons(gridEl)
   }
-
-  creds = await loadCreds()
-  if (!creds.host) {
-    if (!hit) showEmptyState()
-    return
+  for (const playlistId of mergedPlaylistIds) {
+    const hasRows = (cached.byPlaylist.get(playlistId) || []).length > 0
+    mergeIndicator?.setStatus(playlistId, hasRows ? "cached" : "loading")
   }
-  if (!creds.user || !creds.pass) {
-    listStatus.textContent = t("movies.requiresXtream")
-    return
-  }
-  if (hit) return
 
-  try {
-    const { data, fromCache, age } = await cachedFetch(
-      active._id,
-      "vod",
-      VOD_TTL_MS,
-      fetchMovieRows
-    )
+  const { rows, errors, byPlaylist, newestFetchedAt, anyStale, sources, isMerged } = await ensureMergedRows("vod", {
+    onPlaylistSettled: (playlistId, status, info) => {
+      if (runToken !== loadRunToken) return
+      if (status === "done") mergeIndicator?.setStatus(playlistId, "done", { count: info.count })
+    },
+  })
+  if (runToken !== loadRunToken) return
+  const settled = { rows, byPlaylist, newestFetchedAt, anyStale, sources, isMerged }
 
-    paintMovies(data, fromCache, age)
-  } catch (e) {
-    log.error("[xt:movies] loadMovies threw:", e)
+  const xtreamCount = credsList.filter((creds) => creds.user && creds.pass).length
+  if (errors.size && errors.size >= xtreamCount && !rows.length) {
+    log.error("[xt:movies] loadMovies failed:", [...errors.values()])
     filtered = []
     renderGrid()
+    mergeIndicator?.clear()
     renderProviderError(listStatus, {
-      providerName: activePlaylistTitle,
+      providerName: [...errors.keys()].map((playlistId) => playlistTitleById.get(playlistId) || "").filter(Boolean).join(", "),
       kind: "movies",
       onRetry: loadMovies,
     })
+    return
   }
+
+  for (const playlistId of errors.keys()) {
+    log.warn("[xt:movies] playlist failed:", playlistId, errors.get(playlistId))
+    mergeIndicator?.setStatus(playlistId, "error", { onRetry: () => loadMovies() })
+    const hadCachedRows = (cached.byPlaylist.get(playlistId) || []).length > 0
+    if (hadCachedRows || toastedFailures.has(playlistId)) continue
+    toastedFailures.add(playlistId)
+    toastWarn(t("list.merged.partialFailure", { title: playlistTitleById.get(playlistId) || "" }))
+  }
+
+  if (!paintedFromCache || !sameRowSets(cached, settled)) paintMovies(settled, false)
 }
 
 // ----------------------------
@@ -976,9 +991,16 @@ document.addEventListener("xt:active-changed", () => {
   loadMovies()
 })
 
+document.addEventListener(MERGED_CHANGED_EVENT, () => {
+  if (personFilter.isActive()) personFilter.clear()
+  personSuggest.clear()
+  gridRestore.reset()
+  loadMovies()
+})
+
 document.addEventListener("xt:cache-revalidated", (ev) => {
   const detail = (ev as CustomEvent).detail
-  if (!detail || detail.entryId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.entryId)) return
   if (detail.kind !== "vod") return
   loadMovies()
 })
@@ -998,10 +1020,5 @@ document.addEventListener("xt:catalog-warming-start", () => {
 ;(async () => {
   await initI18n()
   personFilter.render()
-  creds = await loadCreds()
-  if (creds.host && creds.user && creds.pass) {
-    loadMovies()
-  } else {
-    showEmptyState()
-  }
+  loadMovies()
 })()

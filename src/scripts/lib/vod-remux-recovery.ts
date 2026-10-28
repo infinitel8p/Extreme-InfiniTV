@@ -9,6 +9,8 @@ import {
 } from "@/scripts/lib/vod-container-plan.ts"
 import { probeVodSourceHealth } from "@/scripts/lib/vod-container-probe.ts"
 import { rememberRemuxPinnedContent } from "@/scripts/lib/vod-remux-memory.ts"
+import { isProviderRejection } from "@/scripts/lib/stream-reject.ts"
+import { parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 import type { VjsLikeHandle } from "@/scripts/lib/player-runtime.ts"
 import type { VodAudioSwitcher } from "@/scripts/lib/vod-audio-switch.ts"
 import type { VodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
@@ -82,6 +84,15 @@ export function createRemuxFailureHandler(options: RemuxFailureHandlerOptions) {
   }
 }
 
+/** True for mpv error strings that name a source/network problem rather than a decode failure. */
+function isNonDecodeNativeErrorString(message: string): boolean {
+  return (
+    message.startsWith("HTTP_STATUS:") ||
+    message.startsWith("NETWORK:") ||
+    message.startsWith("OFFLINE_PLACEHOLDER")
+  )
+}
+
 export interface PlayerStartErrorOptions {
   logTag: string
   player: VjsLikeHandle
@@ -101,16 +112,37 @@ export interface PlayerStartErrorOptions {
   /** Ahead-of-the-error handleRemuxFailure teardown (audio switcher, mkv session, watchdog) then re-run the tune in remux mode. */
   retirePreviousPlaybackAndRetryRemux(): void
   toasts: VodPlaybackToasts
+  /** Attempts a hop to the next Xtream mirror on a provider rejection; resolves true when a remount is under way. */
+  tryMirrorHop?(rejection: { errorDetail?: string | null; httpStatus?: number | null }): Promise<boolean>
 }
 
 /** Superseded runs must not report or seek; a code-4 native failure pins the content to remux and retries once, so it cannot re-fire. */
-export function handlePlayerStartError(options: PlayerStartErrorOptions) {
+export async function handlePlayerStartError(options: PlayerStartErrorOptions) {
   if (options.isStale()) return
-  const playerError = options.player.error?.() as { code?: number; message?: string } | null | undefined
+  const errorDetail = options.player.codecInfo?.()?.errorDetail
+  const httpStatus = parseHttpStatusPrefix(errorDetail ?? null)
+  if (options.tryMirrorHop && isProviderRejection({ errorDetail, httpStatus })) {
+    const hopped = await options.tryMirrorHop({ errorDetail, httpStatus })
+    // The hop's own network probe is another window for this run to go stale.
+    if (options.isStale()) return
+    if (hopped) return
+  }
+  const rawError = options.player.error?.()
+  // mpv-embedded reports a bare string, not the videojs-style {code, message} shape.
+  const playerError =
+    typeof rawError === "string"
+      ? { code: undefined, message: rawError }
+      : (rawError as { code?: number; message?: string } | null | undefined)
   log.error(`${options.logTag} player error`, {
     code: playerError?.code,
     message: playerError?.message,
   })
+  if (typeof rawError === "string") {
+    // Source and network failures are not decode failures; the page toasts them itself.
+    if (isNonDecodeNativeErrorString(rawError)) return
+    options.handleRemuxFailure(rawError)
+    return
+  }
   if (options.containerPlanMode === "remux") {
     // Code 4 here means the remux output itself was rejected, not the pre-remux source, so it's a genuine decode failure too.
     options.handleRemuxFailure(playerError?.message || "")
@@ -193,5 +225,89 @@ export function attachVodStallWatchdog(
       })
     },
   })
+  return detach
+}
+
+const NATIVE_STALL_TIMEOUT_MS = 12000
+const NATIVE_CHECK_INTERVAL_MS = 3000
+const NATIVE_MAX_ATTEMPTS = 3
+const NATIVE_PROGRESS_RESET_MS = 30000
+
+export interface NativeVodStallWatchdogOptions {
+  logTag: string
+  player: VjsLikeHandle
+  recoverStall(): void
+}
+
+/** attachVodStallWatchdog for handles without a video element, driven by handle events. */
+export function attachNativeVodStallWatchdog(options: NativeVodStallWatchdogOptions): StallWatchdogHandle {
+  const player = options.player
+  let lastCurrentTime = player.currentTime?.() || 0
+  let stalledMs = 0
+  let healthyMs = 0
+  let attemptCount = 0
+  let dormant = false
+  let waiting = false
+  // A slow initial load never reached playback yet, so it isn't a stall to recover from.
+  let hasStartedPlayback = false
+
+  function resetStallClock(): void {
+    stalledMs = 0
+    lastCurrentTime = player.currentTime?.() || 0
+  }
+
+  function onWaiting(): void { waiting = true }
+  function onPlaying(): void { hasStartedPlayback = true; waiting = false; stalledMs = 0 }
+  function onTimeUpdate(): void {
+    const currentTime = player.currentTime?.() || 0
+    if (currentTime > lastCurrentTime) { hasStartedPlayback = true; waiting = false; stalledMs = 0 }
+  }
+
+  player.on("waiting", onWaiting)
+  player.on("playing", onPlaying)
+  player.on("timeupdate", onTimeUpdate)
+
+  const intervalId = setInterval(() => {
+    if (dormant || !hasStartedPlayback) return
+    const currentTime = player.currentTime?.() || 0
+    if (player.paused?.() ?? false) {
+      stalledMs = 0
+      healthyMs = 0
+      lastCurrentTime = currentTime
+      return
+    }
+    const progressed = currentTime > lastCurrentTime
+    lastCurrentTime = currentTime
+    if (progressed) {
+      stalledMs = 0
+      healthyMs += NATIVE_CHECK_INTERVAL_MS
+      if (healthyMs >= NATIVE_PROGRESS_RESET_MS) {
+        attemptCount = 0
+        healthyMs = 0
+      }
+      return
+    }
+    healthyMs = 0
+    if (!waiting) return
+    stalledMs += NATIVE_CHECK_INTERVAL_MS
+    if (stalledMs < NATIVE_STALL_TIMEOUT_MS) return
+    stalledMs = 0
+    attemptCount += 1
+    if (attemptCount > NATIVE_MAX_ATTEMPTS) {
+      dormant = true
+      log.warn(`${options.logTag} native stall watchdog giving up after repeated stalls`)
+      return
+    }
+    log.info(`${options.logTag} native playback stalled - recovering`, { attempt: attemptCount })
+    options.recoverStall()
+  }, NATIVE_CHECK_INTERVAL_MS)
+
+  const detach = function (): void {
+    clearInterval(intervalId)
+    player.off?.("waiting", onWaiting)
+    player.off?.("playing", onPlaying)
+    player.off?.("timeupdate", onTimeUpdate)
+  } as StallWatchdogHandle
+  detach.resetStallClock = resetStallClock
   return detach
 }

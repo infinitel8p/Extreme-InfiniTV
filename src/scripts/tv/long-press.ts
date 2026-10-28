@@ -72,6 +72,7 @@ export function attachLongPress<T>(options: LongPressOptions<T>): LongPressHandl
   }
 
   function onPointerDown(event: PointerEvent): void {
+    if (event.button !== 0 && event.pointerType !== "touch" && event.pointerType !== "pen") return
     const target = closestTarget(event.target as HTMLElement | null)
     if (!target) return
     pointerTarget = target
@@ -108,6 +109,7 @@ export function attachLongPress<T>(options: LongPressOptions<T>): LongPressHandl
       event.preventDefault()
       return
     }
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey) return
     const target = closestTarget(event.target as HTMLElement | null)
     if (!target) return
     event.preventDefault()

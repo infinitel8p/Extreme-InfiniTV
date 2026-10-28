@@ -80,12 +80,12 @@ jobs:
 
             core.summary.addRaw(body).write()
 
-            if (context.payload.pull_request) {
-              const issue_number = context.payload.pull_request.number
-              const owner = context.repo.owner
-              const repo = context.repo.repo
-              // Sticky comment: update an existing bot comment when present so
-              // the PR conversation doesn't accumulate one entry per push.
+            if (!context.payload.pull_request) return
+            const issue_number = context.payload.pull_request.number
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            try {
+              // Sticky comment: update the existing bot comment instead of adding one per push.
               const existing = await github.paginate(
                 github.rest.issues.listComments,
                 { owner, repo, issue_number, per_page: 100 }
@@ -97,18 +97,11 @@ jobs:
                   comment.body.includes(marker)
               )
               if (prior) {
-                await github.rest.issues.updateComment({
-                  owner,
-                  repo,
-                  comment_id: prior.id,
-                  body,
-                })
+                await github.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body })
               } else {
-                await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number,
-                  body,
-                })
+                await github.rest.issues.createComment({ owner, repo, issue_number, body })
               }
+            } catch (err) {
+              // Fork PRs run with a read-only token; the job summary already carries the report.
+              core.warning(`Could not post the PR comment: ${err.message}`)
             }

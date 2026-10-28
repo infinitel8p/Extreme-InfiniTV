@@ -2,21 +2,16 @@
 // Series listing page (route: /series).
 import { log } from "@/scripts/lib/log.js"
 import {
-  loadCreds,
   getActiveEntry,
+  getMergedEntries,
+  entryToCreds,
   isTauri,
+  MERGED_CHANGED_EVENT,
 } from "@/scripts/lib/creds.js"
-import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
-import {
-  cachedFetch,
-  getCached,
-  hydrate as hydrateCache,
-} from "@/scripts/lib/cache.js"
-import { rowsNeedTmdbBackfill, rowsNeedGenreBackfill } from "@/scripts/lib/catalog-mappers.js"
-import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
+import { getCached } from "@/scripts/lib/cache.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
   getSeriesEpisodeProgress,
@@ -36,7 +31,6 @@ import { mountCategoryPicker, genreLabelForCategory } from "@/scripts/lib/catego
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
 import { mountPersonSuggestStrip } from "@/scripts/lib/person-suggest.ts"
-import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { fmtImdbRating, ratingSortValue } from "@/scripts/lib/format.js"
 import {
@@ -57,14 +51,17 @@ import {
 } from "@/scripts/lib/series-seasons.ts"
 import { resolveSeriesNextUp } from "@/scripts/lib/tv-cast-next.ts"
 import { castXtreamEpisodeToTv } from "@/scripts/lib/tv-cast.ts"
-import { buildGroupingIndex, pickPreferredEntryId, groupPassesLanguageFilter } from "@/scripts/lib/language-groups.ts"
+import {
+  buildGroupingIndexesByPlaylist,
+  pickPreferredEntryId,
+  groupPassesLanguageFilter,
+} from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, languageTagLabel, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
 import {
   fmtAge,
   posterSkeletonCount,
   renderPosterSkeletons,
-  fetchCategoryMap,
   groupHasFavorite,
   groupHasWatchlist,
   toggleGroupFavorite,
@@ -74,18 +71,28 @@ import {
   createGridSecondaryControls,
   personFilterGridSignature,
 } from "@/scripts/lib/grid-view.ts"
-
-const SERIES_TTL_MS = 24 * 60 * 60 * 1000
+import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
+import { selectRowsForCategory } from "@/scripts/lib/grid-filter.ts"
+import { rowKey, parseMergedCategoryKey, categoryLabel } from "@/scripts/lib/merged-catalog-core.ts"
+import { ensureMergedRows, hydrateMergedRows, readMergedRows, isMergedView } from "@/scripts/lib/merged-catalog.ts"
+import { createMergedLoadIndicator } from "@/scripts/lib/merged-load-indicator.ts"
+import { toastWarn } from "@/scripts/lib/toast.ts"
 
 if (typeof history !== "undefined") history.scrollRestoration = "manual"
-
-let creds = { host: "", port: "", user: "", pass: "" }
 
 // ----------------------------
 // UI refs
 // ----------------------------
 const gridEl = document.getElementById("series-grid")
 const listStatus = document.getElementById("series-list-status")
+const mergeStatusEl = document.getElementById("series-merge-status")
+const mergeIndicator = mergeStatusEl
+  ? createMergedLoadIndicator({
+      host: mergeStatusEl,
+      getTitle: (playlistId) => playlistTitleById.get(playlistId) || "",
+      t,
+    })
+  : null
 
 const searchEl = /** @type {HTMLInputElement|null} */ (
   document.getElementById("series-search")
@@ -99,23 +106,37 @@ let all = []
 let filtered = []
 
 // Rebuilt whenever `all` is reassigned; independent of the group-languages toggle.
-let groupingIndex = buildGroupingIndex([])
-
-/** @type {Map<string,string> | null} */
-let categoryMap = null
+let groupingIndexByPlaylist = new Map()
 
 let activePlaylistId = ""
-let activePlaylistTitle = ""
+let mergedPlaylistIds = []
+let mergedPlaylistIdSet = new Set()
+let playlistTitleById = new Map()
+let credsByPlaylistId = new Map()
+let loadRunToken = 0
 
 // Series fully watched against their real episode list, not just recorded
-// progress entries. Recomputed whenever progress/hide-watched state changes.
-let fullyWatchedSeriesIds = new Set()
+// progress entries, as rowKey values. Recomputed whenever progress/hide-watched state changes.
+let fullyWatchedSeriesKeys = new Set()
 let recomputeRunToken = 0
 
-// Keeps the last computed set per playlist so switching back to an
-// already-computed playlist within the same page session skips the
-// O(series x episodes) scan. Invalidated on xt:progress-changed.
+// Last computed id set per playlist, so a recompute skips the O(series x episodes)
+// scan for playlists already done. Invalidated on xt:progress-changed.
 const fullyWatchedCacheByPlaylistId = new Map()
+
+function isSeriesFullyWatched(playlistId, seriesId) {
+  return fullyWatchedSeriesKeys.has(rowKey({ playlistId, id: seriesId }))
+}
+
+function mergeFullyWatchedKeys() {
+  const keys = new Set()
+  for (const playlistId of mergedPlaylistIds) {
+    for (const seriesId of fullyWatchedCacheByPlaylistId.get(playlistId) || []) {
+      keys.add(rowKey({ playlistId, id: seriesId }))
+    }
+  }
+  fullyWatchedSeriesKeys = keys
+}
 
 function scheduleIdle(callback) {
   const requestIdle =
@@ -127,61 +148,63 @@ function scheduleIdle(callback) {
 
 async function recomputeFullyWatched() {
   const runToken = ++recomputeRunToken
-  const playlistId = activePlaylistId
-  if (!playlistId) {
-    fullyWatchedSeriesIds = new Set()
+  const idsKey = mergedPlaylistIds.join("|")
+  const isCurrent = () => runToken === recomputeRunToken && idsKey === mergedPlaylistIds.join("|")
+  if (!mergedPlaylistIds.length) {
+    fullyWatchedSeriesKeys = new Set()
     return
   }
 
-  const cached = fullyWatchedCacheByPlaylistId.get(playlistId)
-  if (cached) {
-    fullyWatchedSeriesIds = cached
-    return
+  for (const playlistId of mergedPlaylistIds) {
+    if (fullyWatchedCacheByPlaylistId.has(playlistId)) continue
+
+    const next = new Set()
+    const candidates = []
+    for (const series of all) {
+      if (series.playlistId !== playlistId) continue
+      if (hasSeriesWatchedOverride(playlistId, series.id)) {
+        next.add(series.id)
+        continue
+      }
+      const progress = getSeriesEpisodeProgress(playlistId, series.id)
+      if (progress.completedIds.length > 0 && !progress.hasIncompleteEpisode) {
+        candidates.push(series)
+      }
+    }
+
+    for (const series of candidates) {
+      if (!isCurrent()) return
+      const episodeIds =
+        getCachedEpisodeIds(playlistId, series.id) ??
+        (await requestEpisodeIds(playlistId, series.id))
+      if (!isCurrent()) return
+      if (!episodeIds || !episodeIds.length) continue
+      const completedIds = new Set(
+        getSeriesEpisodeProgress(playlistId, series.id).completedIds
+      )
+      if (episodeIds.every((episodeId) => completedIds.has(episodeId))) {
+        next.add(series.id)
+      }
+    }
+
+    if (!isCurrent()) return
+    fullyWatchedCacheByPlaylistId.set(playlistId, next)
   }
 
-  const next = new Set()
-  const candidates = []
-  for (const series of all) {
-    if (hasSeriesWatchedOverride(playlistId, series.id)) {
-      next.add(series.id)
-      continue
-    }
-    const progress = getSeriesEpisodeProgress(playlistId, series.id)
-    if (progress.completedIds.length > 0 && !progress.hasIncompleteEpisode) {
-      candidates.push(series)
-    }
-  }
-
-  for (const series of candidates) {
-    if (runToken !== recomputeRunToken || activePlaylistId !== playlistId) return
-    const episodeIds =
-      getCachedEpisodeIds(playlistId, series.id) ??
-      (await requestEpisodeIds(playlistId, series.id))
-    if (runToken !== recomputeRunToken || activePlaylistId !== playlistId) return
-    if (!episodeIds || !episodeIds.length) continue
-    const completedIds = new Set(
-      getSeriesEpisodeProgress(playlistId, series.id).completedIds
-    )
-    if (episodeIds.every((episodeId) => completedIds.has(episodeId))) {
-      next.add(series.id)
-    }
-  }
-
-  if (runToken !== recomputeRunToken || activePlaylistId !== playlistId) return
-  fullyWatchedSeriesIds = next
-  fullyWatchedCacheByPlaylistId.set(playlistId, next)
+  if (!isCurrent()) return
+  mergeFullyWatchedKeys()
 }
 
 // Runs the recompute off the critical path so the first grid paint isn't
 // blocked by the series x episodes scan, then applies the result to the
 // already-rendered UI once it lands.
 function scheduleFullyWatchedRecompute() {
-  const playlistId = activePlaylistId
+  const idsKey = mergedPlaylistIds.join("|")
   scheduleIdle(async () => {
-    if (playlistId !== activePlaylistId) return
+    if (idsKey !== mergedPlaylistIds.join("|")) return
     await recomputeFullyWatched()
-    if (playlistId !== activePlaylistId) return
-    if (getHideWatched(playlistId, "series")) {
+    if (idsKey !== mergedPlaylistIds.join("|")) return
+    if (getHideWatched(activePlaylistId, "series")) {
       applyFilter()
     } else {
       refreshSeriesProgressBadges()
@@ -189,36 +212,36 @@ function scheduleFullyWatchedRecompute() {
   })
 }
 
-// Genre index is async and rebuilt local-only; snapshot + playlist guard avoid races on quick playlist switches.
-let genreSets = null
-let genreSetsPlaylistId = ""
-let genreSetsLoadingId = ""
+// Genre index is async and rebuilt local-only; per-playlist snapshots avoid races on quick switches.
+const genreSetsByPlaylist = new Map()
+const genreSetsLoading = new Set()
 
 async function refreshGenreSets(playlistId) {
   if (!playlistId) return
-  genreSetsLoadingId = playlistId
+  genreSetsLoading.add(playlistId)
   try {
     const index = await getGenreIndex(playlistId, "series")
-    if (playlistId !== activePlaylistId) return
-    genreSets = index.sets
-    genreSetsPlaylistId = playlistId
+    if (!mergedPlaylistIdSet.has(playlistId)) return
+    genreSetsByPlaylist.set(playlistId, index.sets)
     applyFilter()
   } finally {
-    if (genreSetsLoadingId === playlistId) genreSetsLoadingId = ""
+    genreSetsLoading.delete(playlistId)
   }
 }
 
 // applyFilter can hit a genre category before any paint loaded the snapshot (back-nav, bfcache, playlist switch).
 function ensureGenreSets() {
-  if (!activePlaylistId || genreSetsLoadingId === activePlaylistId) return
-  refreshGenreSets(activePlaylistId).catch(() => {})
+  for (const playlistId of mergedPlaylistIds) {
+    if (genreSetsByPlaylist.has(playlistId) || genreSetsLoading.has(playlistId)) continue
+    refreshGenreSets(playlistId).catch(() => {})
+  }
 }
 
 document.addEventListener(GENRE_INDEX_EVENT, (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
   if (!detail || detail.kind !== "series") return
-  if (detail.playlistId !== activePlaylistId) return
-  refreshGenreSets(activePlaylistId)
+  if (!mergedPlaylistIdSet.has(detail.playlistId)) return
+  refreshGenreSets(detail.playlistId)
 })
 
 const CAT_FAVORITES = "__favorites__"
@@ -230,12 +253,19 @@ const picker = mountCategoryPicker({
   activeCatStorageKey: "xt_series_active_cat",
   activeCatChangedEvent: "xt:series-cat-changed",
   getActivePlaylistId: () => activePlaylistId,
+  getSources: () =>
+    mergedPlaylistIds.map((playlistId) => ({
+      playlistId,
+      title: playlistTitleById.get(playlistId) || "",
+    })),
   getItems: () => all,
 })
 document.addEventListener("xt:series-cat-changed", (ev) => {
   const activeCat = /** @type {CustomEvent} */ (ev).detail
-  if (activePlaylistId && typeof activeCat === "string" && activeCat.startsWith(GENRE_CAT_PREFIX)) {
-    ensureGenreBoost(activePlaylistId, "series", activeCat.slice(GENRE_CAT_PREFIX.length)).catch(() => {})
+  if (typeof activeCat === "string" && activeCat.startsWith(GENRE_CAT_PREFIX)) {
+    for (const playlistId of mergedPlaylistIds) {
+      ensureGenreBoost(playlistId, "series", activeCat.slice(GENRE_CAT_PREFIX.length)).catch(() => {})
+    }
   }
   applyFilter()
 })
@@ -251,23 +281,23 @@ mountSurprisePicker({
 
 document.addEventListener("xt:favorites-changed", (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "series") return
   if (picker.getActiveCat() === CAT_FAVORITES) applyFilter()
-  else updateGridStarFor(detail.id)
+  else updateGridStarFor(detail.playlistId, detail.id)
   picker.refreshPseudoRows()
 })
 
 document.addEventListener("xt:watchlist-changed", (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "series") return
-  updateGridWatchBadgeFor(detail.id)
+  updateGridWatchBadgeFor(detail.playlistId, detail.id)
 })
 
 document.addEventListener("xt:recents-changed", (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "series") return
   if (picker.getActiveCat() === CAT_RECENTS) applyFilter()
   picker.refreshPseudoRows()
@@ -275,7 +305,7 @@ document.addEventListener("xt:recents-changed", (ev) => {
 
 const onSeriesFilterChange = (ev: Event) => {
   const detail = /** @type {CustomEvent} */ (ev as any).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "series") return
   applyFilter()
 }
@@ -285,11 +315,11 @@ document.addEventListener("xt:category-mode-changed", onSeriesFilterChange)
 
 document.addEventListener(PROGRESS_CHANGED_EVENT, async (event) => {
   const detail = /** @type {CustomEvent} */ (event).detail
-  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.playlistId)) return
   if (detail.kind !== "episode") return
   fullyWatchedCacheByPlaylistId.delete(detail.playlistId)
   await recomputeFullyWatched()
-  if (detail.playlistId !== activePlaylistId) return
+  if (!mergedPlaylistIdSet.has(detail.playlistId)) return
   if (getHideWatched(activePlaylistId, "series")) {
     applyFilter()
     return
@@ -299,23 +329,23 @@ document.addEventListener(PROGRESS_CHANGED_EVENT, async (event) => {
     refreshSeriesProgressBadges()
     return
   }
-  refreshSeriesProgressBadges(seriesId)
+  refreshSeriesProgressBadges(detail.playlistId, seriesId)
 })
 
 // specificSeriesId may be any variant id in the group, not just the displayed one.
-function refreshSeriesProgressBadges(specificSeriesId) {
+function refreshSeriesProgressBadges(specificPlaylistId, specificSeriesId) {
   if (!gridEl) return
   const cards = gridEl.querySelectorAll("[data-idx]")
   for (const card of cards) {
     const idx = Number(card.dataset.idx)
     const group = filtered[idx]
     if (!group) continue
-    if (specificSeriesId && !group.globalEntryIds.includes(specificSeriesId)) continue
+    if (specificSeriesId && (group.playlistId !== specificPlaylistId || !group.globalEntryIds.includes(specificSeriesId))) continue
     const wrap = card.querySelector("[data-poster-wrap]")
     if (!wrap) continue
     wrap.querySelector(".series-progress-badge")?.remove()
     wrap.querySelector(`.${WATCHED_BADGE_CLASS}`)?.remove()
-    const anyWatched = group.globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id))
+    const anyWatched = group.globalEntryIds.some((id) => isSeriesFullyWatched(group.playlistId, id))
     let badgePresent = false
     if (anyWatched) {
       wrap.appendChild(buildWatchedBadge())
@@ -332,16 +362,6 @@ function refreshSeriesProgressBadges(specificSeriesId) {
 }
 
 // ----------------------------
-// Categories
-// ----------------------------
-async function ensureSeriesCategoryMap() {
-  if (categoryMap) return categoryMap
-  categoryMap = await fetchCategoryMap("get_series_categories")
-  return categoryMap
-}
-
-
-// ----------------------------
 // Poster grid
 // ----------------------------
 const PAGE_SIZE = 200
@@ -352,9 +372,9 @@ let renderedCount = 0
 
 // makeFallback is imported from entry-card.
 
-function seasonEpisodeCount(seriesId, season) {
-  if (!activePlaylistId || !seriesId || season == null) return 0
-  const cached = getCached(activePlaylistId, `series_info_${seriesId}`)
+function seasonEpisodeCount(playlistId, seriesId, season) {
+  if (!playlistId || !seriesId || season == null) return 0
+  const cached = getCached(playlistId, `series_info_${seriesId}`)
   const eps = cached?.data?.episodes
   if (!eps || typeof eps !== "object") return 0
   const bucket = Array.isArray(eps) ? null : eps[String(season)]
@@ -370,14 +390,15 @@ function seasonEpisodeCount(seriesId, season) {
 // Scans every variant in the group since progress may be recorded against a non-preferred one.
 function findGroupProgress(group) {
   for (const entryId of group.globalEntryIds) {
-    const summary = getSeriesProgressSummary(activePlaylistId, entryId)
+    const summary = getSeriesProgressSummary(group.playlistId, entryId)
     if (summary) return { seriesId: entryId, summary }
   }
   return null
 }
 
 function makeSeriesProgressBadge(series, group) {
-  if (!activePlaylistId) return null
+  const playlistId = group.playlistId
+  if (!playlistId) return null
   const progress = findGroupProgress(group)
   if (!progress) return null
   const { seriesId, summary } = progress
@@ -387,7 +408,7 @@ function makeSeriesProgressBadge(series, group) {
   const epId = summary.lastEpisodeId
 
   const seasonLabel = season != null && season !== "" ? `S${season}` : ""
-  const total = season != null ? seasonEpisodeCount(seriesId, season) : 0
+  const total = season != null ? seasonEpisodeCount(playlistId, seriesId, season) : 0
 
   let body
   if (seasonLabel && episodeNum != null && total > 0) {
@@ -407,11 +428,9 @@ function makeSeriesProgressBadge(series, group) {
     "ring-1 ring-black/10 hover:brightness-110 focus-visible:brightness-110 " +
     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent " +
     "transition-[filter,transform] duration-150 active:scale-[0.97]"
-  if (epId) {
-    badge.href = `/series/detail?id=${encodeURIComponent(seriesId)}&autoplay=1&episode=${encodeURIComponent(epId)}`
-  } else {
-    badge.href = `/series/detail?id=${encodeURIComponent(seriesId)}`
-  }
+  badge.href = epId
+    ? detailHrefFor("series", seriesId, { playlistId, autoplay: true, episode: epId })
+    : detailHrefFor("series", seriesId, { playlistId })
   badge.title = t("series.resumeNextEpisode")
   badge.setAttribute("aria-label", t("series.resumeAria", { name: series.name || t("page.series.title"), body }))
   badge.innerHTML =
@@ -424,37 +443,42 @@ function makeSeriesProgressBadge(series, group) {
   return badge
 }
 
-function seriesMetaText(entry, seasonCount) {
+function seriesMetaText(entry, seasonCount, playlistId) {
   const parts = []
   if (entry.year) parts.push(entry.year)
   if (seasonCount) parts.push(seasonsLabel(seasonCount))
   if (entry.category) parts.push(entry.category)
+  const playlistTitle = isMergedView() ? playlistTitleById.get(playlistId) : ""
+  if (playlistTitle) parts.push(playlistTitle)
   return parts.join(" \u2022 ")
 }
 
 // Strip the tag prefix (redundant once the language shows as a chip) only when 2+ languages are grouped.
 function displayCardEntry(group) {
   const displayEntry = group.displayEntry
-  const stripPrefix = group.tags.length >= 2 && groupingIndex.tagByEntryId.get(displayEntry.id)
+  const stripPrefix =
+    group.tags.length >= 2 && groupingIndexByPlaylist.get(group.playlistId)?.tagByEntryId.get(displayEntry.id)
   return stripPrefix ? { ...displayEntry, name: parseNamePrefix(displayEntry.name).rest } : displayEntry
 }
 
 function makeCard(group, idx) {
+  const playlistId = group.playlistId
   const displayEntry = group.displayEntry
+  const groupingIndex = groupingIndexByPlaylist.get(playlistId)
+  const creds = credsByPlaylistId.get(playlistId) || { host: "", port: "", user: "", pass: "" }
   const cardEntry = displayCardEntry(group)
 
   const card = buildEntryCard({
     entry: cardEntry,
     idx,
     kind: "series",
-    activePlaylistId,
-    detailHref: (entry) =>
-      `/series/detail?id=${encodeURIComponent(entry.id)}`,
+    playlistId,
+    detailHref: (entry) => detailHrefFor("series", entry.id, { playlistId }),
     fallbackTitle: (entry) => t("list.seriesFallback", { id: entry.id }),
     metaText: (entry) =>
-      seriesMetaText(entry, getCachedSeasonCount(activePlaylistId, entry.id)),
+      seriesMetaText(entry, getCachedSeasonCount(playlistId, entry.id), playlistId),
     decoratePoster: (posterWrap, entry) => {
-      const anyWatched = group.globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id))
+      const anyWatched = group.globalEntryIds.some((id) => isSeriesFullyWatched(playlistId, id))
       let badgePresent = false
       if (anyWatched) {
         posterWrap.appendChild(buildWatchedBadge())
@@ -470,7 +494,7 @@ function makeCard(group, idx) {
         group.tags,
         group.globalEntryIds.length,
         getActiveLocale(),
-        groupingIndex.tagByEntryId.get(displayEntry.id)
+        groupingIndex?.tagByEntryId.get(displayEntry.id)
       )
       if (chips) {
         posterWrap.appendChild(chips)
@@ -481,32 +505,32 @@ function makeCard(group, idx) {
       fav
         ? `Remove ${entry.name || "series"} from favorites`
         : `Add ${entry.name || "series"} to favorites`,
-    favoriteState: () => groupHasFavorite(activePlaylistId, "series", group),
+    favoriteState: () => groupHasFavorite(playlistId, "series", group),
     onToggleFavorite: (entry, currentlyFavorited) => {
-      toggleGroupFavorite(activePlaylistId, "series", group, entry, currentlyFavorited)
+      toggleGroupFavorite(playlistId, "series", group, entry, currentlyFavorited)
     },
-    watchlistState: () => groupHasWatchlist(activePlaylistId, "series", group),
+    watchlistState: () => groupHasWatchlist(playlistId, "series", group),
     onContextMenu: (entry, anchor, point) => {
       import("@/scripts/lib/poster-menu").then(({ openPosterMenu }) => {
         openPosterMenu({
           kind: "series",
           entry,
-          activePlaylistId,
+          playlistId,
           anchor,
           point,
           onOpen: () => {
-            window.location.href = `/series/detail?id=${encodeURIComponent(entry.id)}`
+            window.location.href = detailHrefFor("series", entry.id, { playlistId })
           },
           // omit single stream URL or download for series
           onPlayOnTv: isTauri && creds.host && creds.user && creds.pass
             ? () => {
                 void (async () => {
-                  if (!activePlaylistId) return
-                  const nextUp = await resolveSeriesNextUp(activePlaylistId, entry.id)
+                  if (!playlistId) return
+                  const nextUp = await resolveSeriesNextUp(playlistId, entry.id)
                   if (!nextUp) return
                   castXtreamEpisodeToTv({
                     creds,
-                    playlistId: activePlaylistId,
+                    playlistId: playlistId,
                     seriesId: entry.id,
                     episodeId: nextUp.episodeId,
                     containerExt: nextUp.containerExt,
@@ -515,33 +539,33 @@ function makeCard(group, idx) {
                     title: nextUp.title || entry.name || null,
                     logo: entry.logo || undefined,
                     resumeSeconds: nextUp.resumeSeconds,
-                    contentHref: `/series/detail?id=${encodeURIComponent(entry.id)}`,
+                    contentHref: detailHrefFor("series", entry.id, { playlistId }),
                   })()
                 })()
               }
             : undefined,
-          favoriteActive: () => groupHasFavorite(activePlaylistId, "series", group),
+          favoriteActive: () => groupHasFavorite(playlistId, "series", group),
           onToggleFavorite: (currentlyFavorited) => {
-            toggleGroupFavorite(activePlaylistId, "series", group, entry, currentlyFavorited)
+            toggleGroupFavorite(playlistId, "series", group, entry, currentlyFavorited)
           },
-          watchlistActive: () => groupHasWatchlist(activePlaylistId, "series", group),
+          watchlistActive: () => groupHasWatchlist(playlistId, "series", group),
           onToggleWatchlist: (currentlyOnWatchlist) => {
-            toggleGroupWatchlist(activePlaylistId, "series", group, entry, currentlyOnWatchlist)
+            toggleGroupWatchlist(playlistId, "series", group, entry, currentlyOnWatchlist)
           },
-          // Mirrors fullyWatchedSeriesIds, the same group-derived set the grid badge reads.
-          watchedActive: () => group.globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id)),
+          // Mirrors fullyWatchedSeriesKeys, the same group-derived set the grid badge reads.
+          watchedActive: () => group.globalEntryIds.some((id) => isSeriesFullyWatched(playlistId, id)),
           onToggleWatched: (currentlyWatched) => {
-            if (!activePlaylistId) return
+            if (!playlistId) return
             if (!currentlyWatched) {
               for (const variantId of group.globalEntryIds) {
-                if (fullyWatchedSeriesIds.has(variantId)) continue
-                setSeriesWatchedOverride(activePlaylistId, variantId, true)
+                if (isSeriesFullyWatched(playlistId, variantId)) continue
+                setSeriesWatchedOverride(playlistId, variantId, true)
               }
               return
             }
             for (const variantId of group.globalEntryIds) {
-              if (fullyWatchedSeriesIds.has(variantId)) {
-                setSeriesWatchedOverride(activePlaylistId, variantId, false)
+              if (isSeriesFullyWatched(playlistId, variantId)) {
+                setSeriesWatchedOverride(playlistId, variantId, false)
               }
             }
           },
@@ -550,11 +574,11 @@ function makeCard(group, idx) {
     },
   })
 
-  if (activePlaylistId) {
+  if (playlistId) {
     const metaEl = card.querySelector('[data-role="meta"]')
     if (metaEl) {
-      observeSeasonCount(card, activePlaylistId, displayEntry.id, (count) => {
-        metaEl.textContent = seriesMetaText(displayEntry, count)
+      observeSeasonCount(card, playlistId, displayEntry.id, (count) => {
+        metaEl.textContent = seriesMetaText(displayEntry, count, playlistId)
       })
     }
   }
@@ -706,15 +730,17 @@ function renderGridInner() {
 }
 
 // seriesId may be any variant id in the group, not just the displayed one.
-function updateGridStarFor(seriesId) {
+function updateGridStarFor(playlistId, seriesId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(seriesId))
+  const idx = filtered.findIndex(
+    (group) => group.playlistId === playlistId && group.globalEntryIds.includes(seriesId)
+  )
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
   const group = filtered[idx]
   const displayEntry = group.displayEntry
-  const fav = groupHasFavorite(activePlaylistId, "series", group)
+  const fav = groupHasFavorite(group.playlistId, "series", group)
   const star = /** @type {HTMLButtonElement|null} */ (
     card.querySelector(".star-btn")
   )
@@ -733,14 +759,16 @@ function updateGridStarFor(seriesId) {
 }
 
 // seriesId may be any variant id in the group; see updateGridStarFor.
-function updateGridWatchBadgeFor(seriesId) {
+function updateGridWatchBadgeFor(playlistId, seriesId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(seriesId))
+  const idx = filtered.findIndex(
+    (group) => group.playlistId === playlistId && group.globalEntryIds.includes(seriesId)
+  )
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
   const group = filtered[idx]
-  const onWatchlist = groupHasWatchlist(activePlaylistId, "series", group)
+  const onWatchlist = groupHasWatchlist(group.playlistId, "series", group)
   const badge = /** @type {HTMLElement|null} */ (
     card.querySelector('[data-role="watch-badge"]')
   )
@@ -772,7 +800,7 @@ const personFilter = createPersonFilterController({
   labelId: "series-person-filter-label",
   clearButtonId: "series-person-filter-clear",
   logTag: "xt:series",
-  getActivePlaylistId: () => activePlaylistId,
+  getPlaylistIds: () => mergedPlaylistIds,
   getCatalogEntries: () => all,
   applyFilter: () => applyFilter(),
 })
@@ -784,7 +812,7 @@ const personSuggest = mountPersonSuggestStrip({
   searchEl,
   insertBeforeEl: listStatus,
   basePath: "/series",
-  getActivePlaylistId: () => activePlaylistId,
+  getPlaylistIds: () => mergedPlaylistIds,
 })
 
 // ----------------------------
@@ -794,50 +822,34 @@ function applyFilter() {
   if (!listStatus) return
   // An active-but-unresolved person filter must never paint the unfiltered grid.
   if (personFilter.guardUnresolved()) return
-  const qnorm = normalize(searchEl?.value || "")
-  const tokens = qnorm.length ? qnorm.split(" ") : []
+  const tokens = parseSearchQuery(searchEl?.value || "")
 
   const activeCat = picker.getActiveCat()
-  let out
-  if (activeCat === CAT_FAVORITES && activePlaylistId) {
-    const favs = getFavorites(activePlaylistId, "series")
-    out = all.filter((s) => favs.has(s.id))
-  } else if (activeCat === CAT_RECENTS && activePlaylistId) {
-    const byId = new Map(all.map((s) => [s.id, s]))
-    const recs = getRecents(activePlaylistId, "series")
-    out = []
-    for (const r of recs) {
-      const s = byId.get(r.id)
-      if (s) out.push(s)
-    }
-  } else if (activeCat.startsWith(GENRE_CAT_PREFIX)) {
-    const genreId = activeCat.slice(GENRE_CAT_PREFIX.length)
-    const snapshotReady = !!genreSets && genreSetsPlaylistId === activePlaylistId
-    if (!snapshotReady) ensureGenreSets()
-    const idsForGenre = snapshotReady ? genreSets.get(genreId) : null
-    out = idsForGenre ? all.filter((s) => idsForGenre.has(s.id)) : []
-  } else {
-    out = all.filter((s) => {
-      if (activeCat && (s.category || "") !== activeCat) return false
-      return picker.categoryPassesFilter((s.category || "").toString())
-    })
-  }
+  if (activeCat.startsWith(GENRE_CAT_PREFIX)) ensureGenreSets()
+  let out = selectRowsForCategory(all, activeCat, {
+    favoritesFor: (playlistId) => getFavorites(playlistId, "series"),
+    recentsFor: (playlistId) => getRecents(playlistId, "series"),
+    genreSetFor: (playlistId, genreId) => genreSetsByPlaylist.get(playlistId)?.get(genreId),
+    categoryPassesFilter: picker.categoryPassesFilter,
+    fallbackPlaylistId: activePlaylistId,
+    fallbackCategoryName: t("stream.uncategorized"),
+  })
 
   const personTitleIds = personFilter.getTitleIds()
   if (personFilter.isActive() && personTitleIds) {
-    out = out.filter((series) => personTitleIds.has(series.id))
+    out = out.filter((series) => personTitleIds.has(rowKey(series)))
   }
 
-  /** @type {Map<number, number> | null} */
+  /** @type {Map<string, number> | null} */
   let scoreById = null
   if (tokens.length) {
     scoreById = new Map()
     const scored = []
     for (const series of out) {
-      const score = scoreNormMatch(series.norm, tokens)
+      const score = scoreNormMatch(series.norm, tokens, series.name)
       if (score > 0) {
         scored.push(series)
-        scoreById.set(series.id, score)
+        scoreById.set(rowKey(series), score)
       }
     }
     out = scored
@@ -859,34 +871,43 @@ function applyFilter() {
   const groupOrder = []
   const survivorsByKey = new Map()
   for (const series of out) {
-    const groupKey = groupingEnabled ? groupingIndex.keyByEntryId.get(series.id) ?? `e:${series.id}` : `e:${series.id}`
+    const groupingIndex = groupingIndexByPlaylist.get(series.playlistId)
+    const innerKey = groupingEnabled ? groupingIndex?.keyByEntryId.get(series.id) ?? `e:${series.id}` : `e:${series.id}`
+    const groupKey = `${series.playlistId}:${innerKey}`
     let survivors = survivorsByKey.get(groupKey)
     if (!survivors) {
       survivors = []
       survivorsByKey.set(groupKey, survivors)
-      groupOrder.push(groupKey)
+      groupOrder.push({ groupKey, innerKey })
     }
     survivors.push(series)
   }
 
   const displayGroups = []
-  for (const groupKey of groupOrder) {
+  for (const { groupKey, innerKey } of groupOrder) {
     const survivors = survivorsByKey.get(groupKey)
-    const globalInfo = groupingEnabled ? groupingIndex.groupsByKey.get(groupKey) : null
-    const ownTag = groupingIndex.tagByEntryId.get(survivors[0].id) ?? null
+    const playlistId = survivors[0].playlistId
+    const groupingIndex = groupingIndexByPlaylist.get(playlistId)
+    const globalInfo = groupingEnabled ? groupingIndex?.groupsByKey.get(innerKey) : null
+    const ownTag = groupingIndex?.tagByEntryId.get(survivors[0].id) ?? null
     const tags = globalInfo ? globalInfo.tags : (ownTag ? [ownTag] : [])
     const globalEntryIds = globalInfo ? globalInfo.entryIds : [survivors[0].id]
 
     if (!groupPassesLanguageFilter(tags, selectedLang)) continue
-    if (hideWatched && globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id))) continue
+    if (hideWatched && globalEntryIds.some((id) => isSeriesFullyWatched(playlistId, id))) continue
 
     const survivorIds = survivors.map((series) => series.id)
-    const displayEntryId = pickPreferredEntryId(survivorIds, groupingIndex.tagByEntryId, preferredTags, groupingIndex.qualityRankByEntryId)
+    const displayEntryId = pickPreferredEntryId(
+      survivorIds,
+      groupingIndex?.tagByEntryId ?? new Map(),
+      preferredTags,
+      groupingIndex?.qualityRankByEntryId ?? new Map()
+    )
     const displayEntry = survivors.find((series) => series.id === displayEntryId) || survivors[0]
-    const maxScore = scoreById ? Math.max(...survivors.map((series) => scoreById.get(series.id) || 0)) : 0
+    const maxScore = scoreById ? Math.max(...survivors.map((series) => scoreById.get(rowKey(series)) || 0)) : 0
     const maxAdded = Math.max(...survivors.map((series) => Number(series.added) || 0))
 
-    displayGroups.push({ key: groupKey, entries: survivors, tags, globalEntryIds, displayEntry, maxScore, maxAdded })
+    displayGroups.push({ key: groupKey, playlistId, entries: survivors, tags, globalEntryIds, displayEntry, maxScore, maxAdded })
   }
 
   const mode = activePlaylistId
@@ -914,7 +935,11 @@ function applyFilter() {
   }
 
   filtered = displayGroups
-  const totalGroups = groupingEnabled ? groupingIndex.groupsByKey.size : all.length
+  let totalGroups = all.length
+  if (groupingEnabled) {
+    totalGroups = 0
+    for (const groupingIndex of groupingIndexByPlaylist.values()) totalGroups += groupingIndex.groupsByKey.size
+  }
   listStatus.textContent = t("series.ofSeries", {
     shown: filtered.length.toLocaleString(),
     total: totalGroups.toLocaleString(),
@@ -923,12 +948,22 @@ function applyFilter() {
   if (heroCount) heroCount.textContent = filtered.length.toLocaleString()
   const heroCat = document.getElementById("series-hero-cat")
   if (heroCat) {
+    const selectedCategory = parseMergedCategoryKey(activeCat, activePlaylistId)
     heroCat.textContent =
       activeCat === CAT_FAVORITES
         ? t("list.heroFavorites")
         : activeCat === CAT_RECENTS
           ? t("list.heroRecents")
-          : genreLabelForCategory(activeCat) || (activeCat as string) || t("list.allCategories")
+          : genreLabelForCategory(activeCat) ||
+            (selectedCategory
+              ? categoryLabel(
+                  selectedCategory.name,
+                  playlistTitleById.get(selectedCategory.playlistId) || "",
+                  isMergedView()
+                )
+              : isMergedView()
+                ? t("list.allPlaylists")
+                : t("list.allCategories"))
   }
   renderGrid(gridRestore.consumePending)
 }
@@ -963,9 +998,11 @@ function populateLanguageFilterOptions() {
   const languageGroupingEnabled = getLanguageGroupingEnabled()
   const frequencyByTag = new Map()
   if (languageGroupingEnabled) {
-    for (const tag of groupingIndex.tagByEntryId.values()) {
-      if (!tag) continue
-      frequencyByTag.set(tag, (frequencyByTag.get(tag) || 0) + 1)
+    for (const groupingIndex of groupingIndexByPlaylist.values()) {
+      for (const tag of groupingIndex.tagByEntryId.values()) {
+        if (!tag) continue
+        frequencyByTag.set(tag, (frequencyByTag.get(tag) || 0) + 1)
+      }
     }
   }
   const tags = Array.from(frequencyByTag.keys()).sort(
@@ -1004,154 +1041,149 @@ function showEmptyState() {
   if (listStatus) {
     listStatus.innerHTML = `${t("list.noPlaylistAddOne")} <a href="/login" class="text-accent underline">${t("list.addOne")}</a>.`
   }
+  mergeIndicator?.clear()
   filtered = []
   renderGrid()
 }
 
-async function paintSeries(data, fromCache, age) {
-  all = data
-  groupingIndex = buildGroupingIndex(all)
+async function paintSeries(read, fromCache) {
+  all = read.rows
+  groupingIndexByPlaylist = buildGroupingIndexesByPlaylist(all)
   if (listStatus) {
+    const sourcesText = isMergedView()
+      ? ` · ${t("list.merged.sources", { count: mergedPlaylistIds.length })}`
+      : ""
+    const ageText =
+      fromCache && read.newestFetchedAt ? ` · ${fmtAge(Date.now() - read.newestFetchedAt)}` : ""
     listStatus.textContent =
-      t("series.totalSeries", { count: all.length.toLocaleString() }) +
-      (fromCache ? ` · ${fmtAge(age)}` : "")
+      t("series.totalSeries", { count: all.length.toLocaleString() }) + sourcesText + ageText
   }
   picker.rerender()
   populateLanguageFilterOptions()
-  refreshGenreSets(activePlaylistId)
-  // A genuinely fresh (non-cached) fetch means the catalog itself just changed
-  // upstream, so any previously cached fully-watched verdict is stale - drop it
-  // and let the scheduled recompute below actually rescan.
-  if (!fromCache) fullyWatchedCacheByPlaylistId.delete(activePlaylistId)
+  for (const playlistId of mergedPlaylistIds) refreshGenreSets(playlistId).catch(() => {})
   // Paint immediately with whatever's cached so the fully-watched scan never
-  // blocks first paint; the idle recompute below reconciles it. On a cache
-  // miss with hide-watched on, await the scan instead so watched cards never
+  // blocks first paint; the idle recompute below reconciles it. With hide-watched
+  // on and an uncomputed playlist, await the scan so watched cards never
   // flash in and get pulled a moment later.
-  const cachedFullyWatched = fullyWatchedCacheByPlaylistId.get(activePlaylistId)
-  if (cachedFullyWatched) {
-    fullyWatchedSeriesIds = cachedFullyWatched
+  const allCached = mergedPlaylistIds.every((playlistId) => fullyWatchedCacheByPlaylistId.has(playlistId))
+  if (allCached) {
+    mergeFullyWatchedKeys()
   } else if (getHideWatched(activePlaylistId, "series")) {
     await recomputeFullyWatched()
   } else {
-    fullyWatchedSeriesIds = new Set()
+    mergeFullyWatchedKeys()
   }
   applyFilter()
   scheduleFullyWatchedRecompute()
 }
 
-async function fetchSeriesRows() {
-  const catMap = await ensureSeriesCategoryMap()
-  const r = await xtreamApiFetch("get_series")
-  const body = await r.text()
-  if (!r.ok) {
-    log.error("Upstream error body:", body)
-    throw new Error(`API ${r.status}: ${body}`)
-  }
-  const parsed = JSON.parse(body)
-  const arr = Array.isArray(parsed)
-    ? parsed
-    : parsed?.series || parsed?.results || []
-  return (arr || [])
-    .map((series) => {
-      const name = String(series.name || series.title || "")
-      const id = Number(series.series_id || series.id)
-      const logo = series.cover || series.stream_icon || null
-      const year = String(
-        series.year || series.releaseDate || series.release_date || ""
-      ).trim()
-      const rating = series.rating || series.rating_5based || ""
-      const categoryId =
-        (Array.isArray(series.category_ids) &&
-          series.category_ids.length &&
-          series.category_ids[0]) ||
-        series.category_id
-      let category = String(series.category_name || "").trim()
-      if (!category && categoryId != null && catMap?.size) {
-        category = catMap.get(String(categoryId)) || ""
-      }
-      const added =
-        Number(series.last_modified) ||
-        Number(series.added) ||
-        Number(series.releaseDate ? Date.parse(series.releaseDate) / 1000 : 0) ||
-        0
-      const tmdb = Number(series.tmdb) || Number(series.tmdb_id) || null
-      return {
-        id,
-        name,
-        logo: logo || null,
-        year: year || "",
-        rating: rating ? String(rating) : "",
-        category,
-        plot: series.plot || "",
-        added,
-        norm: normalize(`${name} ${category} ${year}`),
-        tmdb,
-      }
-    })
-    .filter((series) => series.id && series.name)
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-    )
+function sameRowSets(first, second) {
+  return mergedPlaylistIds.every((playlistId) => first.byPlaylist.get(playlistId) === second.byPlaylist.get(playlistId))
 }
+
+const toastedFailures = new Set<string>()
 
 async function loadSeries() {
   if (!listStatus) return
-  const active = await getActiveEntry()
-  if (!active) {
+  const runToken = ++loadRunToken
+  const entries = await getMergedEntries()
+  const activeEntry = await getActiveEntry()
+  if (runToken !== loadRunToken) return
+  if (!entries.length || !activeEntry) {
     activePlaylistId = ""
-    activePlaylistTitle = ""
+    mergedPlaylistIds = []
+    mergedPlaylistIdSet = new Set()
+    all = []
     showEmptyState()
     return
   }
-  activePlaylistId = active._id
-  activePlaylistTitle = active.title || ""
+  activePlaylistId = activeEntry._id
+  mergedPlaylistIds = entries.map((entry) => entry._id)
+  mergedPlaylistIdSet = new Set(mergedPlaylistIds)
+  playlistTitleById = new Map(entries.map((entry) => [entry._id, entry.title || ""]))
+  credsByPlaylistId = new Map(entries.map((entry) => [entry._id, entryToCreds(entry)]))
+  for (const playlistId of [...genreSetsByPlaylist.keys()]) {
+    if (!mergedPlaylistIdSet.has(playlistId)) genreSetsByPlaylist.delete(playlistId)
+  }
+  mergeIndicator?.setPlaylists(mergedPlaylistIds)
+
   gridRestore.attemptRestore()
   await ensurePrefsLoaded()
   syncSortControl()
   syncHideWatchedControl()
   syncGroupLangsControl()
   syncLangFilterControl()
-  await hydrateCache(active._id, "series")
+  await hydrateMergedRows("series")
+  if (runToken !== loadRunToken) return
 
-  const hit = getCached(active._id, "series")
-  if (hit) {
-    await paintSeries(hit.data, true, hit.age)
-    if (rowsNeedTmdbBackfill(hit.data) || rowsNeedGenreBackfill(hit.data)) {
-      triggerTmdbBackfillOnce(active._id, "series", SERIES_TTL_MS, fetchSeriesRows)
-    }
+  const credsList = [...credsByPlaylistId.values()]
+  if (!credsList.some((creds) => creds.host)) {
+    showEmptyState()
+    return
+  }
+  if (!credsList.some((creds) => creds.user && creds.pass)) {
+    listStatus.textContent = t("series.requiresXtream")
+    mergeIndicator?.clear()
+    filtered = []
+    renderGrid()
+    return
+  }
+
+  const cached = readMergedRows("series")
+  const paintedFromCache = cached.rows.length > 0
+  if (paintedFromCache) {
+    await paintSeries(cached, true)
+    if (runToken !== loadRunToken) return
+    if (!isMergedView()) return
   } else {
     listStatus.textContent = t("common.loading")
     if (!gridEl?.querySelector("[data-skeleton]")) renderPosterSkeletons(gridEl)
   }
-
-  creds = await loadCreds()
-  if (!creds.host) {
-    if (!hit) showEmptyState()
-    return
+  for (const playlistId of mergedPlaylistIds) {
+    const hasRows = (cached.byPlaylist.get(playlistId) || []).length > 0
+    mergeIndicator?.setStatus(playlistId, hasRows ? "cached" : "loading")
   }
-  if (!creds.user || !creds.pass) {
-    listStatus.textContent = t("series.requiresXtream")
-    return
-  }
-  if (hit) return
 
-  try {
-    const { data, fromCache, age } = await cachedFetch(
-      active._id,
-      "series",
-      SERIES_TTL_MS,
-      fetchSeriesRows
-    )
-    await paintSeries(data, fromCache, age)
-  } catch (e) {
-    log.error("[xt:series] loadSeries threw:", e)
+  const { rows, errors, byPlaylist, newestFetchedAt, anyStale, sources, isMerged } = await ensureMergedRows("series", {
+    onPlaylistSettled: (playlistId, status, info) => {
+      if (runToken !== loadRunToken) return
+      if (status === "done") mergeIndicator?.setStatus(playlistId, "done", { count: info.count })
+    },
+  })
+  if (runToken !== loadRunToken) return
+  const settled = { rows, byPlaylist, newestFetchedAt, anyStale, sources, isMerged }
+
+  const xtreamCount = credsList.filter((creds) => creds.user && creds.pass).length
+  if (errors.size && errors.size >= xtreamCount && !rows.length) {
+    log.error("[xt:series] loadSeries failed:", [...errors.values()])
     filtered = []
     renderGrid()
+    mergeIndicator?.clear()
     renderProviderError(listStatus, {
-      providerName: activePlaylistTitle,
+      providerName: [...errors.keys()].map((playlistId) => playlistTitleById.get(playlistId) || "").filter(Boolean).join(", "),
       kind: "series",
       onRetry: loadSeries,
     })
+    return
+  }
+
+  for (const playlistId of errors.keys()) {
+    log.warn("[xt:series] playlist failed:", playlistId, errors.get(playlistId))
+    mergeIndicator?.setStatus(playlistId, "error", { onRetry: () => loadSeries() })
+    const hadCachedRows = (cached.byPlaylist.get(playlistId) || []).length > 0
+    if (hadCachedRows || toastedFailures.has(playlistId)) continue
+    toastedFailures.add(playlistId)
+    toastWarn(t("list.merged.partialFailure", { title: playlistTitleById.get(playlistId) || "" }))
+  }
+
+  if (!paintedFromCache || !sameRowSets(cached, settled)) {
+    // A changed catalog invalidates the cached fully-watched verdict for that playlist.
+    for (const playlistId of mergedPlaylistIds) {
+      if (cached.byPlaylist.get(playlistId) !== byPlaylist.get(playlistId)) {
+        fullyWatchedCacheByPlaylistId.delete(playlistId)
+      }
+    }
+    await paintSeries(settled, false)
   }
 }
 
@@ -1172,9 +1204,16 @@ document.addEventListener("xt:active-changed", () => {
   loadSeries()
 })
 
+document.addEventListener(MERGED_CHANGED_EVENT, () => {
+  if (personFilter.isActive()) personFilter.clear()
+  personSuggest.clear()
+  gridRestore.reset()
+  loadSeries()
+})
+
 document.addEventListener("xt:cache-revalidated", (ev) => {
   const detail = (ev as CustomEvent).detail
-  if (!detail || detail.entryId !== activePlaylistId) return
+  if (!detail || !mergedPlaylistIdSet.has(detail.entryId)) return
   if (detail.kind !== "series") return
   // The catalog behind this playlist just changed in the background (episode
   // counts included), so the cached fully-watched verdict can no longer be trusted.
@@ -1196,10 +1235,5 @@ document.addEventListener("xt:catalog-warming-start", () => {
 ;(async () => {
   await initI18n()
   personFilter.render()
-  creds = await loadCreds()
-  if (creds.host && creds.user && creds.pass) {
-    loadSeries()
-  } else {
-    showEmptyState()
-  }
+  loadSeries()
 })()

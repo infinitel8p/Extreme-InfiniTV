@@ -2,9 +2,9 @@
   // Cross-playlist watchlist view - mirror of AllFavoritesView, but only
   // movies and series and sorted by added-time (newest first).
   import { onMount } from "svelte"
-  import { log } from "@/scripts/lib/log.js"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-  import { getEntries, getActiveEntry, selectEntry } from "@/scripts/lib/creds.js"
+  import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
+  import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
   import {
     ensureLoaded as ensurePrefsLoaded,
     getAllGlobalWatchlist,
@@ -49,9 +49,8 @@
     filter === "all" ? entries : entries.filter((row) => row.kind === filter)
   )
 
-  function buildHref(kind, id) {
-    if (kind === "vod") return `/movies/detail?id=${encodeURIComponent(id)}`
-    return `/series/detail?id=${encodeURIComponent(id)}`
+  function buildHref(kind, id, playlistId) {
+    return detailHrefFor(kind, id, { playlistId })
   }
 
   let reloadGeneration = 0
@@ -123,7 +122,7 @@
           ts: row.ts,
           name,
           logo,
-          href: buildHref(row.kind, row.id),
+          href: buildHref(row.kind, row.id, row.playlistId),
           isCrossPlaylist: row.playlistId !== activePlaylistId,
         }
       })
@@ -149,16 +148,6 @@
     }
   }
 
-  async function openCard(event, entry) {
-    if (!entry.isCrossPlaylist) return
-    event.preventDefault()
-    try {
-      await selectEntry(entry.playlistId)
-    } catch (err) {
-      log.error("[xt:watchlist] selectEntry failed:", err)
-    }
-    window.location.href = entry.href
-  }
 
   function setFilter(next) {
     filter = next
@@ -245,7 +234,6 @@
     {#each visible as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
       <a
         href={entry.href}
-        onclick={(event) => openCard(event, entry)}
         aria-label={tr("watchlist.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line

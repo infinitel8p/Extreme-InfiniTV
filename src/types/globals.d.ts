@@ -20,6 +20,11 @@ interface AndroidVideoBridge {
     title: string,
     posterUrl: string,
     startMs: number,
+    dns: string,
+    audioLang: string | null,
+    subLang: string | null,
+    subEnabled: boolean,
+    subtitlesJson: string,
   ) => boolean
   launchLive?: (
     contentKey: string,
@@ -27,10 +32,11 @@ interface AndroidVideoBridge {
     initialChannelId: string,
     ua: string,
     referer: string,
+    dns: string,
   ) => boolean
   drainEvents?: () => string
   /** Starts pushing native-player events straight into the WebView instead of the SharedPreferences queue. */
-  receiverSessionStart?: () => boolean
+  receiverSessionStart?: (channelJson: string) => boolean
   /** Stops the event push and finishes the native player if it's still running. */
   receiverSessionEnd?: () => void
   /** Routes a remote control command into the running native player; returns whether a session was active. */
@@ -39,6 +45,8 @@ interface AndroidVideoBridge {
   receiverVolume?: (level: number, muted: boolean) => boolean
   setKeepScreenOn?: (enabled: boolean) => void
   setTvOverscan?: (percent: number) => void
+  setTvAccent?: (hex: string) => void
+  setSubtitleScale?: (size: string) => void
 }
 
 interface AndroidIntentBridge {
@@ -73,6 +81,9 @@ interface AndroidIntentBridge {
 
 interface AndroidDeviceInfoBridge {
   isTv?: () => boolean
+  getMemoryClass?: () => number
+  getWebViewPackageName?: () => string | null
+  getWebViewVersionName?: () => string | null
 }
 
 interface AndroidImeBridge {

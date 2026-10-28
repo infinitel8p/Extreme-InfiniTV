@@ -1,5 +1,4 @@
 // Shared grid-page behavior for the movies and series listing bundles.
-import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import {
   isFavorite,
   toggleFavorite,
@@ -15,6 +14,7 @@ import {
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
 import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
+import { rowKey } from "@/scripts/lib/merged-catalog-core.ts"
 import type { TmdbCatalogEntry } from "@/scripts/lib/tmdb-match.ts"
 import {
   saveGridState,
@@ -82,26 +82,6 @@ export function renderPosterSkeletons(target: HTMLElement | null, count?: number
     frag.appendChild(card)
   }
   target.replaceChildren(frag)
-}
-
-// ----------------------------
-// Category maps
-// ----------------------------
-export async function fetchCategoryMap(
-  action: "get_vod_categories" | "get_series_categories"
-): Promise<Map<string, string>> {
-  const response = await xtreamApiFetch(action)
-  const data = await response.json().catch(() => [])
-  const arr: Array<{ category_id?: unknown; category_name?: unknown }> = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.categories)
-      ? data.categories
-      : []
-  return new Map(
-    arr
-      .filter((category) => category && category.category_id != null)
-      .map((category) => [String(category.category_id), String(category.category_name || "").trim()])
-  )
 }
 
 // ----------------------------
@@ -293,14 +273,14 @@ export interface PersonFilterControllerOptions {
   labelId: string
   clearButtonId: string
   logTag: string
-  getActivePlaylistId: () => string
-  getCatalogEntries: () => TmdbCatalogEntry[]
+  getPlaylistIds: () => string[]
+  getCatalogEntries: () => Array<TmdbCatalogEntry & { playlistId?: string }>
   applyFilter: () => void
 }
 
 export interface PersonFilterController {
   isActive: () => boolean
-  getTitleIds: () => Set<number> | null
+  getTitleIds: () => Set<string> | null
   guardUnresolved: () => boolean
   clear: () => void
   render: () => void
@@ -311,7 +291,7 @@ export function createPersonFilterController(options: PersonFilterControllerOpti
   let name = ""
   let tmdbId: number | null = null
   // null while inactive or unresolved; a resolved miss is an empty Set.
-  let titleIds: Set<number> | null = null
+  let titleIds: Set<string> | null = null
   let inFlight = false
   let token = 0
 
@@ -350,15 +330,21 @@ export function createPersonFilterController(options: PersonFilterControllerOpti
     inFlight = true
     const runToken = ++token
     let resolutionFailed = false
-    resolvePersonTitleIds({
-      kind: options.contentKind,
-      playlistId: options.getActivePlaylistId(),
-      personName: name,
-      tmdbPersonId: tmdbId,
-      catalogEntries: options.getCatalogEntries(),
-    })
-      .then((ids) => {
-        if (runToken === token) titleIds = ids
+    const catalogEntries = options.getCatalogEntries()
+    Promise.all(
+      options.getPlaylistIds().map(async (playlistId) => {
+        const ids = await resolvePersonTitleIds({
+          kind: options.contentKind,
+          playlistId,
+          personName: name,
+          tmdbPersonId: tmdbId,
+          catalogEntries: catalogEntries.filter((entry) => entry.playlistId === playlistId),
+        })
+        return Array.from(ids, (id) => rowKey({ playlistId, id }))
+      })
+    )
+      .then((keyGroups) => {
+        if (runToken === token) titleIds = new Set(keyGroups.flat())
       })
       .catch((error) => {
         log.warn(`[${options.logTag}] person filter resolution failed:`, error)

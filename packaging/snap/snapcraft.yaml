@@ -1,5 +1,5 @@
 name: extreme-infinitv
-base: core22
+base: core24
 version: "__VERSION__"
 summary: IPTV player for Xtream Codes and M3U / M3U8 playlists
 description: |
@@ -9,10 +9,10 @@ description: |
 grade: stable
 confinement: strict
 
-# core22's gnome platform snap only binds webkit2gtk-4.0, not 4.1.
+# Bind the staged webkit2gtk-4.1 so the app runs the same build the deb was tested with.
 layout:
-  /usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.1:
-    bind: $SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.1
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1:
+    bind: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkit2gtk-4.1
 
 parts:
   extreme-infinitv:
@@ -22,7 +22,7 @@ parts:
     stage-packages:
       - libwebkit2gtk-4.1-0
       - libappindicator3-1
-      - libgtk-3-0
+      - libgtk-3-0t64
       # gnome platform ships gst base + good only: no H.264/AAC decode, no MSE.
       - gstreamer1.0-plugins-bad
       - gstreamer1.0-libav
@@ -46,7 +46,7 @@ parts:
       sed -i -e "s|Icon=extreme-infinitv|Icon=\${SNAP}/usr/share/icons/hicolor/128x128/apps/extreme-infinitv.png|g" \
         "$CRAFT_PART_INSTALL/usr/share/applications/Extreme InfiniTV.desktop"
       # gst-libav needs these sonames; update-alternatives never runs in a build.
-      libdir="$CRAFT_PART_INSTALL/usr/lib/$CRAFT_ARCH_TRIPLET"
+      libdir="$CRAFT_PART_INSTALL/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR"
       if [ -e "$libdir/blas/libblas.so.3" ]; then
         ln -sf blas/libblas.so.3 "$libdir/libblas.so.3"
       fi

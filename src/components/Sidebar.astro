@@ -53,6 +53,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 ---
 
 <aside
+  id="sidebar"
   class="sidebar-rail hidden md:flex landscape-phone:flex md:order-first landscape-phone:order-first
          shrink-0 flex-col gap-2 border-r border-line bg-bg
          w-16 rail-expanded:w-64
@@ -74,33 +75,35 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       data-i18n-attr="aria-label:sidebar.brandHome"
       class="brand-mark group [view-transition-name:brand-mark]
              flex items-center gap-3 p-2.5 rail-expanded:px-2 rail-expanded:py-2 outline-none">
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="8 58 224 124"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-        class="brand-mark__svg shrink-0 h-4 w-auto text-accent">
-        <g class="brand-mark__mark">
-          <path
-            id="brand-mark-path"
-            class="brand-mark__base brand-mark__base--stroke"
-            d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
-          <circle class="brand-mark__base brand-mark__base--fill" cx="34.6" cy="84.6" r="9" />
-          <circle class="brand-mark__base brand-mark__base--stroke" cx="170" cy="120" r="50" />
-          <rect class="brand-mark__base brand-mark__base--fill" x="146.5" y="94" width="13" height="52" rx="6.5" />
-          <rect class="brand-mark__base brand-mark__base--fill" x="164.5" y="102" width="13" height="36" rx="6.5" />
-          <rect class="brand-mark__base brand-mark__base--fill" x="182.5" y="110" width="13" height="20" rx="6.5" />
-        </g>
-        <g class="brand-mark__trail">
-          <circle r="11.5" fill="currentColor" opacity="1"    class="brand-mark__dot brand-mark__dot--1" />
-          <circle r="9.5"  fill="currentColor" opacity="0.75" class="brand-mark__dot brand-mark__dot--2" />
-          <circle r="8"    fill="currentColor" opacity="0.55" class="brand-mark__dot brand-mark__dot--3" />
-          <circle r="6.5"  fill="currentColor" opacity="0.4"  class="brand-mark__dot brand-mark__dot--4" />
-          <circle r="5"    fill="currentColor" opacity="0.25" class="brand-mark__dot brand-mark__dot--5" />
-          <circle r="3.5"  fill="currentColor" opacity="0.14" class="brand-mark__dot brand-mark__dot--6" />
-        </g>
-      </svg>
+      <span class="brand-mark__glyph relative inline-flex shrink-0">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="8 58 224 124"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          class="brand-mark__svg shrink-0 h-4 w-auto text-accent">
+          <g class="brand-mark__mark">
+            <path
+              id="brand-mark-path"
+              class="brand-mark__base brand-mark__base--stroke"
+              d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
+            <circle class="brand-mark__base brand-mark__base--fill" cx="34.6" cy="84.6" r="9" />
+            <circle class="brand-mark__base brand-mark__base--stroke" cx="170" cy="120" r="50" />
+            <rect class="brand-mark__base brand-mark__base--fill" x="146.5" y="94" width="13" height="52" rx="6.5" />
+            <rect class="brand-mark__base brand-mark__base--fill" x="164.5" y="102" width="13" height="36" rx="6.5" />
+            <rect class="brand-mark__base brand-mark__base--fill" x="182.5" y="110" width="13" height="20" rx="6.5" />
+          </g>
+        </svg>
+        <span class="brand-mark__trail" aria-hidden="true">
+          <span class="brand-mark__dot brand-mark__dot--1"></span>
+          <span class="brand-mark__dot brand-mark__dot--2"></span>
+          <span class="brand-mark__dot brand-mark__dot--3"></span>
+          <span class="brand-mark__dot brand-mark__dot--4"></span>
+          <span class="brand-mark__dot brand-mark__dot--5"></span>
+          <span class="brand-mark__dot brand-mark__dot--6"></span>
+        </span>
+      </span>
       <span class="rail-reveal hidden rail-expanded:inline-flex items-baseline truncate text-[0.9375rem] tracking-[-0.02em]">
         <span class="font-semibold text-fg">Extreme&nbsp;Infini</span><span class="font-extrabold text-accent tracking-[0.04em] ml-[0.05em]">TV</span>
       </span>
@@ -537,10 +540,13 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
   function maybeWarmup() {
     if (onLoginPage()) return
     import("@/scripts/lib/catalog.js")
-      .then((m) => m.warmupActive())
+      .then((m) => m.warmupMerged())
       .catch(() => {})
   }
   document.addEventListener("xt:active-changed", () => {
+    maybeWarmup()
+  })
+  document.addEventListener("xt:merged-changed", () => {
     maybeWarmup()
   })
 
@@ -797,8 +803,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
      handles focus indication. */
   .brand-mark:focus-visible { outline: none !important; }
 
-  /* Let the comet's drop-shadow extend past the SVG viewBox so the glow
-     isn't clipped to a square. */
+  /* Let the comet glow extend past the svg box instead of clipping to a square. */
   .brand-mark__svg { overflow: visible; }
 
   /* Base mark: solid enough to read at a glance, calm enough to not
@@ -819,17 +824,18 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     fill: var(--color-accent);
   }
 
-  /* Comet trail glow: three drop-shadow layers for a richer falloff than
-     a single shadow. Inner punch + medium halo + soft outer bloom. */
+  /* Comet: 224x124 box scaled by 16/124 maps viewBox units 1:1 onto the 16px
+     svg. The box origin is the viewBox origin (8, 58), subtracted in the keyframes. */
   .brand-mark__trail {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 224px;
+    height: 124px;
+    transform-origin: 0 0;
+    transform: scale(calc(16 / 124));
+    pointer-events: none;
     color: var(--color-accent);
-    filter: drop-shadow(0 0 2px var(--color-accent))
-            drop-shadow(0 0 5px var(--color-accent))
-            drop-shadow(0 0 10px var(--color-accent-soft));
-    transition: filter 280ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  .brand-mark__trail {
     animation: brand-mark-trail-show 240ms ease-out 500ms backwards;
   }
   @keyframes brand-mark-trail-show {
@@ -837,28 +843,155 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     to { opacity: 1; }
   }
 
+  /* Per-dot glow: inner punch + medium halo + soft outer bloom. */
   .brand-mark__dot {
-    offset-path: path('M120,120 A50 50 0 1 1 20 120 A50 50 0 1 1 120 120 A50 50 0 1 0 220 120 A50 50 0 1 0 120 120 Z');
-    offset-rotate: 0deg;
-    offset-distance: 0%;
-    animation: brand-mark-orbit 6s linear infinite reverse;
+    position: absolute;
+    left: 0;
+    top: 0;
+    border-radius: 50%;
+    background: currentColor;
+    will-change: transform;
+    box-shadow: 0 0 2px var(--color-accent), 0 0 5px var(--color-accent), 0 0 10px var(--color-accent-soft);
+    transition: box-shadow 280ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: brand-mark-orbit 6s linear infinite;
   }
-  .brand-mark__dot--2 { animation-delay: 0.08s; }
-  .brand-mark__dot--3 { animation-delay: 0.16s; }
-  .brand-mark__dot--4 { animation-delay: 0.24s; }
-  .brand-mark__dot--5 { animation-delay: 0.32s; }
-  .brand-mark__dot--6 { animation-delay: 0.40s; }
+  .brand-mark__dot--1 { width: 23px; height: 23px; margin: -11.5px 0 0 -11.5px; opacity: 1; }
+  .brand-mark__dot--2 { width: 19px; height: 19px; margin: -9.5px 0 0 -9.5px; opacity: 0.75; animation-delay: 0.08s; }
+  .brand-mark__dot--3 { width: 16px; height: 16px; margin: -8px 0 0 -8px; opacity: 0.55; animation-delay: 0.16s; }
+  .brand-mark__dot--4 { width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; opacity: 0.4; animation-delay: 0.24s; }
+  .brand-mark__dot--5 { width: 10px; height: 10px; margin: -5px 0 0 -5px; opacity: 0.25; animation-delay: 0.32s; }
+  .brand-mark__dot--6 { width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; opacity: 0.14; animation-delay: 0.40s; }
+
+  /* Generated by src/scripts/make-brand-mark-keyframes.mjs; do not edit by hand. */
   @keyframes brand-mark-orbit {
-    to { offset-distance: 100%; }
+    0% { transform: translate(112.00px, 62.00px); }
+    0.833% { transform: translate(112.27px, 56.77px); }
+    1.667% { transform: translate(113.09px, 51.60px); }
+    2.5% { transform: translate(114.45px, 46.55px); }
+    3.333% { transform: translate(116.32px, 41.66px); }
+    4.167% { transform: translate(118.70px, 37.00px); }
+    5% { transform: translate(121.55px, 32.61px); }
+    5.833% { transform: translate(124.84px, 28.54px); }
+    6.667% { transform: translate(128.54px, 24.84px); }
+    7.5% { transform: translate(132.61px, 21.55px); }
+    8.333% { transform: translate(137.00px, 18.70px); }
+    9.167% { transform: translate(141.66px, 16.32px); }
+    10% { transform: translate(146.55px, 14.45px); }
+    10.833% { transform: translate(151.60px, 13.09px); }
+    11.667% { transform: translate(156.77px, 12.27px); }
+    12.5% { transform: translate(162.00px, 12.00px); }
+    13.333% { transform: translate(167.23px, 12.27px); }
+    14.167% { transform: translate(172.40px, 13.09px); }
+    15% { transform: translate(177.45px, 14.45px); }
+    15.833% { transform: translate(182.34px, 16.32px); }
+    16.667% { transform: translate(187.00px, 18.70px); }
+    17.5% { transform: translate(191.39px, 21.55px); }
+    18.333% { transform: translate(195.46px, 24.84px); }
+    19.167% { transform: translate(199.16px, 28.54px); }
+    20% { transform: translate(202.45px, 32.61px); }
+    20.833% { transform: translate(205.30px, 37.00px); }
+    21.667% { transform: translate(207.68px, 41.66px); }
+    22.5% { transform: translate(209.55px, 46.55px); }
+    23.333% { transform: translate(210.91px, 51.60px); }
+    24.167% { transform: translate(211.73px, 56.77px); }
+    25% { transform: translate(212.00px, 62.00px); }
+    25.833% { transform: translate(211.73px, 67.23px); }
+    26.667% { transform: translate(210.91px, 72.40px); }
+    27.5% { transform: translate(209.55px, 77.45px); }
+    28.333% { transform: translate(207.68px, 82.34px); }
+    29.167% { transform: translate(205.30px, 87.00px); }
+    30% { transform: translate(202.45px, 91.39px); }
+    30.833% { transform: translate(199.16px, 95.46px); }
+    31.667% { transform: translate(195.46px, 99.16px); }
+    32.5% { transform: translate(191.39px, 102.45px); }
+    33.333% { transform: translate(187.00px, 105.30px); }
+    34.167% { transform: translate(182.34px, 107.68px); }
+    35% { transform: translate(177.45px, 109.55px); }
+    35.833% { transform: translate(172.40px, 110.91px); }
+    36.667% { transform: translate(167.23px, 111.73px); }
+    37.5% { transform: translate(162.00px, 112.00px); }
+    38.333% { transform: translate(156.77px, 111.73px); }
+    39.167% { transform: translate(151.60px, 110.91px); }
+    40% { transform: translate(146.55px, 109.55px); }
+    40.833% { transform: translate(141.66px, 107.68px); }
+    41.667% { transform: translate(137.00px, 105.30px); }
+    42.5% { transform: translate(132.61px, 102.45px); }
+    43.333% { transform: translate(128.54px, 99.16px); }
+    44.167% { transform: translate(124.84px, 95.46px); }
+    45% { transform: translate(121.55px, 91.39px); }
+    45.833% { transform: translate(118.70px, 87.00px); }
+    46.667% { transform: translate(116.32px, 82.34px); }
+    47.5% { transform: translate(114.45px, 77.45px); }
+    48.333% { transform: translate(113.09px, 72.40px); }
+    49.167% { transform: translate(112.27px, 67.23px); }
+    50% { transform: translate(112.00px, 62.00px); }
+    50.833% { transform: translate(111.73px, 56.77px); }
+    51.667% { transform: translate(110.91px, 51.60px); }
+    52.5% { transform: translate(109.55px, 46.55px); }
+    53.333% { transform: translate(107.68px, 41.66px); }
+    54.167% { transform: translate(105.30px, 37.00px); }
+    55% { transform: translate(102.45px, 32.61px); }
+    55.833% { transform: translate(99.16px, 28.54px); }
+    56.667% { transform: translate(95.46px, 24.84px); }
+    57.5% { transform: translate(91.39px, 21.55px); }
+    58.333% { transform: translate(87.00px, 18.70px); }
+    59.167% { transform: translate(82.34px, 16.32px); }
+    60% { transform: translate(77.45px, 14.45px); }
+    60.833% { transform: translate(72.40px, 13.09px); }
+    61.667% { transform: translate(67.23px, 12.27px); }
+    62.5% { transform: translate(62.00px, 12.00px); }
+    63.333% { transform: translate(56.77px, 12.27px); }
+    64.167% { transform: translate(51.60px, 13.09px); }
+    65% { transform: translate(46.55px, 14.45px); }
+    65.833% { transform: translate(41.66px, 16.32px); }
+    66.667% { transform: translate(37.00px, 18.70px); }
+    67.5% { transform: translate(32.61px, 21.55px); }
+    68.333% { transform: translate(28.54px, 24.84px); }
+    69.167% { transform: translate(24.84px, 28.54px); }
+    70% { transform: translate(21.55px, 32.61px); }
+    70.833% { transform: translate(18.70px, 37.00px); }
+    71.667% { transform: translate(16.32px, 41.66px); }
+    72.5% { transform: translate(14.45px, 46.55px); }
+    73.333% { transform: translate(13.09px, 51.60px); }
+    74.167% { transform: translate(12.27px, 56.77px); }
+    75% { transform: translate(12.00px, 62.00px); }
+    75.833% { transform: translate(12.27px, 67.23px); }
+    76.667% { transform: translate(13.09px, 72.40px); }
+    77.5% { transform: translate(14.45px, 77.45px); }
+    78.333% { transform: translate(16.32px, 82.34px); }
+    79.167% { transform: translate(18.70px, 87.00px); }
+    80% { transform: translate(21.55px, 91.39px); }
+    80.833% { transform: translate(24.84px, 95.46px); }
+    81.667% { transform: translate(28.54px, 99.16px); }
+    82.5% { transform: translate(32.61px, 102.45px); }
+    83.333% { transform: translate(37.00px, 105.30px); }
+    84.167% { transform: translate(41.66px, 107.68px); }
+    85% { transform: translate(46.55px, 109.55px); }
+    85.833% { transform: translate(51.60px, 110.91px); }
+    86.667% { transform: translate(56.77px, 111.73px); }
+    87.5% { transform: translate(62.00px, 112.00px); }
+    88.333% { transform: translate(67.23px, 111.73px); }
+    89.167% { transform: translate(72.40px, 110.91px); }
+    90% { transform: translate(77.45px, 109.55px); }
+    90.833% { transform: translate(82.34px, 107.68px); }
+    91.667% { transform: translate(87.00px, 105.30px); }
+    92.5% { transform: translate(91.39px, 102.45px); }
+    93.333% { transform: translate(95.46px, 99.16px); }
+    94.167% { transform: translate(99.16px, 95.46px); }
+    95% { transform: translate(102.45px, 91.39px); }
+    95.833% { transform: translate(105.30px, 87.00px); }
+    96.667% { transform: translate(107.68px, 82.34px); }
+    97.5% { transform: translate(109.55px, 77.45px); }
+    98.333% { transform: translate(110.91px, 72.40px); }
+    99.167% { transform: translate(111.73px, 67.23px); }
+    100% { transform: translate(112.00px, 62.00px); }
   }
 
   .brand-mark:hover .brand-mark__mark,
   .brand-mark:focus-visible .brand-mark__mark { opacity: 0.75; }
-  .brand-mark:hover .brand-mark__trail,
-  .brand-mark:focus-visible .brand-mark__trail {
-    filter: drop-shadow(0 0 3px var(--color-accent))
-            drop-shadow(0 0 8px var(--color-accent))
-            drop-shadow(0 0 16px var(--color-accent));
+  .brand-mark:hover .brand-mark__dot,
+  .brand-mark:focus-visible .brand-mark__dot {
+    box-shadow: 0 0 3px var(--color-accent), 0 0 8px var(--color-accent), 0 0 16px var(--color-accent);
   }
 
   @media (prefers-reduced-motion: reduce) {

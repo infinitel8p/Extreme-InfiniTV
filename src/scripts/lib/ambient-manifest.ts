@@ -1,6 +1,8 @@
 // Ranked artwork rotation for the ambient/screensaver screen, biased toward watched/watching content.
 import { ensureLoaded, getContinueWatching, getRecents, getWatchlist, getWatchedSignals } from "@/scripts/lib/preferences.js"
 import { getCached, getCachedByKindPrefix, hydrate } from "@/scripts/lib/cache.js"
+import { t } from "@/scripts/lib/i18n.js"
+import { categoryNameOf, categoryVisibleFor } from "@/scripts/lib/category-visibility.ts"
 import { pickBecauseSeedPool, buildBecauseRow } from "@/scripts/lib/because-watched.ts"
 import type { LocalSimilarCandidate } from "@/scripts/lib/similar-local.ts"
 import { sanitizeProviderBackdropUrl } from "@/scripts/lib/morph-detail.ts"
@@ -255,6 +257,8 @@ async function collectRecommendedCandidates(
     if (!catalog.length) continue
     const picks = buildBecauseRow(seed, catalog as LocalSimilarCandidate[], {
       limit: RECOMMENDED_PICKS_PER_SEED,
+      isCandidateAllowed: (candidate) =>
+        categoryVisibleFor(playlistId, seed.kind, categoryNameOf(candidate, t("stream.uncategorized"))),
     })
     for (const pick of picks) {
       out.push({
