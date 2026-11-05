@@ -69,6 +69,7 @@ import { clearNativeDownloads } from "@/scripts/lib/downloads.js"
 import { clearImageCache } from "@/scripts/lib/img-cache"
 import { saveBackupSnapshot, loadBackupSnapshot, hasBackupSnapshot } from "@/scripts/lib/backup-snapshot"
 import { pickAndRestoreBackup, restoreBackupText } from "@/scripts/lib/restore-backup"
+import { exportBackupWithToasts } from "@/scripts/lib/export-backup"
 import { toastSuccess, toastError } from "@/scripts/lib/toast"
 import { log } from "@/scripts/lib/log"
 import {
@@ -467,6 +468,14 @@ const view: TvView = {
       })
 
       rows.push({
+        id: "export-backup",
+        icon: ICON_DOWNLOAD,
+        label: t("settings.backup.export"),
+        kind: "action",
+        onActivate: () => void exportBackup(),
+      })
+
+      rows.push({
         id: "import-backup",
         icon: ICON_FOLDER_PLUS,
         label: t("settings.backup.import"),
@@ -526,6 +535,11 @@ const view: TvView = {
         successDuration: 6000,
         onRestored,
       })
+    }
+
+    async function exportBackup(): Promise<void> {
+      const written = await exportBackupWithToasts({ logTag: "tv:settings:export" })
+      if (written) void refreshSnapshotAvailability()
     }
 
     async function refreshSnapshotAvailability(): Promise<void> {

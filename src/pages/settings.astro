@@ -2756,6 +2756,7 @@ const navStructure: NavSection[] = [
     import { SUBTITLE_LANGUAGES, subtitleLanguageName } from "@/scripts/lib/subtitle-languages.ts"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
     import { bindBackupRestore, restoreBackupText } from "@/scripts/lib/restore-backup.js"
+    import { exportBackupWithToasts } from "@/scripts/lib/export-backup.ts"
     import {
       saveBackupSnapshot,
       loadBackupSnapshot,
@@ -3309,74 +3310,11 @@ const navStructure: NavSection[] = [
     exportBtn?.addEventListener("click", async () => {
       setLoading(exportBtn, true)
       try {
-        const { exportAll, suggestedFilename } = await import("@/scripts/lib/backup.js")
-        const snapshot = await exportAll()
-        const json = JSON.stringify(snapshot, null, 2)
-        const filename = suggestedFilename()
-        let savedTo = ""
-        if (isTauri && isAndroid) {
-          const androidFs = await import("@/scripts/lib/android-fs.js")
-          let pickerError = null
-          try {
-            const written = await androidFs.saveJsonFile(filename, json)
-            if (!written) {
-              setLoading(exportBtn, false)
-              return
-            }
-          } catch (e) {
-            pickerError = e
-            log.warn(
-              "[settings:export] SAF save picker failed, falling back to public Download/:",
-              e
-            )
-          }
-          if (pickerError) {
-            try {
-              const publicPath = await androidFs.savePublicJsonFile(filename, json)
-              savedTo = publicPath || ""
-            } catch (publicErr) {
-              log.error("[settings:export] public Download/ save failed:", publicErr)
-              toastError(t("settings.toast.backupExportFail"), {
-                description:
-                  (publicErr && publicErr.message) ||
-                  (pickerError && pickerError.message) ||
-                  "Android FS is not available.",
-                duration: 7000,
-              })
-              return
-            }
-          }
-        } else if (isTauri) {
-          const { save } = await import("@tauri-apps/plugin-dialog")
-          const target = await save({
-            defaultPath: filename,
-            filters: [{ name: "JSON", extensions: ["json"] }],
-          })
-          if (!target) {
-            setLoading(exportBtn, false)
-            return
-          }
-          const { writeTextFile } = await import("@tauri-apps/plugin-fs")
-          await writeTextFile(target, json)
-          savedTo = target
-        } else {
-          await downloadBlobWeb(filename, json)
+        const written = await exportBackupWithToasts({ logTag: "settings:export" })
+        if (written) {
+          flashMsg(backupMsgEl, "Saved.")
+          await refreshRestoreLastVisibility()
         }
-        toastSuccess(t("settings.toast.backupExported"), {
-          description: savedTo
-            ? `${snapshot.creds.entries.length} playlist(s) - ${savedTo}`
-            : `${snapshot.creds.entries.length} playlist(s).`,
-          duration: 6000,
-        })
-        flashMsg(backupMsgEl, "Saved.")
-        saveBackupSnapshot()
-          .then(refreshRestoreLastVisibility)
-          .catch((err) => log.warn("[settings:export] backup snapshot refresh failed:", err))
-      } catch (e) {
-        log.error("[settings:export] failed:", e)
-        toastError(t("settings.toast.backupExportFail"), {
-          description: (e && e.message) || "See console.",
-        })
       } finally {
         setLoading(exportBtn, false)
       }

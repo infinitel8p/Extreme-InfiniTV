@@ -2,16 +2,22 @@
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { t, applyI18nDOM, LOCALE_EVENT } from "@/scripts/lib/i18n"
 import { navigate } from "astro:transitions/client"
-import { addEntry, getEntries, resolveServerScheme, resolveM3UScheme, updateEntry } from "@/scripts/lib/creds.js"
+import { addEntry, getEntries, isTauri, resolveServerScheme, resolveM3UScheme, updateEntry } from "@/scripts/lib/creds.js"
 import { parsePlaylistLinks, type ParsedXtreamCandidate } from "@/scripts/lib/playlist-link"
 import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
 import { toastSuccess, toastWarn } from "@/scripts/lib/toast"
 import { classifyError, describeClassifiedError } from "@/scripts/lib/provider-error.js"
 import { ICON_CHEVRON_DOWN, ICON_X } from "@/scripts/lib/icons"
+import {
+  NoFilePickerError,
+  pickLocalPlaylistFile,
+  validatePickedPlaylist,
+  type PickedPlaylist,
+} from "@/scripts/lib/pick-local-playlist"
 
 const EPG_URL_RX = /^https?:\/\/[^\s]+$/i
 
-type Method = "xtream" | "m3u"
+type Method = "xtream" | "m3u" | "local"
 
 interface XtreamTestResult {
   status: "active" | "expired" | "inactive" | "unavailable"
@@ -32,6 +38,7 @@ interface Refs {
   form: HTMLFormElement
   methodXtream: HTMLButtonElement
   methodM3u: HTMLButtonElement
+  methodLocal: HTMLButtonElement | null
   pasteLabel: HTMLElement
   pasteInput: HTMLInputElement
   mirrorHint: HTMLElement
@@ -42,6 +49,9 @@ interface Refs {
   togglePasswordBtn: HTMLButtonElement
   m3uFields: HTMLElement
   m3uUrlInput: HTMLInputElement
+  localFields: HTMLElement
+  localPickBtn: HTMLButtonElement
+  localFileNameEl: HTMLElement
   epgBlock: HTMLElement
   epgToggleBtn: HTMLButtonElement
   epgToggleChevron: HTMLElement
@@ -94,6 +104,10 @@ const M3U_REASON_KEY: Record<string, string> = {
   unknown: "login.status.playlistFetchFailed",
 }
 
+function stripPlaylistExtension(fileName: string): string {
+  return fileName.replace(/\.m3u8?$/i, "")
+}
+
 function describeXtreamResult(result: XtreamTestResult): string {
   if (result.status === "active") return t("login.status.connected")
   if (result.status === "expired") return t("login.status.expired")
@@ -127,7 +141,7 @@ function buildMarkup(): string {
           </p>
         </header>
 
-        <div data-role="method-tablist" role="tablist" class="grid grid-cols-2 gap-2 rounded-2xl border border-line bg-surface p-1.5">
+        <div data-role="method-tablist" role="tablist" class="grid ${isTauri ? "grid-cols-3" : "grid-cols-2"} gap-2 rounded-2xl border border-line bg-surface p-1.5">
           <button type="button" data-role="method-xtream" role="tab" data-focus-key="method:xtream" data-tv-autofocus
                   class="flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors">
             <span data-i18n="login.tab.subscription" class="text-base font-medium">I have a subscription</span>
@@ -138,6 +152,15 @@ function buildMarkup(): string {
             <span data-i18n="login.tab.url" class="text-base font-medium">I have a playlist URL</span>
             <span data-i18n="login.tab.url.sub" class="text-xs font-medium uppercase tracking-wider opacity-70">M3U / M3U8</span>
           </button>
+          ${
+            isTauri
+              ? `<button type="button" data-role="method-local" role="tab" data-focus-key="method:local"
+                  class="flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors">
+            <span data-i18n="login.tab.local" class="text-base font-medium">I have a playlist file</span>
+            <span data-i18n="login.tab.local.sub" class="text-xs font-medium uppercase tracking-wider opacity-70">.m3u / .m3u8</span>
+          </button>`
+              : ""
+          }
         </div>
 
         <form data-role="form" class="flex flex-col gap-4" autocomplete="off">
@@ -184,6 +207,18 @@ function buildMarkup(): string {
                      autocapitalize="off" spellcheck="false" inputmode="url"
                      placeholder="example.com/playlist.m3u8" class="${TV_INPUT_CLASS}" />
             </label>
+          </div>
+
+          <div data-role="local-fields" class="hidden flex-col gap-3">
+            <span data-i18n="login.field.localFile" class="${TV_LABEL_CLASS}">Playlist file</span>
+            <div class="flex items-center gap-3">
+              <button type="button" data-role="local-pick" data-focus-key="local-pick"
+                      class="btn shrink-0 min-h-11 px-7 text-base tv-focus-inset">
+                <span data-i18n="tv.login.field.localFile.pick">Choose file</span>
+              </button>
+              <span data-role="local-file-name" data-i18n="login.field.localFile.none" class="min-w-0 truncate text-base text-fg-3">No file selected.</span>
+            </div>
+            <p data-i18n="login.field.localFile.helper" class="text-sm text-fg-3">Pick a .m3u or .m3u8 file from your device.</p>
           </div>
 
           <div data-role="epg-block" class="flex flex-col gap-2">
@@ -277,6 +312,7 @@ function collectRefs(root: HTMLElement): Refs {
     form: query("form"),
     methodXtream: query("method-xtream"),
     methodM3u: query("method-m3u"),
+    methodLocal: root.querySelector<HTMLButtonElement>('[data-role="method-local"]'),
     pasteLabel: query("paste-label"),
     pasteInput: query("paste"),
     mirrorHint: query("mirror-hint"),
@@ -287,6 +323,9 @@ function collectRefs(root: HTMLElement): Refs {
     togglePasswordBtn: query("toggle-password"),
     m3uFields: query("m3u-fields"),
     m3uUrlInput: query("m3u-url"),
+    localFields: query("local-fields"),
+    localPickBtn: query("local-pick"),
+    localFileNameEl: query("local-file-name"),
     epgBlock: query("epg-block"),
     epgToggleBtn: query("epg-toggle"),
     epgToggleChevron: query("epg-toggle-chevron"),
@@ -338,6 +377,7 @@ const view: TvView = {
     let epgPanelOpen = false
     let epgPanelToggleToken = 0
     let epgDisableChecked = false
+    let pickedLocal: PickedPlaylist | null = null
 
     function paintMethodButtons(): void {
       refs.methodXtream.className =
@@ -348,6 +388,12 @@ const view: TvView = {
         (method === "m3u" ? ACTIVE_METHOD_CLASS : IDLE_METHOD_CLASS)
       refs.methodXtream.setAttribute("aria-selected", String(method === "xtream"))
       refs.methodM3u.setAttribute("aria-selected", String(method === "m3u"))
+      if (refs.methodLocal) {
+        refs.methodLocal.className =
+          "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors tv-focus-inset " +
+          (method === "local" ? ACTIVE_METHOD_CLASS : IDLE_METHOD_CLASS)
+        refs.methodLocal.setAttribute("aria-selected", String(method === "local"))
+      }
     }
 
     function setMethod(next: Method): void {
@@ -357,6 +403,10 @@ const view: TvView = {
       refs.xtreamFields.classList.toggle("flex", next === "xtream")
       refs.m3uFields.classList.toggle("hidden", next !== "m3u")
       refs.m3uFields.classList.toggle("flex", next === "m3u")
+      refs.localFields.classList.toggle("hidden", next !== "local")
+      refs.localFields.classList.toggle("flex", next === "local")
+      refs.pasteLabel.classList.toggle("hidden", next === "local" || !!editingEntry)
+      refs.dnsLabel.classList.toggle("hidden", next === "local")
       refs.epgDisableRow.classList.toggle("hidden", next !== "xtream")
       paintMethodButtons()
       clearStatus()
@@ -546,7 +596,8 @@ const view: TvView = {
     }
 
     function focusFirstField(): void {
-      const target = method === "xtream" ? refs.serverUrlInput : refs.m3uUrlInput
+      const target =
+        method === "xtream" ? refs.serverUrlInput : method === "local" ? refs.localPickBtn : refs.m3uUrlInput
       target?.focus()
     }
 
@@ -566,6 +617,7 @@ const view: TvView = {
         refs.nameInput,
         refs.methodXtream,
         refs.methodM3u,
+        refs.localPickBtn,
         refs.connectBtn,
         refs.saveAnywayBtn,
       ]) {
@@ -576,7 +628,59 @@ const view: TvView = {
       )) {
         el.disabled = next
       }
+      if (refs.methodLocal) refs.methodLocal.disabled = next
       refs.cancelBtn.disabled = next || !cancelAllowed
+    }
+
+    function paintLocalFileName(): void {
+      if (pickedLocal) {
+        refs.localFileNameEl.removeAttribute("data-i18n")
+        refs.localFileNameEl.textContent = pickedLocal.name
+        refs.localFileNameEl.classList.replace("text-fg-3", "text-fg-2")
+      } else {
+        refs.localFileNameEl.setAttribute("data-i18n", "login.field.localFile.none")
+        refs.localFileNameEl.textContent = t("login.field.localFile.none")
+        refs.localFileNameEl.classList.replace("text-fg-2", "text-fg-3")
+      }
+    }
+
+    async function onLocalPick(): Promise<void> {
+      if (busy) return
+      clearStatus()
+      setBusy(true)
+      try {
+        const picked = await pickLocalPlaylistFile()
+        if (destroyed || !picked) return
+        const validation = validatePickedPlaylist(picked)
+        if (!validation.ok) {
+          pickedLocal = null
+          paintLocalFileName()
+          setStatus(
+            "unavailable",
+            t(validation.reasonKey, validation.size != null ? { size: validation.size.toLocaleString() } : undefined)
+          )
+          return
+        }
+        pickedLocal = picked
+        paintLocalFileName()
+        if (!refs.nameInput.value.trim()) refs.nameInput.value = stripPlaylistExtension(picked.name)
+        setStatus(
+          "active",
+          t("login.status.playlistOk") +
+            (validation.entryCount
+              ? t("login.status.playlistEntries", { count: validation.entryCount.toLocaleString() })
+              : ".")
+        )
+      } catch (error) {
+        if (destroyed) return
+        if (error instanceof NoFilePickerError) setStatus("unavailable", t("login.status.localPickerUnavailable"))
+        else setStatus("unavailable", describeSaveError(error))
+      } finally {
+        if (!destroyed) {
+          setBusy(false)
+          refs.localPickBtn?.focus()
+        }
+      }
     }
 
     function hideSaveAnywayButton(): void {
@@ -758,6 +862,32 @@ const view: TvView = {
       await navigate("/tv", { history: "replace" })
     }
 
+    async function connectLocal(): Promise<void> {
+      if (!pickedLocal || !pickedLocal.text) {
+        setStatus("unavailable", t("login.status.localPickFirst"))
+        focusFirstField()
+        return
+      }
+      const validation = validatePickedPlaylist(pickedLocal)
+      if (!validation.ok) {
+        setStatus("unavailable", t(validation.reasonKey))
+        return
+      }
+      const epgForm = readEpgForm()
+      const titleValue = refs.nameInput.value.trim() || stripPlaylistExtension(pickedLocal.name)
+      const entry = await addEntry({
+        type: "local-m3u",
+        title: titleValue,
+        content: pickedLocal.text,
+        sourceName: pickedLocal.name,
+        epgUrl: epgForm.epgUrl || validation.epgUrl,
+        additionalEpgUrls: epgForm.additionalEpgUrls,
+      })
+      if (destroyed) return
+      toastSuccess(t("tv.login.toast.saved", { title: entry.title }))
+      await navigate("/tv", { history: "replace" })
+    }
+
     async function saveWithoutTest(): Promise<void> {
       const dns = refs.dnsInput.value.trim() || undefined
       const epgForm = readEpgForm()
@@ -922,6 +1052,7 @@ const view: TvView = {
       setBusy(true)
       try {
         if (method === "xtream") await connectXtream()
+        else if (method === "local") await connectLocal()
         else await connectM3U()
       } catch (error) {
         if (!destroyed) setStatus("unavailable", describeSaveError(error))
@@ -1052,6 +1183,8 @@ const view: TvView = {
 
     refs.methodXtream.addEventListener("click", () => setMethod("xtream"))
     refs.methodM3u.addEventListener("click", () => setMethod("m3u"))
+    refs.methodLocal?.addEventListener("click", () => setMethod("local"))
+    refs.localPickBtn.addEventListener("click", () => void onLocalPick())
     refs.pasteInput.addEventListener("input", onPasteInput)
     refs.togglePasswordBtn.addEventListener("click", togglePasswordVisibility)
     refs.epgToggleBtn.addEventListener("click", () => setEpgPanelOpen(!epgPanelOpen))

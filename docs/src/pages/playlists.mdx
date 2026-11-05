@@ -52,6 +52,8 @@ A bare direct stream link works too: paste a single `.m3u8` URL that isn't a pla
 
 Got a `.m3u` file instead of a URL? Use **Choose file…** on the login screen to load it straight from your device. The playlist is stored locally, so it keeps working with no server involved.
 
+On Android TV the add-playlist screen has an **I have a playlist file** tab for the same thing. If the system file picker is missing (Fire TV has none), the app falls back to a generic picker; with no file manager app installed you'll see "No file picker on this device. Install a file manager app and try again."
+
 <Callout type="note">
   Just want to try the app? The login screen also offers a **Demo (iptv-org)** playlist - a free public playlist you can remove at any time.
 </Callout>
@@ -172,6 +174,8 @@ For M3U playlists, if just one or two channels look shifted while the rest are f
 />
 
 **Settings > Data > Backup** exports a single JSON file containing your playlists, preferences, and app settings. Import it on another device to bring everything across.
+
+On Android TV the same actions are the **Export to file** and **Import from file** rows in the TV Settings list. On devices without a Save As dialog, the export is written to `Download/Extreme InfiniTV/`.
 
 <Callout type="warning">
   The export includes your credentials in plain JSON. Treat the file like a password manager export: don't email it, don't drop it in a shared folder, and delete it from any temporary location once you've restored on the target device.

@@ -422,7 +422,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					<input
 						id="localFileInput"
 						type="file"
-						accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl"
+						accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,application/x-mpegurl,text/plain"
 						class="hidden"
 					/>
 				</label>
@@ -1350,10 +1350,12 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		localPickBtn.disabled = true;
 		try {
 			let picked = null;
+			let pickerError = null;
 			if (isAndroidFsActive()) {
 				try {
 					picked = await pickM3UFile({ maxBytes: MAX_LOCAL_M3U_BYTES });
 				} catch (err) {
+					pickerError = err;
 					log.warn("[xt:login] android-fs picker failed, falling back:", err);
 				}
 			} else if (isTauri) {
@@ -1363,6 +1365,12 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					log.warn("[xt:login] tauri file picker failed, falling back:", err);
 				}
 			}
+			if (!picked && isAndroidFsActive()) {
+				if (pickerError) {
+					showStatus("unavailable", t("login.status.localPickerUnavailable"));
+				}
+				return;
+			}
 			if (!picked) {
 				localFileInput.value = "";
 				localFileInput.click();
@@ -1370,7 +1378,12 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 			}
 			if (picked.oversize || (picked.size && picked.size > MAX_LOCAL_M3U_BYTES)) {
 				const oversizeBytes = picked.size || picked.text?.length || 0;
-				showStatus("unavailable", t("login.status.localTooLarge", { size: oversizeBytes.toLocaleString() }));
+				showStatus(
+					"unavailable",
+					oversizeBytes
+						? t("login.status.localTooLarge", { size: oversizeBytes.toLocaleString() })
+						: t("login.status.localTooLargeUnknown")
+				);
 				return;
 			}
 			if (picked.text && picked.text.length > MAX_LOCAL_M3U_BYTES) {
