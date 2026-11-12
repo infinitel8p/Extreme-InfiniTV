@@ -25,7 +25,7 @@
     "fetch-ffmpeg": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs"
   },
   "dependencies": {
-    "@astrojs/svelte": "^9.0.1",
+    "@astrojs/svelte": "^9.1.2",
     "@fontsource-variable/geist": "5.3.0",
     "@fontsource/instrument-serif": "5.3.0",
     "@tabler/icons-svelte": "^3.46.0",
