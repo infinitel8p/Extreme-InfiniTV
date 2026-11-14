@@ -472,12 +472,18 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     hideLayer?.classList.remove("xt-ambient-layer-visible", "xt-ambient-kenburns")
 
     if (dom.posterEl) {
+      const posterEl = dom.posterEl
       if (model.posterUrl) {
-        dom.posterEl.src = model.posterUrl
-        dom.posterEl.classList.remove("hidden")
+        posterEl.onerror = () => {
+          posterEl.classList.add("hidden")
+          posterEl.removeAttribute("src")
+        }
+        posterEl.src = model.posterUrl
+        posterEl.classList.remove("hidden")
       } else {
-        dom.posterEl.classList.add("hidden")
-        dom.posterEl.removeAttribute("src")
+        posterEl.onerror = null
+        posterEl.classList.add("hidden")
+        posterEl.removeAttribute("src")
       }
     }
 

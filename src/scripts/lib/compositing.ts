@@ -6,7 +6,7 @@ import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
 
 export type CompositingSetting = "auto" | "fast" | "safe" | "fast-trial"
-export type CompositingDetection = "raspberry-pi" | "nvidia" | "vm" | null
+export type CompositingDetection = "raspberry-pi" | "nvidia" | "vm" | "appimage" | null
 
 export interface CompositingState {
   platformSupported: boolean
@@ -15,6 +15,8 @@ export interface CompositingState {
   active: "fast" | "safe"
   envOverride: boolean
   trialActive: boolean
+  webkitVersion: string | null
+  viewTransitionsDisabled: boolean
 }
 
 const isTauri =

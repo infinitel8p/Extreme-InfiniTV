@@ -7,6 +7,8 @@ const getCastSessionMock = vi.fn()
 const sessionAsDeviceMock = vi.fn()
 const fetchCastStateMock = vi.fn()
 const fetchCastStateWithFallbackMock = vi.fn()
+const logWarnMock = vi.fn()
+const logInfoMock = vi.fn()
 
 vi.mock("@/scripts/lib/tv-cast.js", async () => {
   const actual = await vi.importActual<typeof import("@/scripts/lib/tv-cast")>("@/scripts/lib/tv-cast.js")
@@ -18,6 +20,16 @@ vi.mock("@/scripts/lib/tv-cast.js", async () => {
     fetchCastStateWithFallback: (...args: unknown[]) => fetchCastStateWithFallbackMock(...args),
   }
 })
+
+vi.mock("@/scripts/lib/log.js", () => ({
+  log: {
+    warn: (...args: unknown[]) => logWarnMock(...args),
+    info: (...args: unknown[]) => logInfoMock(...args),
+    error: vi.fn(),
+    debug: vi.fn(),
+    log: vi.fn(),
+  },
+}))
 
 import {
   subscribeCastStateFeed,
@@ -57,6 +69,8 @@ beforeEach(() => {
   sessionAsDeviceMock.mockReset().mockReturnValue(DEVICE)
   fetchCastStateMock.mockReset()
   fetchCastStateWithFallbackMock.mockReset()
+  logWarnMock.mockReset()
+  logInfoMock.mockReset()
 })
 
 afterEach(() => {
@@ -222,6 +236,37 @@ describe("subscribeCastStateFeed onHealth transitions", () => {
 
     await vi.advanceTimersByTimeAsync(1000)
     expect(onHealth).toHaveBeenLastCalledWith({ consecutiveMisses: 0, transport: "poll" })
+
+    unsubscribe()
+  })
+})
+
+describe("subscribeCastStateFeed transport logging", () => {
+  it("logs the WebSocket attempt failure and the fallback to polling", () => {
+    fetchCastStateMock.mockResolvedValue({ state: "playing", positionSeconds: 1 })
+    const unsubscribe = subscribeCastStateFeed(vi.fn(), { cadenceMs: 1000 })
+
+    expect(logWarnMock).toHaveBeenCalledWith("[xt:cast-state-feed] WebSocket attempt failed")
+    expect(logInfoMock).toHaveBeenCalledWith("[xt:cast-state-feed] transport: poll")
+
+    unsubscribe()
+  })
+
+  it("logs device, transport and miss count when the feed is lost", async () => {
+    fetchCastStateMock.mockResolvedValue(null)
+    fetchCastStateWithFallbackMock.mockResolvedValue(null)
+    const onLost = vi.fn()
+    const unsubscribe = subscribeCastStateFeed(vi.fn(), { cadenceMs: 1000, onLost })
+
+    for (let tick = 0; tick < MAX_CONSECUTIVE_MISSES; tick++) {
+      await vi.advanceTimersByTimeAsync(1000)
+    }
+
+    expect(logWarnMock).toHaveBeenCalledWith("[xt:cast-state-feed] feed lost", {
+      device: DEVICE.name,
+      transport: "poll",
+      misses: MAX_CONSECUTIVE_MISSES,
+    })
 
     unsubscribe()
   })

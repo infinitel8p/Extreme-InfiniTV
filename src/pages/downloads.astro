@@ -190,6 +190,7 @@ import {
     import { t } from "@/scripts/lib/i18n.js"
     import { toastError } from "@/scripts/lib/toast.ts"
     import { log } from "@/scripts/lib/log.ts"
+    import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
     import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 
     const isAndroid = /Android/i.test(navigator.userAgent || "")
@@ -736,10 +737,10 @@ import {
     function buildSourceHref(source: any): string | null {
       if (!source) return null
       if (source.kind === "vod" && source.id != null) {
-        return `/movies/detail?id=${encodeURIComponent(String(source.id))}`
+        return detailHrefFor("vod", source.id, { playlistId: source.playlistId })
       }
       if (source.kind === "episode" && source.seriesId != null) {
-        return `/series/detail?id=${encodeURIComponent(String(source.seriesId))}`
+        return detailHrefFor("series", source.seriesId, { playlistId: source.playlistId })
       }
       return null
     }
@@ -940,14 +941,15 @@ import {
 
       const src = d.source
       if (src?.kind === "vod" && src.id != null) {
-        location.href =
-          `/movies/detail?id=${encodeURIComponent(String(src.id))}&autoplay=1`
+        location.href = detailHrefFor("vod", src.id, { playlistId: src.playlistId, autoplay: true })
         return
       }
       if (src?.kind === "episode" && src.seriesId != null) {
-        const epId = src.id != null ? `&episode=${encodeURIComponent(String(src.id))}` : ""
-        location.href =
-          `/series/detail?id=${encodeURIComponent(String(src.seriesId))}&autoplay=1${epId}`
+        location.href = detailHrefFor("series", src.seriesId, {
+          playlistId: src.playlistId,
+          autoplay: true,
+          episode: src.id,
+        })
         return
       }
 

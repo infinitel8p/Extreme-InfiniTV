@@ -142,6 +142,24 @@ describe("buildCastChannelGroups", () => {
   it("returns no groups for an empty catalog", () => {
     expect(buildCastChannelGroups([], LABELS)).toEqual([])
   })
+
+  it("keeps a favorited header as a divider in the Favorites group", () => {
+    const catalog = [...CATALOG, channel(6, "Sports separator", { isHeader: true, category: "Sports" })]
+    const groups = buildCastChannelGroups(catalog, { ...LABELS, favorites: new Set([2, 6]) })
+    const favoritesGroup = groups.find((group) => group.key === GROUP_FAVORITES)!
+    const header = favoritesGroup.channels.find((entry) => entry.id === 6)
+    expect(header?.isHeader).toBe(true)
+  })
+
+  it("orders the Favorites group by favoritesOrder instead of catalog order", () => {
+    const groups = buildCastChannelGroups(CATALOG, {
+      ...LABELS,
+      favorites: new Set([1, 2, 5]),
+      favoritesOrder: [5, 1, 2],
+    })
+    const favoritesGroup = groups.find((group) => group.key === GROUP_FAVORITES)!
+    expect(favoritesGroup.channels.map((entry) => entry.id)).toEqual([5, 1, 2])
+  })
 })
 
 describe("searchCastChannels", () => {
@@ -165,6 +183,11 @@ describe("searchCastChannels", () => {
   it("ranks an exact channel-number hit above any name match", () => {
     const catalog = [channel(1, "Channel 55"), channel(3, "Movie Central", { chno: 55 })]
     expect(searchCastChannels(catalog, "55").map((entry) => entry.id)).toEqual([3, 1])
+  })
+
+  it("skips header rows", () => {
+    const catalog = [...CATALOG, channel(6, "Sports separator", { isHeader: true })]
+    expect(searchCastChannels(catalog, "sports separator")).toEqual([])
   })
 })
 

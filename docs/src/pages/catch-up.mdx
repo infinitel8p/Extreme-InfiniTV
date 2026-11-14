@@ -3,9 +3,12 @@ layout: ../layouts/DocsLayout.astro
 title: "Catch-up TV & replay"
 description: "Replay programmes from your provider's archive, pause and rewind live TV."
 lede: "If your provider keeps an archive for a channel, you can rewind live TV and replay past programmes - no recording involved."
+icon: "tv"
+cardOrder: 4
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
 
 ## What you need
 
@@ -23,6 +26,17 @@ Up to 7 days of past programmes are available. The real limit is how much archiv
 | A past programme | Open it and hit **Watch replay**. |
 | The programme airing right now | Open it and hit **Watch from start** to restart it from the beginning. |
 | **EPG** page | Browse day by day; replayable programmes are marked here too. |
+
+<Shot
+  src="Desktop/livetv-guide"
+  alt="Live TV in its idle state: channel list on the left, an unstarted player reading Pick a channel on the right"
+  caption="Live TV before a channel is tuned; the now/next row and programme panel fill in once you pick one."
+  markers={[
+    { at: "#list", note: "Channel list. A channel with an archive shows a replay marker here." },
+    { at: "#current", note: "Once you tune a channel, its now and next show up here." },
+    { at: "#epg-toggle", note: "Shows or hides the programme panel, where past programmes carry a Watch replay button." },
+  ]}
+/>
 
 While a replay is playing, a **Replay** badge shows on the channel and a **Back to live** row takes you straight back to the live broadcast.
 

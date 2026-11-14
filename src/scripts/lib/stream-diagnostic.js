@@ -146,13 +146,14 @@ function readMeta(response, method, startTs) {
   }
 }
 
-async function headOrGet(url, signal, logKind) {
+async function headOrGet(url, signal, logKind, options = {}) {
+  const dnsInit = options.dns !== undefined ? { dns: options.dns } : {}
   const start = performance.now()
   let headInfo = null
   try {
     const response = await providerFetchWithTimeout(
       url,
-      { method: "HEAD", logKind },
+      { method: "HEAD", logKind, ...dnsInit },
       FETCH_TIMEOUT_MS,
       "HEAD",
       signal
@@ -170,7 +171,7 @@ async function headOrGet(url, signal, logKind) {
   try {
     const response = await providerFetchWithTimeout(
       url,
-      { method: "GET", headers: { Range: "bytes=0-0" }, logKind },
+      { method: "GET", headers: { Range: "bytes=0-0" }, logKind, ...dnsInit },
       FETCH_TIMEOUT_MS,
       "GET",
       signal
@@ -191,16 +192,18 @@ async function headOrGet(url, signal, logKind) {
       latencyMs: Math.round(performance.now() - getStart),
       method: headInfo?.status ? "HEAD+GET" : "HEAD",
       error: String(getError?.message || getError),
+      // Web build only: a thrown TypeError from fetch is the CORS/mixed-content signature, not a dead stream.
+      blocked: !isTauri && getError?.name === "TypeError",
     }
   }
 }
 
-/** Thin HEAD/GET reachability probe reused by the playlist editor's "Check links" action; optional AbortSignal cancels the in-flight request. Optional `logKind` tags the net-log entries. */
-export async function probeStreamHead(url, signal, logKind) {
+/** Thin HEAD/GET reachability probe reused by the playlist editor's "Check links" action and the diagnostic runner; optional AbortSignal cancels the in-flight request, optional `logKind` tags the net-log entries, optional `options.dns` overrides resolution. */
+export async function probeStreamHead(url, signal, logKind, options = {}) {
   if (signal?.aborted) return { ok: false, status: null, aborted: true }
   try {
-    const result = await headOrGet(url, signal, logKind)
-    return { ok: !!result?.ok, status: result?.status ?? null }
+    const result = await headOrGet(url, signal, logKind, options)
+    return { ok: !!result?.ok, status: result?.status ?? null, blocked: !!result?.blocked }
   } catch (err) {
     return { ok: false, status: null, aborted: !!signal?.aborted || err?.name === "AbortError" }
   }

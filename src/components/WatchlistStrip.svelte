@@ -4,7 +4,8 @@
   // single content kind ("vod" / "series").
   import { onMount } from "svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-  import { getActiveEntry } from "@/scripts/lib/creds.js"
+  import { getMergedEntries } from "@/scripts/lib/creds.js"
+  import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
   import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import {
@@ -21,7 +22,6 @@
 
   /** @type {Array<{ kind: "vod"|"series", id: number, name: string, logo: string|null, href: string }>} */
   let entries = $state([])
-  let activePlaylistId = $state("")
   let locale = $state(0)
   // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
   // track it and re-evaluate on LOCALE_EVENT.
@@ -34,9 +34,8 @@
   const viewAllHref = $derived(
     filterKind === "all" ? "/watchlist" : `/watchlist?kind=${filterKind}`,
   )
-  /** @type {{ vod: Map<number, any>, series: Map<number, any> } | null} */
-  let lookups = null
-  let lookupsForPlaylistId = ""
+  /** @type {Map<string, { vod: Map<number, any>, series: Map<number, any> }>} */
+  let lookupsByPlaylist = new Map()
 
   function buildEntry(playlistId, kind, id, meta, lookups) {
     const item = lookups[kind]?.get(Number(id))
@@ -55,11 +54,8 @@
         logo: meta?.logo ?? item?.logo ?? null,
       })
     }
-    const href =
-      kind === "vod"
-        ? `/movies/detail?id=${encodeURIComponent(id)}`
-        : `/series/detail?id=${encodeURIComponent(id)}`
-    return { kind, id, name, logo, href }
+    const href = detailHrefFor(kind, id, { playlistId })
+    return { kind, id, playlistId, name, logo, href }
   }
 
   function buildLookupsFromCache(playlistId) {
@@ -76,28 +72,31 @@
     }
   }
 
-  function buildEntries(playlistId) {
-    /** @type {Array<{ kind: "vod"|"series", id: number, ts: number, meta: any }>} */
+  function buildEntries(playlistIds) {
+    /** @type {Array<{ playlistId: string, kind: "vod"|"series", id: number, ts: number, meta: any }>} */
     const merged = []
     const kindsToLoad = /** @type {Array<"vod"|"series">} */ (
       filterKind === "all" ? ["vod", "series"] : [filterKind]
     )
-    for (const kind of kindsToLoad) {
-      const bag = getWatchlist(playlistId, kind)
-      for (const [stringId, meta] of Object.entries(bag)) {
-        merged.push({
-          kind,
-          id: Number(stringId),
-          ts: meta?.ts || 0,
-          meta,
-        })
+    for (const playlistId of playlistIds) {
+      for (const kind of kindsToLoad) {
+        const bag = getWatchlist(playlistId, kind)
+        for (const [stringId, meta] of Object.entries(bag)) {
+          merged.push({
+            playlistId,
+            kind,
+            id: Number(stringId),
+            ts: meta?.ts || 0,
+            meta,
+          })
+        }
       }
     }
     merged.sort((left, right) => right.ts - left.ts)
     return merged
       .slice(0, 12)
       .map((row) =>
-        buildEntry(playlistId, row.kind, row.id, row.meta, lookups || {})
+        buildEntry(row.playlistId, row.kind, row.id, row.meta, lookupsByPlaylist.get(row.playlistId) || {})
       )
   }
 
@@ -105,30 +104,31 @@
 
   async function reload() {
     const generation = ++reloadGeneration
-    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    const [mergedEntries] = await Promise.all([getMergedEntries(), ensurePrefsLoaded()])
     if (generation !== reloadGeneration) return
-    if (!active) {
+    const playlistIds = mergedEntries.map((entry) => entry._id)
+    if (!playlistIds.length) {
       entries = []
-      activePlaylistId = ""
-      lookups = null
-      lookupsForPlaylistId = ""
+      lookupsByPlaylist = new Map()
       return
     }
-    activePlaylistId = active._id
-    if (lookupsForPlaylistId !== active._id || !lookups) {
+    const missing = playlistIds.filter((playlistId) => !lookupsByPlaylist.has(playlistId))
+    if (missing.length) {
       // Paint with whatever's cached in memory now, hydration upgrades after.
-      lookups = buildLookupsFromCache(active._id)
-      lookupsForPlaylistId = active._id
-      void Promise.allSettled([
-        hydrateCache(active._id, "vod"),
-        hydrateCache(active._id, "series"),
-      ]).then(() => {
+      const hydrations = []
+      for (const playlistId of missing) {
+        lookupsByPlaylist.set(playlistId, buildLookupsFromCache(playlistId))
+        hydrations.push(hydrateCache(playlistId, "vod"), hydrateCache(playlistId, "series"))
+      }
+      void Promise.allSettled(hydrations).then(() => {
         if (generation !== reloadGeneration) return
-        lookups = buildLookupsFromCache(active._id)
-        entries = buildEntries(active._id)
+        for (const playlistId of missing) {
+          lookupsByPlaylist.set(playlistId, buildLookupsFromCache(playlistId))
+        }
+        entries = buildEntries(playlistIds)
       }).catch(() => {})
     }
-    entries = buildEntries(active._id)
+    entries = buildEntries(playlistIds)
   }
 
   onMount(() => {
@@ -141,14 +141,14 @@
       pendingCatalog = true
       requestAnimationFrame(async () => {
         pendingCatalog = false
-        lookups = null
-        lookupsForPlaylistId = ""
+        lookupsByPlaylist = new Map()
         await reload()
       })
     }
     const onLocaleChange = () => { locale++ }
     const handlers = {
       "xt:active-changed": onCatalogChanged,
+      "xt:merged-changed": onCatalogChanged,
       "xt:catalog-warmed": onCatalogChanged,
       "xt:watchlist-changed": reload,
       [LOCALE_EVENT]: onLocaleChange,
@@ -186,7 +186,7 @@
       use:dragScroll
       class="watch-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as entry, idx (entry.kind + ":" + entry.id)}
+      {#each entries as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
         <li class="watch-item shrink-0 snap-start" data-kind={entry.kind} style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
@@ -196,7 +196,7 @@
               id: entry.id,
               name: entry.name,
               logo: entry.logo,
-              playlistId: activePlaylistId,
+              playlistId: entry.playlistId,
             }}
             class="watch-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line

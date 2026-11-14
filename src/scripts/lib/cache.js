@@ -389,6 +389,7 @@ function revalidateInBackground(entryId, kind, ttlMs, fetcher) {
       const data = await fetcher()
       setCached(entryId, kind, data, ttlMs)
       _revalidateFailedAt.delete(key)
+      if (kind === "live" || kind === "m3u") invalidateCustomDependents(entryId).catch(() => {})
       try {
         document.dispatchEvent(
           new CustomEvent(EVT_REVALIDATED, { detail: { entryId, kind } })
@@ -496,6 +497,32 @@ export function invalidate(entryId, kind) {
   const key = makeKey(entryId, kind)
   _mem.delete(key)
   idbDelete(key).catch(() => {})
+}
+
+// ---------------------------------------------------------------------------
+// Android memory pressure: drop the enrichment kinds' in-memory hydration
+// (they re-hydrate from IDB on demand), keeping the live/vod/series catalog
+// resident since Live TV/Movies/Series read it on every render.
+// ---------------------------------------------------------------------------
+const MEMORY_PRESSURE_KIND_PREFIXES = ["vod_info_", "series_info_", "tvdb_", "enriched_"]
+
+export function releaseMemoryPressureCache() {
+  let removed = 0
+  for (const key of [..._mem.keys()]) {
+    if (!key.startsWith(PREFIX)) continue
+    const colonIndex = key.indexOf(":", PREFIX.length)
+    if (colonIndex < 0) continue
+    const kind = key.slice(colonIndex + 1)
+    if (MEMORY_PRESSURE_KIND_PREFIXES.some((prefix) => kind.startsWith(prefix))) {
+      _mem.delete(key)
+      removed++
+    }
+  }
+  return removed
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("xt:memory-pressure", () => releaseMemoryPressureCache())
 }
 
 /** Newest fetchedAt across kinds for one playlist (in-memory only). */

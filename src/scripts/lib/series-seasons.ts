@@ -11,7 +11,7 @@
 
 import { getCached, setCached, hydrate } from "@/scripts/lib/cache.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
-import { getActiveEntry } from "@/scripts/lib/creds.js"
+import { getEntryById } from "@/scripts/lib/creds.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
 
@@ -142,6 +142,7 @@ function jobKey(playlistId: string, seriesId: string | number): string {
 
 if (typeof document !== "undefined") {
   document.addEventListener("xt:active-changed", () => _failed.clear())
+  document.addEventListener("xt:merged-changed", () => _failed.clear())
 }
 
 function pump(): void {
@@ -155,10 +156,9 @@ function pump(): void {
   }
 }
 
-async function isActivePlaylist(playlistId: string): Promise<boolean> {
+async function playlistExists(playlistId: string): Promise<boolean> {
   try {
-    const entry = await getActiveEntry()
-    return !!entry && entry._id === playlistId
+    return !!(await getEntryById(playlistId))
   } catch {
     return false
   }
@@ -172,10 +172,10 @@ async function fetchSeriesInfo(
     const response = await xtreamApiFetch("get_series_info", {
       series_id: String(seriesId),
       series: String(seriesId),
-    })
+    }, { entryId: playlistId })
     if (!response.ok) throw new Error(`get_series_info ${response.status}`)
     const data = await response.json()
-    if (!(await isActivePlaylist(playlistId))) return null
+    if (!(await playlistExists(playlistId))) return null
     setCached(playlistId, seriesInfoKind(seriesId), data, SERIES_INFO_TTL_MS)
     return data
   } catch (err) {
@@ -207,7 +207,7 @@ export function requestSeriesInfo(
 
   const promise = new Promise<any | null>((resolve) => {
     _queue.push(async () => {
-      if (!(await isActivePlaylist(playlistId))) {
+      if (!(await playlistExists(playlistId))) {
         resolve(null)
         return
       }

@@ -4,11 +4,13 @@ import { memoryConservative } from "@/scripts/tv/motion"
 import {
   createShortEpgCache,
   xtreamShortEpgAvailable,
+  fetchShortEpg,
   type XtreamCreds,
   type ShortEpgCache,
   type ShortEpgNowNext,
   type Programme as ShortEpgProgramme,
 } from "@/scripts/lib/short-epg.ts"
+import { displayedToUtcMs, utcToDisplayedMs } from "@/scripts/lib/epg-data.js"
 import type { NowNextSlot, Programme as NowNextProgramme } from "@/scripts/lib/now-next"
 
 export type TvEpgSource = "short-epg" | "xmltv-now-next" | "xmltv-full"
@@ -119,7 +121,11 @@ export function toXtreamCreds(
   return { host: creds.host, port: creds.port, user: creds.user, pass: creds.pass, entryId: playlistId }
 }
 
-const rawCache = createShortEpgCache()
+// Rows are raw provider epochs, so the comparison instant needs the offset removed too.
+const rawCache = createShortEpgCache({
+  fetchShortEpg: (creds, streamId, limit) =>
+    fetchShortEpg(creds, streamId, limit, displayedToUtcMs(creds.entryId ?? "", Date.now())),
+})
 
 function classifyNowNext(result: ShortEpgNowNext): "empty" | "nonEmpty" {
   return result.current || result.next ? "nonEmpty" : "empty"
@@ -151,36 +157,45 @@ export function tvShortEpgCache(): ShortEpgCache {
 }
 
 if (typeof document !== "undefined") {
-  document.addEventListener("xt:active-changed", () => cache.clear())
+  document.addEventListener("xt:active-changed", () => {
+    cache.clear()
+    shortEpgSamples.clear()
+  })
 }
 
-/** Maps a short-EPG now/next payload into the shared NowNextSlot shape rows/guide/OSD render. */
-export function shortEpgNowNextSlot(nowNext: ShortEpgNowNext | null, nowMs: number = Date.now()): NowNextSlot {
+/** Maps a short-EPG now/next payload (raw provider epoch) into the shared NowNextSlot shape, display-shifted. */
+export function shortEpgNowNextSlot(
+  nowNext: ShortEpgNowNext | null,
+  playlistId: string,
+  nowMs: number = Date.now()
+): NowNextSlot {
   const current = nowNext?.current ?? null
-  const span = current ? current.stop - current.start : 0
+  const currentStart = current ? utcToDisplayedMs(playlistId, current.start) : 0
+  const currentStop = current ? utcToDisplayedMs(playlistId, current.stop) : 0
+  const span = current ? currentStop - currentStart : 0
+  const next = nowNext?.next ?? null
   return {
     current: current
       ? {
           title: current.title,
-          start: current.start,
-          stop: current.stop,
-          progress: span > 0 ? Math.max(0, Math.min(1, (nowMs - current.start) / span)) : 0,
+          start: currentStart,
+          stop: currentStop,
+          progress: span > 0 ? Math.max(0, Math.min(1, (nowMs - currentStart) / span)) : 0,
         }
       : null,
-    next: nowNext?.next ? { title: nowNext.next.title, start: nowNext.next.start, stop: nowNext.next.stop } : null,
+    next: next
+      ? { title: next.title, start: utcToDisplayedMs(playlistId, next.start), stop: utcToDisplayedMs(playlistId, next.stop) }
+      : null,
   }
 }
 
-/** Maps short-EPG full-timeline rows into the now-next.ts Programme shape the guide panel renders. */
-export function shortEpgToGuideProgrammes(rows: ShortEpgProgramme[]): NowNextProgramme[] {
-  return rows.map((row) => ({
-    start: row.start,
-    stop: row.stop,
-    title: row.title,
-    desc: row.desc,
-    rawStart: row.start,
-    rawStop: row.stop,
-  }))
+/** Maps short-EPG full-timeline rows (raw provider epoch) into display-shifted now-next.ts Programme shape. */
+export function shortEpgToGuideProgrammes(rows: ShortEpgProgramme[], playlistId: string): NowNextProgramme[] {
+  return rows.map((row) => {
+    const start = utcToDisplayedMs(playlistId, row.start)
+    const stop = utcToDisplayedMs(playlistId, row.stop)
+    return { start, stop, title: row.title, desc: row.desc, rawStart: start, rawStop: stop }
+  })
 }
 
 /** Current/next straight off an already-fetched programme list - short-EPG has no tvgId map to key off. */

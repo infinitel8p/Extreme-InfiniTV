@@ -167,10 +167,16 @@ function onKey(ev: KeyboardEvent) {
   }
 }
 
+let scrollOrResizeRafId = 0
+
 function onScrollOrResize() {
-  if (lastTarget && lastTarget.isConnected) {
-    updatePosition(lastTarget, { skipAnimation: true })
-  }
+  if (scrollOrResizeRafId) return
+  scrollOrResizeRafId = requestAnimationFrame(() => {
+    scrollOrResizeRafId = 0
+    if (lastTarget && lastTarget.isConnected) {
+      updatePosition(lastTarget, { skipAnimation: true })
+    }
+  })
 }
 
 let attached = false
@@ -198,6 +204,8 @@ function detach() {
   window.removeEventListener("scroll", onScrollOrResize, true)
   window.removeEventListener("resize", onScrollOrResize)
   cancelAnimationFrame(rafId)
+  cancelAnimationFrame(scrollOrResizeRafId)
+  scrollOrResizeRafId = 0
   hideIndicator()
 }
 

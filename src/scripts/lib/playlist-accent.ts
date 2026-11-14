@@ -43,6 +43,34 @@ export async function applyEffectiveAccent(): Promise<void> {
   writeActiveAccentCache(overrideAccent)
 }
 
+/** Resolves the active accent to a plain "#rrggbb" hex, or "" if it can't be resolved. */
+export function resolveAccentHex(): string {
+  if (typeof document === "undefined") return ""
+  try {
+    const probe = document.createElement("span")
+    probe.style.color = "var(--color-accent)"
+    // The native player chrome is always dark, so it wants the dark swatch even in light theme.
+    probe.style.colorScheme = "dark"
+    const probeParent = document.body || document.documentElement
+    probeParent.appendChild(probe)
+    const computedColor = getComputedStyle(probe).color
+    probeParent.removeChild(probe)
+
+    const canvas = document.createElement("canvas")
+    canvas.width = 1
+    canvas.height = 1
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })
+    if (!ctx) return ""
+    ctx.fillStyle = computedColor
+    ctx.fillRect(0, 0, 1, 1)
+    const [red, green, blue] = ctx.getImageData(0, 0, 1, 1).data
+    const toHexByte = (value: number) => value.toString(16).padStart(2, "0")
+    return `#${toHexByte(red)}${toHexByte(green)}${toHexByte(blue)}`
+  } catch {
+    return ""
+  }
+}
+
 /** Boots the override system: applies it once, then keeps it in sync. */
 export function initPlaylistAccent(): void {
   applyEffectiveAccent()

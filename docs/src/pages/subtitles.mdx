@@ -3,6 +3,8 @@ layout: ../layouts/DocsLayout.astro
 title: "Subtitles"
 description: "Play movies and series with the subtitles embedded in the file, right from the built-in player."
 lede: "Movies and series episodes can carry subtitle tracks inside the video file itself. They're always off until you turn them on."
+icon: "subtitles"
+cardOrder: 6
 ---
 
 import Callout from "../components/Callout.astro"
@@ -31,6 +33,20 @@ On Android and the web, the built-in player can't read subtitles out of an MKV f
 <Callout type="note">
   The automatic fix for MKV needs FFmpeg. If it's not available, playback falls back to an external-player prompt instead of a silent or broken player - check **Settings > Watching > Playback** for FFmpeg status.
 </Callout>
+
+## Subtitles from OpenSubtitles
+
+When a file has no subtitles of its own, the player can search [OpenSubtitles.com](https://www.opensubtitles.com) for one. Use **Search subtitles...** in the player's subtitle menu, or let the app do it for you. Matches are added to the menu and nothing turns on until you pick one.
+
+Set it up in **Settings > Network > Subtitles**:
+
+- **Default subtitle language** and **Backup subtitle language** - the languages searched first. The default follows your app's language unless you pick one. These also set the preferred subtitle language when a movie or episode opens in MPV or VLC.
+- **Search automatically when playback starts** - off by default. When on, the app looks up subtitles in both languages as soon as playback begins.
+- **OpenSubtitles account** - optional. Without an account you get 5 subtitle downloads per day; a free OpenSubtitles account raises that limit. Once signed in, Settings shows how many downloads you have left today.
+
+If you hit the daily limit, the player tells you when it resets. Builds without an OpenSubtitles key hide the search options and keep only the language settings.
+
+Subtitles provided by OpenSubtitles.com.
 
 ## Adjusting subtitle timing
 

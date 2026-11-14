@@ -152,7 +152,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 				class="order-1 md:landscape:order-2 lg:order-2
 					md:landscape:flex-1 lg:flex-1 min-w-0 md:landscape:min-h-0 lg:min-h-0">
 				<div
-					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 md:landscape:min-h-0 lg:min-h-0">
+					class="xt-video-hole rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 md:landscape:min-h-0 lg:min-h-0">
 					<div
 						id="player-wrap"
 						class="player-wrap aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line flex items-center justify-center shrink-0 relative">
@@ -273,7 +273,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 								</button>
 							</div>
 						</div>
-						<div id="epg-list" class="space-y-2 text-sm px-1 pb-3"></div>
+						<div id="epg-list" class="space-y-2 text-sm px-1 pt-0.5 pb-3"></div>
 					</div>
 				</div>
 			</section>
@@ -313,6 +313,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 			justify-content: flex-start;
 		}
 		.player-wrap[data-radio-mode="on"] #player-empty { display: none !important; }
+		.player-wrap[data-mpv-embedded] #player-empty { display: none !important; }
 		.player-wrap[data-radio-mode="on"] .radio-display {
 			display: flex;
 			align-items: center;
@@ -426,7 +427,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 		/* Collapsed mobile EPG shows only the now-playing row; status text (loading/empty/error) stays visible.
 		   :global() because #epg-list children are inserted at runtime without Astro's scope attribute. */
 		@media (max-width: 767.98px), (max-width: 1023.98px) and (orientation: portrait) {
-			:global(#epg[data-epg-collapsed="true"] #epg-list > :is([data-epg-idx]:not([data-now-playing="true"]), .epg-day-sep, [data-epg-load-earlier])) {
+			:global(#epg[data-epg-collapsed="true"] #epg-list > :is([data-epg-idx]:not([data-now-playing="true"]), .epg-day-sep, [data-epg-load-earlier], [data-epg-load-later])) {
 				display: none;
 			}
 		}

@@ -31,8 +31,8 @@ export const CLASSIC_ROUTE_TABLE: Readonly<Record<string, string>> = {
   "/tv/login": "/login",
 }
 
-const QUERY_PRESERVING_TV_PATHS = new Set(["/tv/movies/detail", "/tv/series/detail", "/tv/search"])
-const QUERY_PRESERVING_CLASSIC_PATHS = new Set(["/movies/detail", "/series/detail", "/search"])
+const QUERY_PRESERVING_TV_PATHS = new Set(["/tv/movies/detail", "/tv/series/detail", "/tv/search", "/tv/login"])
+const QUERY_PRESERVING_CLASSIC_PATHS = new Set(["/movies/detail", "/series/detail", "/search", "/login"])
 
 export function normalizePathname(pathname: string): string {
   const collapsed = pathname.replace(/\/+$/, "")

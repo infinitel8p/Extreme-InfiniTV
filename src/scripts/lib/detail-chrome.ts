@@ -12,6 +12,7 @@ import {
 } from "@/scripts/lib/language-tags.ts"
 import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
 import { getGroupLanguages } from "@/scripts/lib/preferences.js"
+import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
 import type { CatalogGroupingIndex, GroupableRow } from "@/scripts/lib/language-groups.ts"
 
 // ----------------------------
@@ -290,11 +291,12 @@ export function renderSimilarRail(opts: {
   listEl: HTMLElement | null
   matches: EntryLike[]
   kind: EntryKind
-  activePlaylistId: string
+  playlistId: string
   detailHrefBase: string
   fallbackTitleKey: string
 }): void {
-  const { section, listEl, matches, kind, activePlaylistId, detailHrefBase, fallbackTitleKey } = opts
+  const { section, listEl, matches, kind, playlistId, detailHrefBase, fallbackTitleKey } = opts
+  const tv = detailHrefBase.startsWith("/tv")
   if (!section || !listEl || !matches.length) return
   listEl.replaceChildren()
   matches.forEach((entry, idx) => {
@@ -302,8 +304,8 @@ export function renderSimilarRail(opts: {
       entry,
       idx,
       kind,
-      activePlaylistId,
-      detailHref: (e) => `${detailHrefBase}?id=${encodeURIComponent(e.id)}`,
+      playlistId,
+      detailHref: (e) => detailHrefFor(kind, e.id, { playlistId, tv }),
       fallbackTitle: (e) => t(fallbackTitleKey, { id: e.id }),
       metaText: (e) => {
         const parts = []
@@ -341,22 +343,26 @@ export function renderLanguagePills(opts: {
   langsEl: HTMLElement | null
   item: { id: number; name: string } | null
   kind: EntryKind
-  activePlaylistId: string
+  playlistId?: string
+  /** @deprecated use playlistId */
+  activePlaylistId?: string
   catalog: GroupableRow[] | undefined
   getGroupingIndexFor: GroupingIndexLookup
   detailHrefBase: string
   groupingAllowed?: boolean
 }): void {
-  const { langsEl, item, kind, activePlaylistId, catalog, getGroupingIndexFor, detailHrefBase } = opts
+  const { langsEl, item, kind, catalog, getGroupingIndexFor, detailHrefBase } = opts
+  const playlistId = opts.playlistId ?? opts.activePlaylistId ?? ""
+  const tv = detailHrefBase.startsWith("/tv")
   const groupingAllowed = opts.groupingAllowed ?? getLanguageGroupingEnabled()
-  if (!langsEl || !item || !activePlaylistId || !catalog?.length) return
-  if (!groupingAllowed || !getGroupLanguages(activePlaylistId, kind)) {
+  if (!langsEl || !item || !playlistId || !catalog?.length) return
+  if (!groupingAllowed || !getGroupLanguages(playlistId, kind)) {
     langsEl.setAttribute("hidden", "")
     langsEl.replaceChildren()
     return
   }
 
-  const index = getGroupingIndexFor(activePlaylistId, catalog)
+  const index = getGroupingIndexFor(playlistId, catalog)
   const groupKey = index.keyByEntryId.get(item.id)
   const groupInfo = groupKey ? index.groupsByKey.get(groupKey) : null
   if (!groupInfo || groupInfo.entryIds.length < 2) {
@@ -438,7 +444,7 @@ export function renderLanguagePills(opts: {
         : "border-line text-fg-2 hover:text-accent hover:border-accent focus-visible:text-accent focus-visible:border-accent")
     pill.textContent = text
     if (isCurrent) pill.setAttribute("aria-current", "true")
-    else (pill as HTMLAnchorElement).href = `${detailHrefBase}?id=${encodeURIComponent(entryId)}`
+    else (pill as HTMLAnchorElement).href = detailHrefFor(kind, entryId, { playlistId, tv })
     langsEl.appendChild(pill)
   }
 

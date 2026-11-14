@@ -33,7 +33,8 @@ vi.mock("@/scripts/lib/epg-data.js", () => ({
   getNowNextForChannel: () => ({ current: null, next: null }),
 }))
 vi.mock("@/scripts/lib/preferences.js", () => ({
-  getFavorites: () => new Set([2]),
+  getFavorites: () => new Set([1, 2]),
+  getFavoritesOrdered: () => [2, 1],
   getHiddenCategories: () => new Set<string>(),
   getAllowedCategories: () => new Set<string>(),
   getCategoryMode: () => "hide",
@@ -93,6 +94,11 @@ describe("cast picker panel: channels", () => {
   it("opens on the group list with favorites and all channels first", () => {
     const groups = rows("[data-group-key]").map((row) => row.dataset.groupKey)
     expect(groups).toEqual(["__favorites__", "__all__", "Sports", "News", "Movies"])
+  })
+
+  it("orders the Favorites group by getFavoritesOrdered, not catalog order", () => {
+    rows("[data-group-key]")[0].click()
+    expect(rows("[data-item-id]").map((row) => row.dataset.itemId)).toEqual(["2", "1"])
   })
 
   it("drills into a group and lists its channels", () => {

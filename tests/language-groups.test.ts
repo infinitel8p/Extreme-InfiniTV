@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   buildGroupingIndex,
+  buildGroupingIndexesByPlaylist,
   pickPreferredEntryId,
   groupPassesLanguageFilter,
   collapseIntoDisplayGroups,
@@ -319,5 +320,24 @@ describe("groupPassesLanguageFilter", () => {
 
   it("never hides a group with unknown language tags", () => {
     expect(groupPassesLanguageFilter([], "DE")).toBe(true)
+  })
+})
+
+describe("buildGroupingIndexesByPlaylist", () => {
+  it("does not group the same id or title across playlists", () => {
+    const rows = [
+      { id: 7, name: "EN - Heat (1995)", tmdb: 949, playlistId: "pl-a" },
+      { id: 7, name: "DE - Heat (1995)", tmdb: 949, playlistId: "pl-b" },
+      { id: 8, name: "ES - Heat (1995)", tmdb: 949, playlistId: "pl-a" },
+    ]
+    const indexes = buildGroupingIndexesByPlaylist(rows)
+    expect([...indexes.keys()].sort()).toEqual(["pl-a", "pl-b"])
+    expect(indexes.get("pl-a")?.groupsByKey.get("t:949")?.entryIds.sort()).toEqual([7, 8])
+    expect(indexes.get("pl-b")?.groupsByKey.get("t:949")?.entryIds).toEqual([7])
+  })
+
+  it("files rows without a playlistId under the empty key", () => {
+    const indexes = buildGroupingIndexesByPlaylist([{ id: 1, name: "Solo", tmdb: 1 }])
+    expect(indexes.has("")).toBe(true)
   })
 })

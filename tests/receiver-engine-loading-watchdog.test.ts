@@ -75,13 +75,17 @@ vi.mock("@/scripts/lib/manifest-probe.js", () => ({
   messageKeyForProbeVerdict: () => null,
 }))
 
+class FakeElement extends EventTarget {
+  textContent = ""
+  offsetWidth = 0
+  classList = { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false }
+  focus(): void {
+    this.dispatchEvent(new Event("focus"))
+  }
+}
+
 function fakeElement(): HTMLElement {
-  return {
-    textContent: "",
-    offsetWidth: 0,
-    classList: { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false },
-    focus: () => {},
-  } as unknown as HTMLElement
+  return new FakeElement() as unknown as HTMLElement
 }
 
 function embeddedDom(): EmbeddedEngineDom {

@@ -2,7 +2,8 @@
 
 import { nextPaint, markLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
-import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
+import { getActiveEntry, getEntryById, entryToCreds } from "@/scripts/lib/creds.js"
+import { detailHrefFor, readDetailPlaylistParam } from "@/scripts/lib/detail-href.ts"
 import { getCached, setCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { ensureVod } from "@/scripts/lib/catalog.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
@@ -25,7 +26,8 @@ import {
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
 import { parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
-import { resolveTitleEnrichment } from "@/scripts/lib/enrichment.ts"
+import { resolveTitleEnrichmentDetailed } from "@/scripts/lib/enrichment.ts"
+import { cleanSubtitleTitle } from "@/scripts/lib/subtitle-fetch.ts"
 import { fillHeroGaps, type DetailHeroFields } from "@/scripts/tv/detail-enrich.ts"
 import {
   LANGUAGE_GROUPING_EVENT,
@@ -48,6 +50,7 @@ import { renderLanguagePills, type GroupingIndexLookup } from "@/scripts/lib/det
 import { getSharedGroupingIndex, isLanguageGroupingExplicitlyEnabled } from "@/scripts/lib/language-groups.ts"
 import { registerFocusSection } from "@/scripts/tv/focus"
 import { memoryConservative } from "@/scripts/tv/motion"
+import { selectTopK } from "@/scripts/lib/top-k.ts"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const RESUME_MIN_SECONDS = 30
@@ -114,14 +117,33 @@ function languageGroupingAllowed(): boolean {
   return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
 }
 
+// Keyed by catalog array identity (stable across renders of the same load) so the similar-rail
+// filter only ever bucket-scans the whole catalog once, instead of on every detail page visit.
+const categoryBucketCache = new WeakMap<CatalogRow[], Map<string, CatalogRow[]>>()
+
+function categoryBucket(catalog: CatalogRow[], category: string): CatalogRow[] {
+  let byCategory = categoryBucketCache.get(catalog)
+  if (!byCategory) {
+    byCategory = new Map()
+    for (const row of catalog) {
+      const bucket = byCategory.get(row.category)
+      if (bucket) bucket.push(row)
+      else byCategory.set(row.category, [row])
+    }
+    categoryBucketCache.set(catalog, byCategory)
+  }
+  return byCategory.get(category) || []
+}
+
 const view: TvView = {
   prepaint(root: HTMLElement, url: URL): boolean {
     const movieId = Number(url.searchParams.get("id") || "0")
-    if (!movieId || !lastKnownPlaylistId) return false
-    const cachedCatalog = (getCached(lastKnownPlaylistId, "vod")?.data || []) as CatalogRow[]
+    const prepaintPlaylistId = readDetailPlaylistParam(url.search) || lastKnownPlaylistId
+    if (!movieId || !prepaintPlaylistId) return false
+    const cachedCatalog = (getCached(prepaintPlaylistId, "vod")?.data || []) as CatalogRow[]
     const catalogRow = cachedCatalog.find((row) => Number(row.id) === movieId)
     if (!catalogRow) return false
-    markLastOpenedEntry({ kind: "vod", id: movieId })
+    markLastOpenedEntry({ kind: "vod", id: movieId, playlistId: prepaintPlaylistId })
     const chrome = createDetailChrome(root)
     chrome.setSkeleton(false)
     chrome.setHero(stubHero(catalogRow))
@@ -130,6 +152,7 @@ const view: TvView = {
   mount(root: HTMLElement, ctx: TvViewContext) {
     const movieId = Number(ctx.url.searchParams.get("id") || "0")
     const wantsAutoplay = ctx.url.searchParams.get("autoplay") === "1"
+    const requestedPlaylistId = readDetailPlaylistParam(ctx.url.search)
 
     const chrome = createDetailChrome(root)
 
@@ -150,6 +173,9 @@ const view: TvView = {
     similarRail.setLoading()
 
     let destroyed = false
+    // One controller for the whole mount: aborted on teardown so an in-flight vod_info
+    // fetch or enrichment chain never applies its result to a view that's already gone.
+    const abortController = new AbortController()
     let activePlaylistId = ""
     let creds: Creds = { host: "", port: "", user: "", pass: "" }
     let movie: CatalogRow | null = null
@@ -161,6 +187,7 @@ const view: TvView = {
     let heroDurationText = ""
     let heroRatingText = ""
     let heroYearText = ""
+    let resolvedTmdbId: number | null = null
     let enrichRequestId = 0
     let focusedPrimaryOnce = false
     let lastLanguageVariantsCatalog: CatalogRow[] = []
@@ -205,6 +232,18 @@ const view: TvView = {
       })
     }
 
+    function buildSubtitleContext() {
+      if (!movie) return undefined
+      const cleaned = cleanSubtitleTitle(movie.name)
+      const yearMatch = (heroYearText || String(movie.year || "")).match(/\d{4}/)
+      return {
+        kind: "movie" as const,
+        title: cleaned.title,
+        year: yearMatch ? Number(yearMatch[0]) : cleaned.year,
+        tmdbId: resolvedTmdbId ?? movie.tmdb ?? null,
+      }
+    }
+
     async function startPlayback(resumeSeconds: number): Promise<void> {
       if (!movie || !activePlaylistId) return
       await playVod(
@@ -216,6 +255,7 @@ const view: TvView = {
           containerExt,
           resumeSeconds,
           durationSeconds: knownDurationSeconds() || undefined,
+          subtitleContext: buildSubtitleContext(),
         },
         {
           onEnded: () => renderActions(),
@@ -398,15 +438,19 @@ const view: TvView = {
       const info = data?.info || data?.movie_data || {}
       const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData) ?? movie.tmdb ?? null
       try {
-        const enrichment = await resolveTitleEnrichment({
+        const details = await resolveTitleEnrichmentDetailed({
           kind: "movie",
           playlistId: activePlaylistId,
           itemId: String(movie.id),
           name: movie.name,
           year: parseInt(String(movie.year), 10) || null,
           providerTmdbId,
+          signal: abortController.signal,
         })
-        if (requestId !== enrichRequestId || !enrichment) return
+        if (requestId !== enrichRequestId) return
+        resolvedTmdbId = details?.tmdbId ?? resolvedTmdbId
+        const enrichment = details?.enrichment ?? null
+        if (!enrichment) return
         applyHeroFields(fillHeroGaps(currentHeroFields(), enrichment))
         if (!movie.logo && enrichment.posterUrl) movie.logo = enrichment.posterUrl
         renderHero()
@@ -444,17 +488,22 @@ const view: TvView = {
       }
       if (destroyed) return
       renderLanguageVariants(catalog)
-      const candidates = catalog
-        .filter((row) => row.id !== currentMovie.id && (!currentMovie.category || row.category === currentMovie.category))
-        .sort((left, right) => ratingSortValue(right.rating) - ratingSortValue(left.rating))
-        .slice(0, SIMILAR_LIMIT)
+      const pool = currentMovie.category ? categoryBucket(catalog, currentMovie.category) : catalog
+      const candidates = selectTopK(
+        pool.filter((row) => row.id !== currentMovie.id),
+        SIMILAR_LIMIT,
+        (left, right) => ratingSortValue(right.rating) - ratingSortValue(left.rating)
+      )
 
       const items: PosterCardItem[] = candidates.map((row) => ({
         railId: SIMILAR_FOCUS_SECTION_ID,
         kind: "vod",
         id: row.id,
         name: row.name,
-        href: `/tv/movies/detail?id=${encodeURIComponent(String(row.id))}`,
+        href: detailHrefFor("vod", row.id, {
+          tv: true,
+          playlistId: requestedPlaylistId ? activePlaylistId : undefined,
+        }),
         posterUrl: row.logo,
         meta: formatCardMeta(row.year, row.rating),
         ariaLabel: t("tv.aria.open", { name: row.name }),
@@ -516,9 +565,7 @@ const view: TvView = {
         })
         return
       }
-      markLastOpenedEntry({ kind: "vod", id: movieId })
-
-      const active = await getActiveEntry()
+      const active = (requestedPlaylistId && (await getEntryById(requestedPlaylistId))) || (await getActiveEntry())
       if (destroyed) return
       if (!active) {
         chrome.setSkeleton(false)
@@ -535,8 +582,9 @@ const view: TvView = {
 
       activePlaylistId = active._id
       lastKnownPlaylistId = activePlaylistId
+      markLastOpenedEntry({ kind: "vod", id: movieId, playlistId: activePlaylistId })
       await ensurePrefsLoaded()
-      creds = await loadCreds()
+      creds = entryToCreds(active)
       if (destroyed) return
 
       const cachedCatalog = (getCached(activePlaylistId, "vod")?.data || []) as CatalogRow[]
@@ -582,7 +630,11 @@ const view: TvView = {
 
       if (creds.host && creds.user && creds.pass) {
         try {
-          const response = await xtreamApiFetch("get_vod_info", { vod_id: String(movieId) })
+          const response = await xtreamApiFetch(
+            "get_vod_info",
+            { vod_id: String(movieId) },
+            { signal: abortController.signal, entryId: activePlaylistId }
+          )
           if (!response.ok) throw new Error(await response.text())
           const data = await response.json()
           if (destroyed || requestId !== enrichRequestId) return
@@ -600,6 +652,7 @@ const view: TvView = {
 
     return () => {
       destroyed = true
+      abortController.abort()
       document.removeEventListener("xt:favorites-changed", onFavoritesChanged)
       document.removeEventListener("xt:watchlist-changed", onWatchlistChanged)
       document.removeEventListener("xt:progress-changed", onProgressChanged)

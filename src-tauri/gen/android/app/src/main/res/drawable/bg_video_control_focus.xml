@@ -4,21 +4,21 @@
     <item android:state_selected="true" android:state_focused="true">
         <shape android:shape="rectangle">
             <corners android:radius="8dp" />
-            <stroke android:width="2dp" android:color="@color/xt_accent" />
-            <solid android:color="@color/xt_row_bg_active" />
+            <stroke android:width="2dp" android:color="@color/xt_focus_mask_stroke" />
+            <solid android:color="@color/xt_focus_mask_fill_strong" />
         </shape>
     </item>
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <corners android:radius="8dp" />
-            <stroke android:width="2dp" android:color="@color/xt_accent" />
-            <solid android:color="@color/xt_row_bg_selected" />
+            <stroke android:width="2dp" android:color="@color/xt_focus_mask_stroke" />
+            <solid android:color="@color/xt_focus_mask_fill" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
             <corners android:radius="8dp" />
-            <solid android:color="@color/xt_row_bg_selected" />
+            <solid android:color="@color/xt_focus_mask_fill" />
         </shape>
     </item>
     <item>

@@ -26,7 +26,7 @@ async function mockProvider(page: Page) {
 async function seedTvState(page: Page) {
   await page.context().addInitScript(() => {
     try {
-      localStorage.setItem("xt_force_tv", "1")
+      localStorage.setItem("xt_ui_mode", "tv")
       localStorage.setItem("xt_receiver_boot", "0")
       localStorage.setItem("xt_locale", "en")
       localStorage.setItem("xt_theme", "dark")

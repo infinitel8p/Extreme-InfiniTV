@@ -280,3 +280,18 @@ export function getSharedGroupingIndex(rows: GroupableRow[]): CatalogGroupingInd
   sharedIndexByRows.set(rows, index)
   return index
 }
+
+export function buildGroupingIndexesByPlaylist(
+  rows: Array<GroupableRow & { playlistId?: string }>,
+): Map<string, CatalogGroupingIndex> {
+  const slices = new Map<string, GroupableRow[]>()
+  for (const row of rows) {
+    const playlistId = row.playlistId ?? ""
+    const slice = slices.get(playlistId)
+    if (slice) slice.push(row)
+    else slices.set(playlistId, [row])
+  }
+  const indexes = new Map<string, CatalogGroupingIndex>()
+  for (const [playlistId, slice] of slices) indexes.set(playlistId, buildGroupingIndex(slice))
+  return indexes
+}

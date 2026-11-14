@@ -1,4 +1,4 @@
-import { selectEntry, removeEntry, loadCreds, getActiveEntry } from "./creds.js"
+import { selectEntry, removeEntry, loadCreds, getActiveEntry, setEntryMergedVisible } from "./creds.js"
 import { getNewestCacheTime } from "./cache.js"
 import { readCachedLiveChannels } from "./live-catalog.ts"
 import { buildLiveStreamUrl } from "./stream-urls.ts"
@@ -8,8 +8,10 @@ import {
   ICON_CHECK,
   ICON_INFO,
   ICON_DOWNLOAD,
+  ICON_STACK_2,
 } from "./icons.js"
 import { escapeHtml, fmtAge } from "./format.js"
+import { dnsShortLabel } from "./dns-test.ts"
 import { t } from "./i18n.js"
 import { redactUrl, log } from "./log.js"
 import { confirmDialog } from "./confirm-dialog.ts"
@@ -27,11 +29,16 @@ function editHrefFor(entry) {
     : `/login?edit=${encodeURIComponent(entry._id)}`
 }
 
+/** The playlist editor is a classic-only surface (see tv-routes.ts); custom playlists have no other edit path. */
+function editUnreachableOnTv(entry) {
+  return entry.type === "custom" && document.documentElement.dataset.tvUi === "1"
+}
+
 const COMPACT_ICON_ACTION_CLASS =
   "inline-flex items-center justify-center rounded-lg border border-line bg-bg h-8 w-8 text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:border-accent transition-colors outline-none"
 
 /** Resolve `entry`'s live catalog and save it as an .m3u file. */
-async function exportEntryM3U(entry) {
+export async function exportEntryM3U(entry) {
   try {
     const [{ buildM3UEntriesForEntry, saveM3UText, sanitizeFilename }, { serializeM3U }] = await Promise.all([
       import("./export-m3u.ts"),
@@ -59,7 +66,7 @@ async function exportEntryM3U(entry) {
 }
 
 /** First cached channel's stream URL, so "Run diagnostic" can probe playback without an extra catalog fetch. Checks "live" then falls back to "m3u", same as playlist-health.ts. */
-function resolveSampleStreamUrl(entry) {
+export function resolveSampleStreamUrl(entry) {
   try {
     const firstChannel = readCachedLiveChannels(entry._id)[0] || null
     if (!firstChannel) return null
@@ -80,6 +87,7 @@ function resolveSampleStreamUrl(entry) {
 function buildExportButton(entry, isCompact) {
   const btn = document.createElement("button")
   btn.type = "button"
+  btn.dataset.role = "export"
   btn.title = t("editor.exportM3uAction")
   btn.setAttribute("aria-label", t("editor.exportM3uAria", { title: entry.title }))
   btn.className = isCompact
@@ -91,6 +99,48 @@ function buildExportButton(entry, isCompact) {
     if (btn.disabled) return
     btn.disabled = true
     await exportEntryM3U(entry)
+    btn.disabled = false
+  })
+  return btn
+}
+
+function buildMergedToggle(entry, isActive, isCompact) {
+  const isOn = isActive || !!entry.mergedVisible
+  const btn = document.createElement("button")
+  btn.type = "button"
+  btn.dataset.role = "merged-toggle"
+  btn.setAttribute("role", "switch")
+  btn.setAttribute("aria-checked", isOn ? "true" : "false")
+  const label = isActive ? t("playlist.mergedActiveAlways") : t("playlist.mergedToggle")
+  btn.title = label
+  btn.setAttribute(
+    "aria-label",
+    isActive ? label : t("playlist.mergedToggleAria", { title: entry.title })
+  )
+  const toneClass = isOn
+    ? "text-accent bg-accent-soft"
+    : "text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface"
+  btn.className = isCompact
+    ? `inline-flex items-center justify-center rounded-lg border h-8 w-8 transition-colors outline-none focus-visible:border-accent ${
+        isOn ? "border-accent/40 text-accent bg-accent-soft" : "border-line bg-bg text-fg-2 hover:bg-surface-2 hover:text-fg"
+      }`
+    : `shrink-0 self-center rounded-md size-10 p-0 ${toneClass} inline-flex items-center justify-center transition-colors outline-none`
+  if (isActive) {
+    btn.disabled = true
+    btn.classList.add("opacity-60")
+  }
+  btn.innerHTML = `<span class="inline-flex ${isCompact ? "text-sm" : "text-base"}">${ICON_STACK_2}</span>`
+  btn.addEventListener("click", async (ev) => {
+    ev.stopPropagation()
+    if (btn.disabled) return
+    btn.disabled = true
+    const next = !entry.mergedVisible
+    try {
+      await setEntryMergedVisible(entry._id, next)
+      toastSuccess(t(next ? "playlist.toast.mergedOn" : "playlist.toast.mergedOff", { title: entry.title }))
+    } catch (e) {
+      log.error("[xt:playlist-rows] merged toggle failed:", e)
+    }
     btn.disabled = false
   })
   return btn
@@ -114,6 +164,7 @@ export function renderPlaylistRow({
 }) {
   const isCompact = density === "compact"
   const ageLabel = fmtAge(getNewestCacheTime(entry._id))
+  const dnsLabel = entry.dns ? dnsShortLabel(entry.dns) : null
 
   // Outer wrapper holds the visible row + the (initially hidden)
   // expandable health panel beneath it. Caller appends `outer` and gets
@@ -142,6 +193,8 @@ export function renderPlaylistRow({
     ? entry.sourceName || ""
     : entry.url || ""
 
+  const showMergedBadge = !!entry.mergedVisible && !isActive
+
   const badgeSize = isCompact
     ? "h-5 min-w-10 px-1.5"
     : "h-6 min-w-12 px-2 tracking-wide"
@@ -158,8 +211,8 @@ export function renderPlaylistRow({
   const pick = document.createElement("button")
   pick.type = "button"
   pick.className = isCompact
-    ? "flex flex-1 items-center gap-2.5 py-2.5 text-left min-w-0 min-h-11 outline-none"
-    : "flex flex-1 items-center gap-3 py-2 text-left min-w-0 min-h-11 outline-none"
+    ? "flex flex-1 items-center gap-2.5 py-2.5 text-start min-w-0 min-h-11 outline-none"
+    : "flex flex-1 items-center gap-3 py-2 text-start min-w-0 min-h-11 outline-none"
   pick.dataset.id = entry._id
   pick.innerHTML = `
     <span class="inline-flex items-center justify-center rounded-md text-label font-semibold uppercase ring-1 shrink-0 ${badgeSize} ${
@@ -177,15 +230,35 @@ export function renderPlaylistRow({
         <span class="truncate text-sm flex-1 min-w-0 ${
           isActive ? "text-fg font-medium" : "text-fg-2"
         }">${escapeHtml(entry.title)}</span>
+        ${
+          showMergedBadge
+            ? `<span class="shrink-0 rounded-md ring-1 ring-accent/40 bg-accent-soft text-accent text-2xs px-1.5 leading-5">${escapeHtml(t("playlist.mergedBadge"))}</span>`
+            : ""
+        }
       </span>
       ${
         subtitle
           ? `<span class="truncate text-2xs text-fg-3 font-mono">${escapeHtml(subtitle)}</span>`
           : ""
       }
-      <span class="truncate text-2xs text-fg-3 ${
-        ageLabel ? "tabular-nums" : "italic"
-      }">${ageLabel ? `Updated ${ageLabel}` : "Not loaded yet"}</span>
+      <span class="flex items-center gap-1.5 min-w-0">
+        <span class="min-w-0 truncate text-2xs text-fg-3 ${isCompact ? "" : "shrink-0"} ${
+          ageLabel ? "tabular-nums" : "italic"
+        }"${
+          isCompact && dnsLabel ? ` title="${escapeHtml(entry.dns)}"` : ""
+        }">${escapeHtml(ageLabel ? t("playlist.updatedAgo", { age: ageLabel }) : t("playlist.notLoaded"))}${
+          isCompact && dnsLabel ? ` · ${escapeHtml(t("dns.chip", { server: dnsLabel }))}` : ""
+        }</span>
+        ${
+          !isCompact && dnsLabel
+            ? `<span class="min-w-0 truncate rounded-md ring-1 ring-line bg-surface-2 text-fg-3 text-2xs px-1.5 font-mono" title="${escapeHtml(
+                entry.dns
+              )}" aria-label="${escapeHtml(t("dns.chipAria", { server: dnsLabel }))}">${escapeHtml(
+                t("dns.chip", { server: dnsLabel })
+              )}</span>`
+            : ""
+        }
+      </span>
     </span>
     ${
       isActive
@@ -226,22 +299,27 @@ export function renderPlaylistRow({
     }
     panel.classList.remove("hidden")
     info.setAttribute("aria-expanded", "true")
+    // Keyboard/D-pad clicks carry detail 0; TV builds always move focus into the panel.
+    const isKeyboardActivation =
+      ev.detail === 0 ||
+      document.documentElement.dataset.tvUi === "1"
     paintPlaylistHealthInto(panel, entry, {
       isCompact,
+      isActive,
       onAfterRemove,
     })
+    if (isKeyboardActivation) {
+      const firstAction = panel.querySelector('[data-role="refresh"]')
+      if (firstAction instanceof HTMLElement) {
+        firstAction.focus({ preventScroll: true })
+        firstAction.scrollIntoView({ block: "nearest" })
+      }
+    }
   })
 
   if (!isCompact) {
-    const edit = document.createElement("a")
-    edit.href = editHrefFor(entry)
-    edit.title = "Edit"
-    edit.setAttribute("aria-label", t("playlist.editAria", { title: entry.title }))
-    edit.className =
-      "shrink-0 self-center rounded-md size-10 p-0 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface inline-flex items-center justify-center transition-colors outline-none"
-    edit.innerHTML = `<span class="inline-flex text-base">${ICON_PENCIL}</span>`
-
     const exportBtn = buildExportButton(entry, false)
+    const mergedToggle = buildMergedToggle(entry, isActive, false)
 
     const del = document.createElement("button")
     del.type = "button"
@@ -252,22 +330,43 @@ export function renderPlaylistRow({
     del.innerHTML = `<span class="inline-flex text-base">${ICON_TRASH}</span>`
     del.addEventListener("click", async (ev) => {
       ev.stopPropagation()
+      const messageLines = []
+      if (isActive) messageLines.push(t("playlist.removeConfirmActive"))
+      messageLines.push(t("playlist.removeConfirm", { title: entry.title }))
+      messageLines.push(t("playlist.removeConfirmDetail"))
       const ok = await confirmDialog({
         title: t("playlist.removeAria", { title: entry.title }),
-        message: t("playlist.removeConfirm", { title: entry.title }),
-        confirmLabel: t("common.delete"),
+        message: messageLines.join("\n"),
+        confirmLabel: t("common.remove"),
         destructive: true,
       })
       if (!ok) return
       await removeEntry(entry._id)
       if (onAfterRemove) await onAfterRemove()
     })
-    row.append(pick, info, edit, exportBtn, del)
+    if (editUnreachableOnTv(entry)) {
+      row.append(pick, mergedToggle, info, exportBtn, del)
+    } else {
+      const edit = document.createElement("a")
+      edit.href = editHrefFor(entry)
+      edit.title = t("common.edit")
+      edit.setAttribute("aria-label", t("playlist.editAria", { title: entry.title }))
+      edit.className =
+        "shrink-0 self-center rounded-md size-10 p-0 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface inline-flex items-center justify-center transition-colors outline-none"
+      edit.innerHTML = `<span class="inline-flex text-base">${ICON_PENCIL}</span>`
+      row.append(pick, mergedToggle, info, edit, exportBtn, del)
+    }
   } else {
     row.append(pick, info)
   }
 
   outer.append(row, panel)
+  if (!isCompact && editUnreachableOnTv(entry)) {
+    const editNote = document.createElement("p")
+    editNote.className = "px-4 pb-2 text-2xs text-fg-3"
+    editNote.textContent = t("playlist.editOnOtherDevice")
+    outer.append(editNote)
+  }
   return outer
 }
 
@@ -296,7 +395,7 @@ function healthRow(label, value, tone, title) {
   dt.textContent = label
   const dd = document.createElement("dd")
   dd.className =
-    "tabular-nums text-right " +
+    "tabular-nums text-end " +
     (tone === "good"
       ? "text-good"
       : tone === "warn"
@@ -324,10 +423,16 @@ function healthRow(label, value, tone, title) {
  *
  * @param {HTMLElement} panel
  * @param {any} entry
- * @param {{ isCompact?: boolean, onAfterRemove?: () => void | Promise<void> }} [opts]
+ * @param {{ isCompact?: boolean, isActive?: boolean, onAfterRemove?: () => void | Promise<void> }} [opts]
  */
 function paintPlaylistHealthInto(panel, entry, opts = {}) {
-  const { isCompact = false, onAfterRemove } = opts
+  const { isCompact = false, isActive = false, onAfterRemove } = opts
+  // Remember the focused footer control so replaceChildren() does not drop focus to body.
+  const focusedRole =
+    document.activeElement instanceof HTMLElement &&
+    panel.contains(document.activeElement)
+      ? document.activeElement.dataset.role || null
+      : null
   const h = getPlaylistHealth(entry._id)
 
   const accountTone =
@@ -461,6 +566,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
 
   const refresh = document.createElement("button")
   refresh.type = "button"
+  refresh.dataset.role = "refresh"
   refresh.textContent = t("settings.health.refresh")
   refresh.className =
     "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-line bg-bg h-8 px-3 text-xs text-fg-2 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
@@ -501,6 +607,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
   if (supportsDiagnostic) {
     diagnostic = document.createElement("button")
     diagnostic.type = "button"
+    diagnostic.dataset.role = "diagnostic"
     diagnostic.textContent = t("diagnostic.runFull")
     diagnostic.className = refresh.className
     diagnostic.addEventListener("click", async (ev) => {
@@ -531,6 +638,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
             disableProviderEpg: entry.disableProviderEpg,
             liveContainer: entry.liveContainer,
             type: entry.type,
+            dns: entry.dns,
           },
           sampleStreamUrl: resolveSampleStreamUrl(entry) || undefined,
         }
@@ -568,17 +676,22 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
     const actions = document.createElement("div")
     actions.className = "ms-auto inline-flex items-center gap-2"
 
-    const edit = document.createElement("a")
-    edit.href = editHrefFor(entry)
-    edit.title = t("playlist.editAria", { title: entry.title })
-    edit.setAttribute("aria-label", t("playlist.editAria", { title: entry.title }))
-    edit.className = COMPACT_ICON_ACTION_CLASS
-    edit.innerHTML = `<span class="inline-flex text-sm">${ICON_PENCIL}</span>`
+    const editUnreachable = editUnreachableOnTv(entry)
+    const edit = editUnreachable ? null : document.createElement("a")
+    if (edit) {
+      edit.href = editHrefFor(entry)
+      edit.dataset.role = "edit"
+      edit.title = t("playlist.editAria", { title: entry.title })
+      edit.setAttribute("aria-label", t("playlist.editAria", { title: entry.title }))
+      edit.className = COMPACT_ICON_ACTION_CLASS
+      edit.innerHTML = `<span class="inline-flex text-sm">${ICON_PENCIL}</span>`
+    }
 
     const exportBtn = buildExportButton(entry, true)
 
     const del = document.createElement("button")
     del.type = "button"
+    del.dataset.role = "delete"
     del.title = t("playlist.removeAria", { title: entry.title })
     del.setAttribute("aria-label", t("playlist.removeAria", { title: entry.title }))
     del.className =
@@ -586,10 +699,16 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
     del.innerHTML = `<span class="inline-flex text-sm">${ICON_TRASH}</span>`
     del.addEventListener("click", async (ev) => {
       ev.stopPropagation()
+      const activeEntry = await getActiveEntry()
+      const isActiveEntry = activeEntry?._id === entry._id
+      const messageLines = []
+      if (isActiveEntry) messageLines.push(t("playlist.removeConfirmActive"))
+      messageLines.push(t("playlist.removeConfirm", { title: entry.title }))
+      messageLines.push(t("playlist.removeConfirmDetail"))
       const ok = await confirmDialog({
         title: t("playlist.removeAria", { title: entry.title }),
-        message: t("playlist.removeConfirm", { title: entry.title }),
-        confirmLabel: t("common.delete"),
+        message: messageLines.join("\n"),
+        confirmLabel: t("common.remove"),
         destructive: true,
       })
       if (!ok) return
@@ -597,13 +716,27 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
       if (onAfterRemove) await onAfterRemove()
     })
 
-    actions.append(edit, exportBtn, del)
+    const mergedToggle = buildMergedToggle(entry, isActive, true)
+    if (edit) actions.append(mergedToggle, edit, exportBtn, del)
+    else actions.append(mergedToggle, exportBtn, del)
     footer.appendChild(actions)
+
+    if (editUnreachable) {
+      const editNote = document.createElement("p")
+      editNote.className = "w-full text-2xs text-fg-3"
+      editNote.textContent = t("playlist.editOnOtherDevice")
+      footer.appendChild(editNote)
+    }
   }
 
   if (supportsDiagnostic) {
     panel.replaceChildren(list, footer, diagnosticResultEl)
   } else {
     panel.replaceChildren(list, footer)
+  }
+
+  if (focusedRole) {
+    const refocusEl = panel.querySelector(`[data-role="${focusedRole}"]`)
+    if (refocusEl instanceof HTMLElement) refocusEl.focus({ preventScroll: true })
   }
 }

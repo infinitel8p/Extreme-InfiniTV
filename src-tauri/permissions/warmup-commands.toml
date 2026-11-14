@@ -9,4 +9,5 @@ commands.allow = [
     "warmup_cancel",
     "warmup_ack",
     "warmup_read_staged",
+    "warmup_read_staged_bytes",
 ]

@@ -103,6 +103,13 @@ describe("applyChannelOverrides", () => {
     expect(channel.overrideKey).toBe("x:1")
   })
 
+  it("recomputes norm from the new name only, dropping the category", () => {
+    const overrides: ChannelOverrideMap = { "x:1": { name: "My Channel" } }
+    const [channel] = applyChannelOverrides([xtreamChannel(1)], overrides, { isM3U: false })
+    expect(channel.norm).toBe(normalize("My Channel"))
+    expect(channel.norm).not.toContain("sports")
+  })
+
   it("replaces the logo and the channel number", () => {
     const overrides: ChannelOverrideMap = { "x:1": { logo: "http://x/l.png", chno: 42 } }
     const [channel] = applyChannelOverrides([xtreamChannel(1)], overrides, { isM3U: false })

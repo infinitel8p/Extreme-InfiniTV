@@ -3,6 +3,8 @@ layout: ../layouts/DocsLayout.astro
 title: "Metadata sources"
 description: "Where posters, plots and episode details come from, and what leaves your device."
 lede: "Extreme InfiniTV enriches your provider's catalogue from two sources. TheTVDB works out of the box; TMDB needs a free key you supply."
+icon: "search"
+cardOrder: 8
 ---
 
 ## The two sources
@@ -16,7 +18,7 @@ Two metadata sources fill the gaps:
 | **TheTVDB** | No | Posters, backdrops, cast, plots, episode titles and stills, correct season splits |
 | **TMDB** | Yes, free | The same, plus trailers, similar titles, cast pages and genre discovery |
 
-TheTVDB is reached through a small proxy we host, so no key or account is needed on your side. TMDB is used directly from the app with a key you add in **Settings → TMDb metadata**.
+TheTVDB is reached through a small proxy we host, so no key or account is needed on your side. TMDB is used directly from the app with a key you add in **Settings > Network > Metadata enrichment**.
 
 When both are available, TMDB answers first and TheTVDB fills what it can't. With no TMDB key, TheTVDB covers everything on its own.
 
@@ -34,7 +36,7 @@ For TheTVDB, the app sends the TMDB id your provider already publishes for that 
 
 For TMDB, the request goes from your device straight to TMDB with your own key. It never passes through our infrastructure.
 
-Both can be turned off. TheTVDB is on by default and needs no key, so switching it off is a deliberate choice: **Settings -> TMDb metadata -> TheTVDB metadata**. TMDB only runs once you add a key. With both off, you see exactly what your provider supplies and nothing leaves your device for metadata.
+Both can be turned off. TheTVDB is on by default and needs no key, so switching it off is a deliberate choice: **Settings > Network > Metadata enrichment > TheTVDB**. TMDB only runs once you add a key. With both off, you see exactly what your provider supplies and nothing leaves your device for metadata.
 
 ## Attribution
 

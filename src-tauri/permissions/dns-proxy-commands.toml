@@ -1,0 +1,10 @@
+# Cross-platform ACL for the custom-DNS forward proxy commands, granted from default.json.
+
+[[permission]]
+identifier = "allow-dns-proxy-commands"
+description = "Local-origin access to the custom DNS forward proxy commands."
+commands.allow = [
+    "dns_proxy_register",
+    "dns_proxy_unregister",
+    "dns_resolve_test",
+]

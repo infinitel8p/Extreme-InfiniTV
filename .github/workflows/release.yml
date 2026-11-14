@@ -69,6 +69,9 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
 
+env:
+  PUBLIC_OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+
 jobs:
   create-release:
     runs-on: ubuntu-latest
@@ -357,6 +360,8 @@ jobs:
               `| Linux portable (ARM64, any distro) | ${fileLink(`Extreme InfiniTV_${version}_aarch64.AppImage`)} |`,
               `| Android sideload (APK) | ${fileLink(`Extreme InfiniTV_${version}.apk`)} |`,
               '',
+              'Linux builds need glibc 2.39 or newer (Ubuntu 24.04, Debian 13, Fedora 40 or later). On Raspberry Pi OS Bookworm use the Snap.',
+              '',
               '<details><summary>What about the <code>.sig</code> files, <code>latest.json</code> and the macOS <code>.app.tar.gz</code>?</summary>',
               '',
               'You can ignore them.',
@@ -430,11 +435,12 @@ jobs:
             args: ""
             rust-targets: ""
             sidecar-asset: ffmpeg-x86_64-pc-windows-msvc.exe
+            mpv-sidecar-asset: mpv-x86_64-pc-windows-msvc.exe
           - os: macos-latest
             args: "--target universal-apple-darwin"
             rust-targets: "aarch64-apple-darwin x86_64-apple-darwin"
             sidecar-asset: ffmpeg-universal-apple-darwin
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             args: ""
             rust-targets: ""
             sidecar-asset: ffmpeg-x86_64-unknown-linux-gnu
@@ -442,7 +448,8 @@ jobs:
             args: "--bundles nsis"
             rust-targets: ""
             sidecar-asset: ffmpeg-aarch64-pc-windows-msvc.exe
-          - os: ubuntu-22.04-arm
+            mpv-sidecar-asset: mpv-aarch64-pc-windows-msvc.exe
+          - os: ubuntu-24.04-arm
             args: ""
             rust-targets: ""
             sidecar-asset: ffmpeg-aarch64-unknown-linux-gnu
@@ -454,7 +461,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install Linux system deps
@@ -534,6 +541,27 @@ jobs:
             chmod +x "src-tauri/binaries/$DEST"
           fi
 
+      # mpv sidecar binaries come from the "mpv Runtime" workflow's rolling
+      # mpv-runtime-v1 prerelease, not built here. Windows only.
+      - name: Fetch mpv runtime
+        if: startsWith(matrix.os, 'windows')
+        uses: ./.github/actions/fetch-mpv-sidecar
+        with:
+          asset: ${{ matrix.mpv-sidecar-asset }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Seed world-executable AppRun for the AppImage bundler
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$CACHE_DIR"
+          curl -fsSL --retry 3 -o "$CACHE_DIR/AppRun-$ARCH" \
+            "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-$ARCH"
+          chmod 755 "$CACHE_DIR/AppRun-$ARCH"
+
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -572,7 +600,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: actions/setup-java@v5

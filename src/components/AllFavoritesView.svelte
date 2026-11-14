@@ -2,9 +2,9 @@
   // Cross-playlist favorites view
   import { onMount } from "svelte"
   import { IconExternalLink } from "@tabler/icons-svelte"
-  import { log } from "@/scripts/lib/log.js"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-  import { getEntries, getActiveEntry, selectEntry } from "@/scripts/lib/creds.js"
+  import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
+  import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
   import {
     ensureLoaded as ensurePrefsLoaded,
     getAllGlobalFavorites,
@@ -50,10 +50,11 @@
     filter === "all" ? entries : entries.filter((row) => row.kind === filter)
   )
 
-  function buildHref(kind, id) {
-    if (kind === "live") return `/livetv?channel=${encodeURIComponent(id)}`
-    if (kind === "vod") return `/movies/detail?id=${encodeURIComponent(id)}`
-    return `/series/detail?id=${encodeURIComponent(id)}`
+  function buildHref(kind, id, playlistId) {
+    if (kind === "live") {
+      return `/livetv?channel=${encodeURIComponent(id)}&pl=${encodeURIComponent(playlistId)}`
+    }
+    return detailHrefFor(kind, id, { playlistId })
   }
 
   let reloadGeneration = 0
@@ -69,7 +70,18 @@
       title: entry.title || "Untitled playlist",
     }))
 
-    const raw = getAllGlobalFavorites()
+    const playlistRank = new Map()
+    playlistRank.set(activePlaylistId, 0)
+    let nextRank = 1
+    for (const playlist of playlists) {
+      if (playlist.id === activePlaylistId) continue
+      playlistRank.set(playlist.id, nextRank++)
+    }
+    const rankFor = (playlistId) => playlistRank.get(playlistId) ?? Number.MAX_SAFE_INTEGER
+
+    const raw = getAllGlobalFavorites().sort(
+      (rowA, rowB) => rankFor(rowA.playlistId) - rankFor(rowB.playlistId)
+    )
     const needed = new Map()
     for (const row of raw) {
       const kinds = needed.get(row.playlistId) || new Set()
@@ -103,10 +115,11 @@
         })
       }
 
-      entries = raw.map((row) => {
+      entries = raw.flatMap((row) => {
         const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
         const rowLookups = lookups.get(row.playlistId)
         const item = rowLookups?.[row.kind]?.get(Number(row.id))
+        if (item?.isHeader) return []
         // Hidden-channel favorites and unresolved custom-playlist channels both
         // miss the live lookup once the catalog is cached - can't tune either.
         const unavailable = row.kind === "live" && !item && !!rowLookups?.liveCacheAvailable
@@ -127,17 +140,17 @@
             logo: meta?.logo ?? item?.logo ?? null,
           })
         }
-        return {
+        return [{
           playlistId: row.playlistId,
           playlistTitle: titleById.get(row.playlistId) || "Removed playlist",
           kind: row.kind,
           id: Number(row.id),
           name,
           logo,
-          href: buildHref(row.kind, row.id),
+          href: buildHref(row.kind, row.id, row.playlistId),
           isCrossPlaylist: row.playlistId !== activePlaylistId,
           unavailable,
-        }
+        }]
       })
     }
 
@@ -165,25 +178,12 @@
     }
   }
 
-  async function openEntry(entry) {
-    if (entry.isCrossPlaylist) {
-      try {
-        await selectEntry(entry.playlistId)
-      } catch (err) {
-        log.error("[xt:favorites] selectEntry failed:", err)
-      }
-    }
+  function openEntry(entry) {
     window.location.href = entry.href
   }
 
-  async function openCard(event, entry) {
-    if (entry.unavailable) {
-      event.preventDefault()
-      return
-    }
-    if (!entry.isCrossPlaylist) return
-    event.preventDefault()
-    await openEntry(entry)
+  function openCard(event, entry) {
+    if (entry.unavailable) event.preventDefault()
   }
 
   // Svelte action: right-click / long-press "Remove from favorites" menu.
@@ -224,11 +224,23 @@
     }
   }
 
+  const VALID_KIND_FILTERS = new Set(["live", "vod", "series"])
+
   function setFilter(next) {
     filter = next
+    if (typeof history !== "undefined") {
+      const url = new URL(location.href)
+      if (next === "all") url.searchParams.delete("kind")
+      else url.searchParams.set("kind", next)
+      history.replaceState(null, "", url)
+    }
   }
 
   onMount(() => {
+    if (typeof location !== "undefined") {
+      const kindParam = new URLSearchParams(location.search).get("kind")
+      if (VALID_KIND_FILTERS.has(kindParam)) filter = kindParam
+    }
     reload()
     const onLocale = () => { locale++ }
     let warmedRaf = 0

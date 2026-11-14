@@ -3,6 +3,8 @@ layout: ../layouts/DocsLayout.astro
 title: "Translations"
 description: "Add or improve a locale for Extreme InfiniTV."
 lede: "16 locales today. English is the source of truth. Missing keys fall back to English at runtime, so partial translations still ship."
+icon: "language"
+cardOrder: 13
 ---
 
 ## Add a new language

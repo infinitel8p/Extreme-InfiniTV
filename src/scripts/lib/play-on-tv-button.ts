@@ -1,6 +1,6 @@
 // "Play on TV" escape-hatch button, VOD-only (movies/series detail); mirrors external-player-button.ts.
 
-import { isTauri } from "@/scripts/lib/creds.js"
+import { isTauri, getActiveDnsOverride, getPlaylistDnsOverride } from "@/scripts/lib/creds.js"
 import { resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { playOnTv, type PlayOnTvOptions } from "@/scripts/lib/tv-cast.js"
@@ -22,6 +22,7 @@ export interface PlayOnTvHooks {
   /** Keeps receiver next/prev and series auto-advance working for a cast started from this button. */
   getCastContext?: () => PlayOnTvCastContext | null
   beforeCast?: () => void
+  getPlaylistId?: () => string
 }
 
 export interface PlayOnTvButtonHandle {
@@ -42,9 +43,10 @@ export function setupPlayOnTvButton(
 
   const onClick = async () => {
     const builder = hooks.getSrcBuilder?.()
+    const playlistId = hooks.getPlaylistId?.() || ""
     let src: string | null = null
     try {
-      src = builder ? await resolveStreamUrl(builder) : hooks.getSrc?.() || null
+      src = builder ? await resolveStreamUrl(builder, playlistId ? { entryId: playlistId } : undefined) : hooks.getSrc?.() || null
     } catch (err) {
       log.warn("[xt:play-on-tv] failed to resolve stream url:", err)
     }
@@ -59,6 +61,10 @@ export function setupPlayOnTvButton(
             durationSeconds: hooks.getDurationSeconds?.(),
           })
         : null
+    if (descriptor) {
+      const dnsOverride = playlistId ? await getPlaylistDnsOverride(playlistId) : getActiveDnsOverride()
+      descriptor.dns = dnsOverride?.raw ?? null
+    }
     const castContext = hooks.getCastContext?.() || null
     await playOnTv({
       buildDescriptor: () => descriptor,

@@ -2,12 +2,13 @@
   // Hub-only "Continue watching" strip.
   import { onMount } from "svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-  import { getActiveEntry } from "@/scripts/lib/creds.js"
+  import { getActiveEntry, getMergedEntries } from "@/scripts/lib/creds.js"
+  import { detailHrefFor } from "@/scripts/lib/detail-href.ts"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
   import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import {
     ensureLoaded as ensurePrefsLoaded,
-    getContinueWatching,
+    getMergedContinueWatching,
     getRecents,
     clearProgress,
     clearRecent,
@@ -33,13 +34,13 @@
    * }>}
    */
   let entries = $state([])
-  let activePlaylistId = $state("")
   let locale = $state(0)
   // Wrapper reads the locale rune so {tr(...)} template effects track it
   // and re-evaluate on LOCALE_EVENT.
   const tr = (key, params) => (locale, t(key, params))
 
   function buildProgressEntry(raw, vodById) {
+    const playlistId = raw.playlistId
     const percent =
       raw.duration > 0
         ? Math.max(0, Math.min(100, (raw.position / raw.duration) * 100))
@@ -49,10 +50,11 @@
       return {
         kind: raw.kind,
         id: raw.id,
+        playlistId,
         name: raw.name || movie?.name || `Movie ${raw.id}`,
         logo: raw.logo || movie?.logo || null,
         subtitle: "Movie",
-        href: `/movies/detail?id=${encodeURIComponent(raw.id)}&autoplay=1`,
+        href: detailHrefFor("vod", raw.id, { playlistId, autoplay: true }),
         percent,
         hasProgress: true,
       }
@@ -61,16 +63,17 @@
     const episodeLabel = raw.episodeNum != null ? `E${raw.episodeNum}` : ""
     const tag = seasonLabel + episodeLabel || "Episode"
     const seriesPart = raw.seriesName ? `${raw.seriesName} · ${tag}` : tag
-    const seriesIdParam = raw.seriesId != null ? encodeURIComponent(raw.seriesId) : ""
     return {
       kind: raw.kind,
       id: raw.id,
+      playlistId,
       name: raw.episodeTitle || raw.seriesName || `Episode ${raw.id}`,
       logo: raw.seriesLogo || null,
       subtitle: seriesPart,
-      href: seriesIdParam
-        ? `/series/detail?id=${seriesIdParam}&autoplay=1&episode=${encodeURIComponent(raw.id)}`
-        : "#",
+      href:
+        raw.seriesId != null
+          ? detailHrefFor("series", raw.seriesId, { playlistId, autoplay: true, episode: raw.id })
+          : "#",
       percent,
       hasProgress: true,
       seriesId: raw.seriesId ?? null,
@@ -78,13 +81,14 @@
     }
   }
 
-  function buildLiveEntry(recent, liveById, liveCacheAvailable) {
+  function buildLiveEntry(playlistId, recent, liveById, liveCacheAvailable) {
     const channel = liveById.get(Number(recent.id))
     // Hidden-channel recents miss the live lookup once the catalog is cached.
     const unavailable = !channel && !!liveCacheAvailable
     return {
       kind: "live",
       id: String(recent.id),
+      playlistId,
       name: recent.name || channel?.name || `Channel ${recent.id}`,
       logo: recent.logo || channel?.logo || null,
       subtitle: "Live TV",
@@ -97,23 +101,31 @@
 
   let reloadGeneration = 0
 
-  function buildEntries(playlistId) {
-    const vodList = getCached(playlistId, "vod")?.data || []
-    const vodById = new Map(vodList.map((movie) => [Number(movie.id), movie]))
-    const liveList = readCachedLiveChannels(playlistId)
+  function buildEntries(activeId, playlistIds) {
+    const vodByPlaylist = new Map()
+    const vodLookup = (playlistId) => {
+      let vodById = vodByPlaylist.get(playlistId)
+      if (!vodById) {
+        const vodList = getCached(playlistId, "vod")?.data || []
+        vodById = new Map(vodList.map((movie) => [Number(movie.id), movie]))
+        vodByPlaylist.set(playlistId, vodById)
+      }
+      return vodById
+    }
+    const liveList = readCachedLiveChannels(activeId)
     const liveById = new Map(liveList.map((channel) => [Number(channel.id), channel]))
-    const liveCacheAvailable = hasCachedLiveChannels(playlistId)
+    const liveCacheAvailable = hasCachedLiveChannels(activeId)
 
-    const progress = getContinueWatching(playlistId, STRIP_LIMIT).map((row) => ({
+    const progress = getMergedContinueWatching(playlistIds, STRIP_LIMIT).map((row) => ({
       ts: row.updatedAt || 0,
-      built: buildProgressEntry(row, vodById),
+      built: buildProgressEntry(row, vodLookup(row.playlistId)),
     }))
     const liveCutoff = Date.now() - LIVE_TTL_MS
-    const recents = getRecents(playlistId, "live")
+    const recents = getRecents(activeId, "live")
       .filter((row) => (row.ts || 0) >= liveCutoff)
       .map((row) => ({
         ts: row.ts || 0,
-        built: buildLiveEntry(row, liveById, liveCacheAvailable),
+        built: buildLiveEntry(activeId, row, liveById, liveCacheAvailable),
       }))
 
     const merged = [...progress, ...recents].sort((left, right) => right.ts - left.ts)
@@ -122,34 +134,35 @@
 
   async function reload() {
     const generation = ++reloadGeneration
-    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    const [active, mergedEntries] = await Promise.all([
+      getActiveEntry(),
+      getMergedEntries(),
+      ensurePrefsLoaded(),
+    ])
     if (generation !== reloadGeneration) return
     if (!active) {
       entries = []
-      activePlaylistId = ""
       return
     }
-    activePlaylistId = active._id
+    const playlistIds = mergedEntries.map((entry) => entry._id)
     // Paint from what's cached in memory first, upgrade after hydration.
-    entries = buildEntries(active._id)
-    void Promise.allSettled([
-      hydrateCache(active._id, "vod"),
-      hydrateCache(active._id, "live"),
-      hydrateCache(active._id, "m3u"),
-    ]).then(() => {
+    entries = buildEntries(active._id, playlistIds)
+    const hydrations = [hydrateCache(active._id, "live"), hydrateCache(active._id, "m3u")]
+    for (const playlistId of playlistIds) hydrations.push(hydrateCache(playlistId, "vod"))
+    void Promise.allSettled(hydrations).then(() => {
       if (generation !== reloadGeneration) return
-      entries = buildEntries(active._id)
+      entries = buildEntries(active._id, playlistIds)
     }).catch(() => {})
   }
 
   function dismiss(event, entry) {
     event.preventDefault()
     event.stopPropagation()
-    if (!activePlaylistId) return
+    if (!entry.playlistId) return
     if (entry.kind === "live") {
-      clearRecent(activePlaylistId, "live", Number(entry.id))
+      clearRecent(entry.playlistId, "live", Number(entry.id))
     } else {
-      clearProgress(activePlaylistId, entry.kind, entry.id)
+      clearProgress(entry.playlistId, entry.kind, entry.id)
     }
   }
 
@@ -158,6 +171,7 @@
     const onLocaleChange = () => { locale++ }
     const handlers = {
       "xt:active-changed": reload,
+      "xt:merged-changed": reload,
       "xt:progress-changed": reload,
       "xt:recents-changed": reload,
       [LOCALE_EVENT]: onLocaleChange,
@@ -190,7 +204,7 @@
       use:dragScroll
       class="cw-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as entry, idx (entry.kind + ":" + entry.id)}
+      {#each entries as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
         <li
           class="cw-item shrink-0 snap-start"
           data-kind={entry.kind}
@@ -209,7 +223,7 @@
               logo: entry.logo,
               seriesId: entry.seriesId,
               seriesName: entry.seriesName,
-              playlistId: activePlaylistId,
+              playlistId: entry.playlistId,
             }}
             class="cw-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line

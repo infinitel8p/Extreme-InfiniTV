@@ -1,5 +1,13 @@
-import { describe, it, expect } from "vitest"
-import { redactUrl, redactArg, redactDeep } from "../src/scripts/lib/log"
+import { describe, it, expect, afterEach, vi } from "vitest"
+import {
+  redactUrl,
+  redactArg,
+  redactDeep,
+  log,
+  addLogSink,
+  setVerboseLogging,
+  isVerboseLogging,
+} from "../src/scripts/lib/log"
 
 describe("redactUrl", () => {
   it("strips Xtream username and password from query strings", () => {
@@ -277,6 +285,42 @@ describe("redactUrl inside JSON payloads", () => {
     const payload = JSON.stringify({ url: "http://h.test/?user=joe&token=abc&keep=yes" })
     const parsed = JSON.parse(redactUrl(payload))
     expect(parsed.url).toBe("http://h.test/?user=***&token=***&keep=yes")
+  })
+})
+
+describe("verbose logging", () => {
+  afterEach(() => {
+    setVerboseLogging(false)
+  })
+
+  it("does not reach a registered sink when verbose logging is off", () => {
+    const sink = vi.fn()
+    const detach = addLogSink(sink)
+    log.debug("[xt:test]", "hello")
+    detach()
+    expect(sink).not.toHaveBeenCalled()
+  })
+
+  it("reaches the sink at level debug with credentials redacted once verbose logging is on", () => {
+    const sink = vi.fn()
+    const detach = addLogSink(sink)
+    setVerboseLogging(true)
+    log.debug("[xt:test]", "http://u:p@host/live/user/pass/1.m3u8")
+    detach()
+    expect(sink).toHaveBeenCalledTimes(1)
+    const [level, text] = sink.mock.calls[0]
+    expect(level).toBe("debug")
+    expect(text).not.toContain("u:p")
+    expect(text).not.toContain("/live/user/pass/")
+    expect(text).toContain("/live/***/***/")
+  })
+
+  it("isVerboseLogging reflects the setter", () => {
+    expect(isVerboseLogging()).toBe(false)
+    setVerboseLogging(true)
+    expect(isVerboseLogging()).toBe(true)
+    setVerboseLogging(false)
+    expect(isVerboseLogging()).toBe(false)
   })
 })
 

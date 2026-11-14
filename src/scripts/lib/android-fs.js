@@ -225,17 +225,40 @@ export async function convertSrc(uri) {
 export async function pickM3UFile(opts = {}) {
   const m = await mod()
   if (!m) return null
-  const uris = await m.AndroidFs.showOpenFilePicker({
-    mimeTypes: [
-      "audio/x-mpegurl",
-      "application/vnd.apple.mpegurl",
-      "application/x-mpegurl",
-      "text/plain",
-      "application/octet-stream",
-      "*/*",
-    ],
-    multiple: false,
-  })
+  const mimeTypes = [
+    "audio/x-mpegurl",
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "text/plain",
+    "application/octet-stream",
+    "*/*",
+  ]
+  const maxBytes = typeof opts.maxBytes === "number" && opts.maxBytes > 0 ? opts.maxBytes : 0
+  let uris
+  try {
+    uris = await m.AndroidFs.showOpenFilePicker({ mimeTypes, multiple: false })
+  } catch (error) {
+    const { androidContentPickerAvailable, pickTextFileViaIntent } = await import(
+      "@/scripts/lib/android-file-pick.js"
+    )
+    if (!androidContentPickerAvailable("*/*")) throw error
+    let picked
+    try {
+      picked = await pickTextFileViaIntent(mimeTypes)
+    } catch (pickError) {
+      // The native bridge caps reads at 16 MiB and rejects with "too large"
+      if (/too large/i.test(String((pickError && pickError.message) || pickError))) {
+        return { text: "", name: "", size: 0, oversize: true }
+      }
+      throw pickError
+    }
+    if (!picked) return null
+    const pickedSize = new TextEncoder().encode(picked.text).length
+    if (maxBytes && pickedSize > maxBytes) {
+      return { text: "", name: picked.name, size: pickedSize, oversize: true }
+    }
+    return { text: picked.text, name: picked.name, size: pickedSize }
+  }
   const uri = Array.isArray(uris) ? uris[0] : null
   if (!uri) return null
   let name = ""
@@ -246,7 +269,6 @@ export async function pickM3UFile(opts = {}) {
   try {
     size = Number(await m.AndroidFs.getByteLength(uri)) || 0
   } catch {}
-  const maxBytes = typeof opts.maxBytes === "number" && opts.maxBytes > 0 ? opts.maxBytes : 0
   if (maxBytes && size > maxBytes) {
     return { text: "", name, size, oversize: true }
   }
@@ -262,16 +284,23 @@ export async function pickM3UFile(opts = {}) {
 export async function pickJsonFile() {
   const m = await mod()
   if (!m) return null
-  const uris = await m.AndroidFs.showOpenFilePicker({
-    mimeTypes: [
-      "application/json",
-      "text/json",
-      "text/plain",
-      "application/octet-stream",
-      "*/*",
-    ],
-    multiple: false,
-  })
+  const mimeTypes = [
+    "application/json",
+    "text/json",
+    "text/plain",
+    "application/octet-stream",
+    "*/*",
+  ]
+  let uris
+  try {
+    uris = await m.AndroidFs.showOpenFilePicker({ mimeTypes, multiple: false })
+  } catch (error) {
+    const { androidContentPickerAvailable, pickTextFileViaIntent } = await import(
+      "@/scripts/lib/android-file-pick.js"
+    )
+    if (!androidContentPickerAvailable("*/*")) throw error
+    return await pickTextFileViaIntent(mimeTypes)
+  }
   const uri = Array.isArray(uris) ? uris[0] : null
   if (!uri) return null
   let name = ""

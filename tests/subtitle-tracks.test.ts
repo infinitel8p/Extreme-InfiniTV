@@ -8,6 +8,12 @@ vi.mock("@/scripts/lib/i18n.js", () => ({
   getActiveLocale: vi.fn(() => "en"),
 }))
 
+const mp4Mock = vi.hoisted(() => ({ open: vi.fn() }))
+vi.mock("../src/scripts/lib/mp4-subtitles", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/scripts/lib/mp4-subtitles")>()),
+  openMp4SubtitleSession: mp4Mock.open,
+}))
+
 import {
   createSubtitleManager,
   createNativeTrackRegistrar,
@@ -328,6 +334,58 @@ describe("createSubtitleManager MKV push cues", () => {
   })
 })
 
+describe("createSubtitleManager onSelectionChanged", () => {
+  let video: FakeVideo
+
+  beforeEach(() => {
+    video = new FakeVideo()
+    vi.stubGlobal("window", { VTTCue: FakeVTTCue })
+  })
+
+  function mountManager() {
+    const selections: ({ index: number; label: string; language: string } | null)[] = []
+    const manager = createSubtitleManager({
+      registrar: createNativeTrackRegistrar(() => video as unknown as HTMLVideoElement),
+      getCurrentTime: () => 0,
+      onSelectionChanged: (track) => selections.push(track),
+    })
+    return { manager, selections }
+  }
+
+  it("fires with the shown track on select, and null on turning off", async () => {
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+      { number: 3, codec: "S_TEXT/UTF8", language: "fre", name: null },
+    ])
+    const { manager, selections } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    manager.select(1)
+    manager.select(-1)
+
+    expect(selections).toEqual([
+      { index: 1, label: "French", language: "fre" },
+      null,
+    ])
+  })
+
+  it("does not fire for the manager's own initial auto-selection, only for a later select", async () => {
+    vi.mocked(getCaptionsAutoEnabled).mockReturnValueOnce(true)
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "en", name: null },
+    ])
+    const { manager, selections } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    expect(selections).toEqual([])
+
+    manager.select(0)
+    expect(selections).toEqual([{ index: 0, label: "English", language: "en" }])
+  })
+})
+
 describe("createSubtitleManager subtitle delay", () => {
   let video: FakeVideo
 
@@ -504,6 +562,97 @@ describe("createSubtitleManager subtitle delay", () => {
     const cue = video.tracks[0]!.cues![0]!
     expect(cue.startTime).toBeCloseTo(1 + reportedOffset, 9)
     expect(cue.endTime).toBeCloseTo(3 + reportedOffset, 9)
+  })
+
+  it("keeps the offset across a same-session remount and applies it to replayed cues", async () => {
+    const { session, emit } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+    ])
+    const { manager } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    emit(2, [{ startMs: 1000, endMs: 3000, text: "replayed" }])
+    manager.select(0)
+    manager.nudgeDelay(0.5)
+
+    manager.setSource("http://127.0.0.1:2/remux/stream.ts", "video/mp2t", session)
+    await flush()
+
+    expect(manager.nudgeDelay(0)).toBeCloseTo(0.5)
+    const cue = video.tracks[0]!.cues![0]!
+    expect(cue.startTime).toBeCloseTo(1.5)
+    expect(cue.endTime).toBeCloseTo(3.5)
+  })
+
+  describe("MP4 sources", () => {
+    function mockMp4Session() {
+      mp4Mock.open.mockImplementation(async () => ({
+        tracks: [{ trackId: 1, label: "English", language: "en" }],
+        extract: async (_trackId: number, options: { onCues: (cues: unknown[]) => void }) => {
+          options.onCues([{ startSeconds: 1, endSeconds: 2, text: "mp4 cue" }])
+        },
+      }))
+    }
+
+    async function mountWithMp4Delay() {
+      mockMp4Session()
+      const { manager } = mountManager()
+      manager.setSource("https://host.test/movie.mp4", "video/mp4")
+      await flush()
+      manager.select(0)
+      await flush()
+      manager.nudgeDelay(0.5)
+      return manager
+    }
+
+    it("keeps the offset across a remount of the same MP4 url", async () => {
+      const manager = await mountWithMp4Delay()
+
+      manager.setSource("https://host.test/movie.mp4", "video/mp4")
+      await flush()
+      await flush()
+
+      expect(manager.nudgeDelay(0)).toBeCloseTo(0.5)
+      const cue = video.tracks[0]!.cues![0]!
+      expect(cue.startTime).toBeCloseTo(1.5)
+    })
+
+    it("zeroes the offset when the source url changes", async () => {
+      const manager = await mountWithMp4Delay()
+
+      manager.setSource("https://host.test/other.mp4", "video/mp4")
+      await flush()
+      manager.select(0)
+      await flush()
+
+      expect(manager.nudgeDelay(0)).toBeCloseTo(0)
+    })
+
+    it("zeroes the offset on setSource(null)", async () => {
+      const manager = await mountWithMp4Delay()
+
+      manager.setSource(null)
+      await flush()
+      manager.setSource("https://host.test/movie.mp4", "video/mp4")
+      await flush()
+      manager.select(0)
+      await flush()
+
+      expect(manager.nudgeDelay(0)).toBeCloseTo(0)
+    })
+
+    it("zeroes the offset on detach", async () => {
+      const manager = await mountWithMp4Delay()
+
+      manager.detach()
+      manager.setSource("https://host.test/movie.mp4", "video/mp4")
+      await flush()
+      manager.select(0)
+      await flush()
+
+      expect(manager.nudgeDelay(0)).toBeCloseTo(0)
+    })
   })
 })
 

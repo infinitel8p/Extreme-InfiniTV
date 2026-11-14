@@ -29,6 +29,16 @@ interface ProgrammesForRequest {
   window?: EpgWindow
 }
 
+/** Bytes-transferring twin of ParseRequest: decodes (gzip-inflating if needed) here instead
+ *  of handing the worker an already-decoded string, so the main thread never holds one. */
+interface ParseBytesRequest {
+  type: "parseBytes"
+  id: number
+  bytes: ArrayBuffer
+  gzip: boolean
+  window?: EpgWindow
+}
+
 /** Streaming now-next flow: begin -> repeated chunk (transferred bytes) -> end. */
 interface StreamBeginRequest {
   type: "begin"
@@ -56,6 +66,7 @@ interface StreamEndRequest {
 export type WorkerRequest =
   | ParseRequest
   | ProgrammesForRequest
+  | ParseBytesRequest
   | StreamBeginRequest
   | StreamChunkRequest
   | StreamEndRequest
@@ -928,10 +939,54 @@ function endStreamResponse(id: number, session: StreamSession): Promise<WorkerRe
  * the Streams API. Every other request replies synchronously, unchanged -
  * overloaded so existing callers keep their non-nullable, non-Promise type.
  */
+/** Decodes (gzip-inflating first when needed) a raw XMLTV byte buffer to text. */
+async function decodeXmlBytes(buffer: ArrayBuffer, gzip: boolean): Promise<string> {
+  const bytes = new Uint8Array(buffer)
+  if (!gzip) return new TextDecoder("utf-8").decode(bytes)
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("This browser/WebView can't decompress gzipped EPG payloads.")
+  }
+  // Manual writer/reader pump, matching streamExtractChannelProgrammes below - lib.dom's
+  // DecompressionStream.writable type doesn't structurally satisfy pipeThrough's generic.
+  const decompressionStream = new DecompressionStream("gzip")
+  const writer = decompressionStream.writable.getWriter()
+  const reader = decompressionStream.readable.getReader()
+  const decoder = new TextDecoder("utf-8", { fatal: false })
+  let text = ""
+  const pump = (async () => {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      text += decoder.decode(value, { stream: true })
+    }
+    text += decoder.decode()
+  })()
+  await writer.write(bytes)
+  await writer.close()
+  await pump
+  return text
+}
+
+function parseBytesResponse(request: ParseBytesRequest): Promise<WorkerResponse> {
+  const { id } = request
+  return decodeXmlBytes(request.bytes, request.gzip)
+    .then((xml) => {
+      const { programmes, channelNames, hasExplicitTimezones } = parseXmlTv(xml, request.window)
+      return {
+        id,
+        programmes: Array.from(programmes.entries()),
+        channelNames: Array.from(channelNames.entries()),
+        hasExplicitTimezones,
+      }
+    })
+    .catch((error) => toErrorResponse(id, error))
+}
+
 export function handleWorkerRequest(request: ParseRequest): WorkerResponse
 export function handleWorkerRequest(
   request: ProgrammesForRequest
 ): WorkerResponse | Promise<WorkerResponse>
+export function handleWorkerRequest(request: ParseBytesRequest): Promise<WorkerResponse>
 export function handleWorkerRequest(request: StreamBeginRequest | StreamChunkRequest): null
 export function handleWorkerRequest(request: StreamEndRequest): Promise<WorkerResponse>
 export function handleWorkerRequest(
@@ -957,6 +1012,10 @@ export function handleWorkerRequest(
       const session = streamSessions.get(request.feedId)
       if (!session) return { id, error: `unknown stream feedId: ${request.feedId}` }
       return endStreamResponse(id, session)
+    }
+
+    if (request.type === "parseBytes") {
+      return parseBytesResponse(request)
     }
 
     if (request.type === "programmesFor") {

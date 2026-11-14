@@ -66,6 +66,7 @@
     },
     "allow-warmup-commands",
     "allow-safe-fetch-commands",
-    "allow-receiver-commands"
+    "allow-receiver-commands",
+    "allow-dns-proxy-commands"
   ]
 }

@@ -75,6 +75,7 @@ export function attachPlayerFocusKeeper(vjs: VjsLike | null | undefined): () => 
         const fullscreenEl = document.fullscreenElement
         if (!fullscreenEl || !fullscreenEl.contains(playerEl)) return
         if (playerEl.contains(document.activeElement)) return
+        if (document.querySelector("dialog[open]")) return
         const target =
             playerEl.querySelector<HTMLElement>(".vjs-control-bar button") || playerEl
         target.focus({ preventScroll: true })

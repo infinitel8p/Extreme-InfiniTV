@@ -1,7 +1,7 @@
 // Pure grouping + search model behind the cast remote's channel panel. Mirrors what
 // /livetv shows: same category visibility rules, same category order, same channel sort,
 // plus synthetic Favorites and All channels groups on top.
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { normalize, parseSearchQuery, scoreNormMatch } from "@/scripts/lib/text.js"
 import {
   sortCategoryNames,
   sortChannelsForView,
@@ -23,6 +23,10 @@ export interface CastChannel {
   chno?: number | null
   /** Pre-normalized name from the catalog; recomputed when absent. */
   norm?: string
+  /** Non-playable title/separator row from a custom playlist. */
+  isHeader?: boolean
+  /** Custom-playlist reference whose source channel could no longer be found. */
+  unresolved?: true
 }
 
 export interface CastChannelGroup {
@@ -33,6 +37,8 @@ export interface CastChannelGroup {
 
 export interface BuildCastChannelGroupsOptions {
   favorites?: Set<number> | null
+  /** User-curated favorites order (`getFavoritesOrdered`); ranks the Favorites group ahead of channelSort. */
+  favoritesOrder?: number[] | null
   hiddenCategories?: Set<string> | null
   allowedCategories?: Set<string> | null
   categoryMode?: "hide" | "select"
@@ -61,6 +67,13 @@ function categoryPasses(name: string, options: BuildCastChannelGroupsOptions): b
     return allowed.has(name)
   }
   return !options.hiddenCategories?.has(name)
+}
+
+function orderByRank(channels: CastChannel[], order: number[]): CastChannel[] {
+  const rank = new Map(order.map((id, index) => [id, index]))
+  return channels
+    .slice()
+    .sort((first, second) => (rank.get(first.id) ?? Infinity) - (rank.get(second.id) ?? Infinity))
 }
 
 /**
@@ -93,7 +106,8 @@ export function buildCastChannelGroups(
   const sortChannels = (list: CastChannel[]) => sortChannelsForView(list, options.channelSort || "default")
   const groups: CastChannelGroup[] = []
   if (favorites.length) {
-    groups.push({ key: GROUP_FAVORITES, label: options.favoritesLabel, channels: sortChannels(favorites) })
+    const orderedFavorites = options.favoritesOrder ? orderByRank(favorites, options.favoritesOrder) : favorites
+    groups.push({ key: GROUP_FAVORITES, label: options.favoritesLabel, channels: sortChannels(orderedFavorites) })
   }
   if (visible.length) {
     groups.push({ key: GROUP_ALL, label: options.allLabel, channels: sortChannels(visible) })
@@ -109,13 +123,14 @@ export function buildCastChannelGroups(
  * position, and an exact channel-number or id hit outranks any name match.
  */
 export function searchCastChannels(channels: CastChannel[], query: string): CastChannel[] {
-  const tokens = normalize(query).split(" ").filter(Boolean)
+  const tokens = parseSearchQuery(query)
   if (!tokens.length) return []
   const numericQuery = /^\d+$/.test(query.trim()) ? query.trim() : ""
   const scored: Array<{ channel: CastChannel; score: number }> = []
 
   for (const channel of channels) {
-    let score = scoreNormMatch(channel.norm || normalize(channel.name), tokens)
+    if (channel.isHeader) continue
+    let score = scoreNormMatch(channel.norm || normalize(channel.name), tokens, channel.name)
     if (numericQuery) {
       const idText = String(channel.id)
       const chnoText = channel.chno != null ? String(channel.chno) : ""

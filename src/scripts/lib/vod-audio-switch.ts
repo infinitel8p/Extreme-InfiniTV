@@ -163,6 +163,38 @@ export async function discoverVodAudioTracks(
 }
 
 const SEEK_SUPPRESSION_FALLBACK_MS = 1500
+const FOLLOW_UP_SEEK_THRESHOLD_SECONDS = 1
+
+/** The clamp seek after the old stream ends lands inside the buffer, so it never becomes a target. */
+export function nextPendingSeekTarget(targetSeconds: number, outsideBuffered: boolean): number | null {
+  return outsideBuffered ? targetSeconds : null
+}
+
+export function followUpSeekTarget(startedAtSeconds: number, pending: number | null): number | null {
+  if (pending === null) return null
+  return Math.abs(pending - startedAtSeconds) > FOLLOW_UP_SEEK_THRESHOLD_SECONDS ? pending : null
+}
+
+export function shouldRunStallRecovery(switchInFlight: boolean, hasSession: boolean): boolean {
+  return hasSession && !switchInFlight
+}
+
+export function nextGoodDurationSeconds(
+  previousGood: number | undefined,
+  knownSeconds: number | undefined,
+  capturedSeconds: number | undefined,
+  startSeconds: number,
+): number | undefined {
+  if (Number.isFinite(knownSeconds) && (knownSeconds as number) > 0) return knownSeconds
+  if (
+    Number.isFinite(capturedSeconds) &&
+    (capturedSeconds as number) > (previousGood ?? 0) &&
+    (capturedSeconds as number) >= startSeconds
+  ) {
+    return capturedSeconds
+  }
+  return previousGood
+}
 
 /** Mandatory-remux mid-play recovery: bounded restarts per playback session, forgiven after a healthy run. */
 const MAX_MIDPLAY_RESTART_ATTEMPTS = 2
@@ -194,6 +226,10 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
   const listeners = new Set<() => void>()
   let midPlayRestartAttempts = 0
   let midPlayRestartInFlight = false
+  let switchesInFlight = 0
+  let pendingSeekTarget: number | null = null
+  let lastStartedSeconds = 0
+  let lastGoodDurationSeconds: number | undefined
   let midPlayHealthyResetTimer: ReturnType<typeof setTimeout> | null = null
 
   function bumpGeneration(): number {
@@ -232,7 +268,12 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
         if (Date.now() <= suppressExpiryMs) return
       }
       const targetSeconds = mediaEl.currentTime
-      if (!isSeekOutsideBufferedRanges(targetSeconds, timeRangesToArray(mediaEl.buffered))) return
+      const outsideBuffered = isSeekOutsideBufferedRanges(targetSeconds, timeRangesToArray(mediaEl.buffered))
+      if (switchesInFlight > 0) {
+        if (mediaEl.buffered.length > 0) pendingSeekTarget = nextPendingSeekTarget(targetSeconds, outsideBuffered)
+        return
+      }
+      if (!outsideBuffered) return
       void switchToRemux(activeTrackId, targetSeconds)
     }
     seekingEl = mediaEl
@@ -331,9 +372,30 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     })
   }
 
-  async function switchToRemux(trackId: string | null, startSeconds: number): Promise<void> {
+  async function switchToRemux(trackId: string | null, startSeconds: number, isFollowUp = false): Promise<void> {
     const track = trackId ? tracksById.get(trackId) : null
     if (!track) return
+    switchesInFlight += 1
+    lastStartedSeconds = startSeconds
+    try {
+      await runSwitchToRemux(track, startSeconds)
+    } finally {
+      switchesInFlight -= 1
+      if (switchesInFlight === 0) {
+        const followUp = isFollowUp ? null : followUpSeekTarget(lastStartedSeconds, pendingSeekTarget)
+        pendingSeekTarget = null
+        if (followUp !== null && !disposed && activeSessionId) void switchToRemux(activeTrackId, followUp, true)
+      }
+    }
+  }
+
+  async function runSwitchToRemux(track: VodAudioTrackOption, startSeconds: number): Promise<void> {
+    lastGoodDurationSeconds = nextGoodDurationSeconds(
+      lastGoodDurationSeconds,
+      options.getKnownDurationSeconds(),
+      options.handle.duration?.(),
+      startSeconds,
+    )
     const myGeneration = bumpGeneration()
     const previousTrackId = activeTrackId
     activeTrackId = track.id
@@ -373,8 +435,8 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
       src: session.playbackUrl,
       type: "video/mp2t",
       isLive: false,
-      durationSeconds: options.getKnownDurationSeconds(),
-      timelineOffsetSeconds: startSeconds,
+      durationSeconds: lastGoodDurationSeconds,
+      timelineOffsetSeconds: session.startSeconds ?? startSeconds,
       subtitles: options.originalSubtitles ?? null,
       audio: sourceHandle,
     })
@@ -417,12 +479,12 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
 
   function recoverRemuxStall(): void {
     if (!options.mountRemuxImmediately || disposed || remuxUnrecoverableReported) return
-    if (!activeSessionId) return
+    if (!shouldRunStallRecovery(switchesInFlight > 0, activeSessionId !== null)) return
     attemptMidPlayRestart(activeSessionId, "stall watchdog detected no playback progress")
   }
 
   function isRecovering(): boolean {
-    return midPlayRestartInFlight
+    return midPlayRestartInFlight || switchesInFlight > 0
   }
 
   function setTracks(nextTracks: VodAudioTrackOption[]): void {

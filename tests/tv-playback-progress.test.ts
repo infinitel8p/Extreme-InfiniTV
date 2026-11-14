@@ -98,4 +98,33 @@ describe("siblingsToLiveContext", () => {
     const result = siblingsToLiveContext([channelA, channelB], initial)
     expect(result).toBeNull()
   })
+
+  it("keeps backupUrls when present and omits it when absent", () => {
+    const withBackups: SiblingChannelInput = {
+      id: 4,
+      name: "Channel D",
+      streamUrl: "https://example/d.m3u8",
+      backupUrls: ["http://b/1.ts"],
+    }
+    const result = siblingsToLiveContext([withBackups, channelB], withBackups)
+    expect(result?.channels[0].backupUrls).toEqual(["http://b/1.ts"])
+    expect(result?.channels[1].backupUrls).toBeUndefined()
+  })
 })
+
+describe("siblingsToLiveContext with composite ids", () => {
+  const fromA: SiblingChannelInput = { id: "pl-a:1", name: "A1", streamUrl: "https://a/1.m3u8" }
+  const fromB: SiblingChannelInput = { id: "pl-b:1", name: "B1", streamUrl: "https://b/1.m3u8" }
+
+  it("keeps rows from different playlists that share a raw id", () => {
+    const result = siblingsToLiveContext([fromA, fromB], fromB)
+    expect(result?.channels.map((channel) => channel.id)).toEqual(["pl-a:1", "pl-b:1"])
+    expect(result?.initialChannelId).toBe("pl-b:1")
+  })
+
+  it("still dedupes an identical composite id", () => {
+    const result = siblingsToLiveContext([fromA, { ...fromA, name: "dup" }, fromB], fromA)
+    expect(result?.channels.map((channel) => channel.name)).toEqual(["A1", "B1"])
+  })
+})
+

@@ -24,7 +24,11 @@ function setBridge(enabled: boolean): void {
 }
 
 function currentVideoEl(): HTMLVideoElement | null {
-  const host = activeHandle?.el?.()
+  if (!activeHandle) return null
+  // A handle that defines getMediaElement() is authoritative, even when it returns
+  // null (mpv-embedded has no <video> in play) - don't fall back to a DOM guess.
+  if (typeof activeHandle.getMediaElement === "function") return activeHandle.getMediaElement()
+  const host = activeHandle.el?.()
   if (!host) return null
   const video = host.querySelector("video")
   return video instanceof HTMLVideoElement ? video : null

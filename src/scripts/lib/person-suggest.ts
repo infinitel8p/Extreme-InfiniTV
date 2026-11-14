@@ -12,7 +12,7 @@ export interface PersonSuggestOptions {
   searchEl: HTMLInputElement | null
   insertBeforeEl: HTMLElement | null
   basePath: string
-  getActivePlaylistId: () => string
+  getPlaylistIds: () => string[]
 }
 
 export interface PersonSuggestController {
@@ -66,7 +66,7 @@ function buildPill(candidate: PersonCandidate, basePath: string): HTMLAnchorElem
 }
 
 export function mountPersonSuggestStrip(options: PersonSuggestOptions): PersonSuggestController {
-  const { searchEl, insertBeforeEl, basePath, getActivePlaylistId } = options
+  const { searchEl, insertBeforeEl, basePath, getPlaylistIds } = options
   const stripEl = document.createElement("div")
   stripEl.className = "flex items-center gap-2 shrink-0 px-1 overflow-x-auto"
   stripEl.setAttribute("hidden", "")
@@ -81,13 +81,24 @@ export function mountPersonSuggestStrip(options: PersonSuggestOptions): PersonSu
   }
 
   async function runSearch(query: string): Promise<void> {
-    const playlistId = getActivePlaylistId()
-    if (!playlistId) {
+    const playlistIds = getPlaylistIds()
+    if (!playlistIds.length) {
       clear()
       return
     }
     const runToken = ++requestToken
-    const candidates = await searchPeople(playlistId, query, SUGGEST_LIMIT)
+    const perPlaylist = await Promise.all(
+      playlistIds.map((playlistId) => searchPeople(playlistId, query, SUGGEST_LIMIT)),
+    )
+    const seen = new Set<string>()
+    const candidates: PersonCandidate[] = []
+    for (const candidate of perPlaylist.flat()) {
+      const dedupeKey = candidate.tmdbId != null ? `t:${candidate.tmdbId}` : `n:${candidate.name.toLowerCase()}`
+      if (seen.has(dedupeKey)) continue
+      seen.add(dedupeKey)
+      candidates.push(candidate)
+    }
+    candidates.splice(SUGGEST_LIMIT)
     if (runToken !== requestToken) return
     if (!candidates.length) {
       clear()

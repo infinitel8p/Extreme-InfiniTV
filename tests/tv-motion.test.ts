@@ -44,4 +44,25 @@ describe("classifyEffectTier", () => {
   it("treats missing signals as full", () => {
     expect(classifyEffectTier({})).toBe("full")
   })
+
+  it("goes lite when the Android memory class is 256MB or less", () => {
+    expect(classifyEffectTier({ deviceMemoryGb: 4, hardwareConcurrency: 8, userAgent: ANDROID_TV_UA, memoryClassMb: 256 })).toBe(
+      "lite"
+    )
+    expect(classifyEffectTier({ deviceMemoryGb: 4, hardwareConcurrency: 8, userAgent: ANDROID_TV_UA, memoryClassMb: 192 })).toBe(
+      "lite"
+    )
+  })
+
+  it("keeps full above the memory class threshold", () => {
+    expect(classifyEffectTier({ deviceMemoryGb: 4, hardwareConcurrency: 8, userAgent: ANDROID_TV_UA, memoryClassMb: 512 })).toBe(
+      "full"
+    )
+  })
+
+  it("lets a forced tier win over the memory class signal", () => {
+    expect(
+      classifyEffectTier({ deviceMemoryGb: 4, hardwareConcurrency: 8, userAgent: ANDROID_TV_UA, memoryClassMb: 128, forced: "full" })
+    ).toBe("full")
+  })
 })

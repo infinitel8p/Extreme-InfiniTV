@@ -1,5 +1,6 @@
 import { getCached } from "@/scripts/lib/cache.js"
 import { log } from "@/scripts/lib/log.js"
+import { getActiveLocale } from "@/scripts/lib/i18n"
 import {
   ensureUserInfo,
   getCachedUserInfoSync,
@@ -196,18 +197,38 @@ export async function refreshPlaylistHealth(
 // Formatting helpers - shared so settings.astro doesn't reinvent them
 // ---------------------------------------------------------------------------
 
-/** "2 minutes ago", "3 hours ago", "5 days ago", or "never". */
+function resolveDisplayLocale(): string {
+  try {
+    return getActiveLocale()
+  } catch {
+    return (typeof document !== "undefined" && document.documentElement.lang) || navigator.language || "en"
+  }
+}
+
+function relativeTimeFormatter(): Intl.RelativeTimeFormat {
+  const options: Intl.RelativeTimeFormatOptions = { numeric: "auto", style: "narrow" }
+  try {
+    return new Intl.RelativeTimeFormat(resolveDisplayLocale(), options)
+  } catch {
+    return new Intl.RelativeTimeFormat("en", options)
+  }
+}
+
+/** Locale-aware "2m ago", "3h ago", "5d ago", or "-" for null/future timestamps. */
 export function fmtAgo(timestamp: number | null): string {
   if (!timestamp) return "-"
   const ms = Date.now() - timestamp
   if (ms < 0) return "-"
-  if (ms < 60_000) return "just now"
-  const m = Math.floor(ms / 60_000)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  return `${d}d ago`
+
+  const rtf = relativeTimeFormatter()
+
+  if (ms < 60_000) return rtf.format(0, "second")
+  const minutes = Math.floor(ms / 60_000)
+  if (minutes < 60) return rtf.format(-minutes, "minute")
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return rtf.format(-hours, "hour")
+  const days = Math.floor(hours / 24)
+  return rtf.format(-days, "day")
 }
 
 /** Locale-formatted date for an exp_date timestamp, or "-" / "never". */

@@ -38,6 +38,26 @@ describe("buildLiveCastDescriptor", () => {
     expect(descriptor.headers).toEqual({ userAgent: "custom-ua" })
     expect(descriptor.preferNativeHls).toBe(true)
   })
+
+  it("passes dns through when provided, and omits it otherwise", () => {
+    const withDns = buildLiveCastDescriptor({
+      src: "https://provider.example/live/1.m3u8",
+      title: "Channel One",
+      dns: "1.1.1.1",
+    })
+    expect(withDns.dns).toBe("1.1.1.1")
+    const withoutDns = buildLiveCastDescriptor({
+      src: "https://provider.example/live/1.m3u8",
+      title: "Channel One",
+    })
+    expect(withoutDns.dns).toBeUndefined()
+    const withNullDns = buildLiveCastDescriptor({
+      src: "https://provider.example/live/1.m3u8",
+      title: "Channel One",
+      dns: null,
+    })
+    expect(withNullDns.dns).toBeNull()
+  })
 })
 
 describe("buildVodCastDescriptor", () => {
@@ -77,6 +97,31 @@ describe("buildVodCastDescriptor", () => {
       durationSeconds: input,
     })
     expect(descriptor.durationSeconds).toBe(expected)
+  })
+
+  it("passes dns through when provided, and omits it otherwise", () => {
+    const withDns = buildVodCastDescriptor({ src: "https://provider.example/movie.mp4", title: "Movie", dns: "1.1.1.1" })
+    expect(withDns.dns).toBe("1.1.1.1")
+    const withoutDns = buildVodCastDescriptor({ src: "https://provider.example/movie.mp4", title: "Movie" })
+    expect(withoutDns.dns).toBeUndefined()
+  })
+})
+
+describe("buildCatchupCastDescriptor", () => {
+  it("passes dns through when provided, and omits it otherwise", () => {
+    const withDns = buildCatchupCastDescriptor({
+      src: "https://provider.example/timeshift/1.m3u8",
+      mime: "application/x-mpegURL",
+      title: "Channel One - Yesterday",
+      dns: "1.1.1.1",
+    })
+    expect(withDns.dns).toBe("1.1.1.1")
+    const withoutDns = buildCatchupCastDescriptor({
+      src: "https://provider.example/timeshift/1.m3u8",
+      mime: "application/x-mpegURL",
+      title: "Channel One - Yesterday",
+    })
+    expect(withoutDns.dns).toBeUndefined()
   })
 })
 
@@ -316,5 +361,41 @@ describe("validateCastDescriptor", () => {
     expect(validateCastDescriptor(null)).toBeNull()
     expect(validateCastDescriptor("not an object")).toBeNull()
     expect(validateCastDescriptor(undefined)).toBeNull()
+  })
+
+  it("keeps a valid dns string", () => {
+    const result = validateCastDescriptor({
+      v: 1,
+      src: validSrc,
+      mime: "application/x-mpegURL",
+      isLive: true,
+      title: "Channel One",
+      dns: "1.1.1.1",
+    })
+    expect(result?.dns).toBe("1.1.1.1")
+  })
+
+  it("keeps a null dns", () => {
+    const result = validateCastDescriptor({
+      v: 1,
+      src: validSrc,
+      mime: "application/x-mpegURL",
+      isLive: true,
+      title: "Channel One",
+      dns: null,
+    })
+    expect(result?.dns).toBeNull()
+  })
+
+  it("drops a dns of the wrong type", () => {
+    const result = validateCastDescriptor({
+      v: 1,
+      src: validSrc,
+      mime: "application/x-mpegURL",
+      isLive: true,
+      title: "Channel One",
+      dns: 12345,
+    })
+    expect(result?.dns).toBeUndefined()
   })
 })

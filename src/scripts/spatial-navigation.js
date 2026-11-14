@@ -21,6 +21,9 @@
   // - a string "@" to indicate the default section
   var GlobalConfig = {
     selector: "", // can be a valid <extSelector> except "@" syntax.
+    // DOM element a string <selector> is scoped to (querySelectorAll'd from it instead of
+    // document); null means "the whole document", same as before this option existed.
+    root: null,
     straightOnly: false,
     straightOverlapThreshold: 0.5,
     rememberSource: false,
@@ -87,7 +90,12 @@
   /*****************/
   /* Core Function */
   /*****************/
-  function getRect(elem) {
+  // Optional per-keypress Map: one getBoundingClientRect per element across both navigate passes.
+  function getRect(elem, rectCache) {
+    if (rectCache) {
+      var cached = rectCache.get(elem)
+      if (cached) return cached
+    }
     var cr = elem.getBoundingClientRect()
     var rect = {
       left: cr.left,
@@ -104,6 +112,7 @@
     }
     rect.center.left = rect.center.right = rect.center.x
     rect.center.top = rect.center.bottom = rect.center.y
+    if (rectCache) rectCache.set(elem, rect)
     return rect
   }
 
@@ -256,14 +265,14 @@
     return destPriority.group
   }
 
-  function navigate(target, direction, candidates, config) {
+  function navigate(target, direction, candidates, config, rectCache) {
     if (!target || !direction || !candidates || !candidates.length) {
       return null
     }
 
     var rects = []
     for (var i = 0; i < candidates.length; i++) {
-      var rect = getRect(candidates[i])
+      var rect = getRect(candidates[i], rectCache)
       if (rect) {
         rects.push(rect)
       }
@@ -272,7 +281,7 @@
       return null
     }
 
-    var targetRect = getRect(target)
+    var targetRect = getRect(target, rectCache)
     if (!targetRect) {
       return null
     }
@@ -451,14 +460,14 @@
     return id
   }
 
-  function parseSelector(selector) {
+  function parseSelector(selector, root) {
     var result = []
     try {
       if (selector) {
         if ($) {
           result = $(selector).get()
         } else if (typeof selector === "string") {
-          result = [].slice.call(document.querySelectorAll(selector))
+          result = [].slice.call((root || document).querySelectorAll(selector))
         } else if (typeof selector === "object" && selector.length) {
           result = [].slice.call(selector)
         } else if (typeof selector === "object" && selector.nodeType === 1) {
@@ -471,7 +480,8 @@
     return result
   }
 
-  function matchSelector(elem, selector) {
+  function matchSelector(elem, selector, root) {
+    if (root && !root.contains(elem)) return false
     if ($) {
       return $(elem).is(selector)
     } else if (typeof selector === "string") {
@@ -548,15 +558,19 @@
     ) {
       return false
     }
-    if (
-      (elem.offsetWidth <= 0 && elem.offsetHeight <= 0) ||
-      elem.hasAttribute("disabled")
-    ) {
+    if (elem.hasAttribute("disabled")) {
+      return false
+    }
+    var hasNavigableFilter =
+      typeof _sections[sectionId].navigableFilter === "function" ||
+      typeof GlobalConfig.navigableFilter === "function"
+    // A navigableFilter already answers visibility; skip the extra layout read then.
+    if (!hasNavigableFilter && elem.offsetWidth <= 0 && elem.offsetHeight <= 0) {
       return false
     }
     if (
       verifySectionSelector &&
-      !matchSelector(elem, _sections[sectionId].selector)
+      !matchSelector(elem, _sections[sectionId].selector, _sections[sectionId].root)
     ) {
       return false
     }
@@ -576,7 +590,7 @@
     for (var id in _sections) {
       if (
         !_sections[id].disabled &&
-        matchSelector(elem, _sections[id].selector)
+        matchSelector(elem, _sections[id].selector, _sections[id].root)
       ) {
         return id
       }
@@ -584,14 +598,17 @@
   }
 
   function getSectionNavigableElements(sectionId) {
-    return parseSelector(_sections[sectionId].selector).filter(function (elem) {
+    var section = _sections[sectionId]
+    return parseSelector(section.selector, section.root).filter(function (elem) {
       return isNavigable(elem, sectionId)
     })
   }
 
   function getSectionDefaultElement(sectionId) {
+    var section = _sections[sectionId]
     var defaultElement = parseSelector(
-      _sections[sectionId].defaultElement
+      section.defaultElement,
+      section.root
     ).find(function (elem) {
       return isNavigable(elem, sectionId, true)
     })
@@ -792,6 +809,41 @@
     return false
   }
 
+  // Earlier-registered sections claim elements before the catch-all "main" (registered last)
+  // measures them, so each element pays for isNavigable() once.
+  function collectOtherNavigableElements(excludeSectionId) {
+    var combined = []
+    var claimed = typeof Set === "function" ? new Set() : null
+
+    for (var id in _sections) {
+      if (id === excludeSectionId || _sections[id].disabled) continue
+      var section = _sections[id]
+      var candidateElements = parseSelector(section.selector, section.root)
+
+      if (claimed) {
+        candidateElements = candidateElements.filter(function (elem) {
+          return !claimed.has(elem)
+        })
+      } else if (combined.length) {
+        candidateElements = exclude(candidateElements.slice(), combined)
+      }
+
+      var navigableElements = candidateElements.filter(function (elem) {
+        return isNavigable(elem, id)
+      })
+
+      if (claimed) {
+        for (var i = 0; i < candidateElements.length; i++) {
+          claimed.add(candidateElements[i])
+        }
+      }
+
+      combined = combined.concat(navigableElements)
+    }
+
+    return combined
+  }
+
   function focusNext(direction, currentFocusedElement, currentSectionId) {
     var extSelector = currentFocusedElement.getAttribute("data-sn-" + direction)
     if (typeof extSelector === "string") {
@@ -805,43 +857,40 @@
       return true
     }
 
-    var sectionNavigableElements = {}
-    var allNavigableElements = []
-    for (var id in _sections) {
-      sectionNavigableElements[id] = getSectionNavigableElements(id)
-      allNavigableElements = allNavigableElements.concat(
-        sectionNavigableElements[id]
-      )
-    }
-
     var config = extend({}, GlobalConfig, _sections[currentSectionId])
     var next
+    // Shared by both navigate() passes of this keypress.
+    var rectCache = typeof Map === "function" ? new Map() : null
 
     if (config.restrict == "self-only" || config.restrict == "self-first") {
-      var currentSectionNavigableElements =
-        sectionNavigableElements[currentSectionId]
+      // self-only never looks past its own section; self-first only pays for the
+      // rest of the document when its own section's candidates come up empty.
+      var currentSectionNavigableElements = getSectionNavigableElements(currentSectionId)
 
       next = navigate(
         currentFocusedElement,
         direction,
         exclude(currentSectionNavigableElements, currentFocusedElement),
-        config
+        config,
+        rectCache
       )
 
       if (!next && config.restrict == "self-first") {
         next = navigate(
           currentFocusedElement,
           direction,
-          exclude(allNavigableElements, currentSectionNavigableElements),
-          config
+          collectOtherNavigableElements(currentSectionId),
+          config,
+          rectCache
         )
       }
     } else {
       next = navigate(
         currentFocusedElement,
         direction,
-        exclude(allNavigableElements, currentFocusedElement),
-        config
+        exclude(collectOtherNavigableElements(), currentFocusedElement),
+        config,
+        rectCache
       )
     }
 
@@ -1257,7 +1306,7 @@
           section.tabIndexIgnoreList !== undefined
             ? section.tabIndexIgnoreList
             : GlobalConfig.tabIndexIgnoreList
-        parseSelector(section.selector).forEach(function (elem) {
+        parseSelector(section.selector, section.root).forEach(function (elem) {
           if (!matchSelector(elem, tabIndexIgnoreList)) {
             if (!elem.getAttribute("tabindex")) {
               elem.setAttribute("tabindex", "-1")

@@ -44,6 +44,7 @@ export interface SiblingChannelInput {
   referer?: string | null
   tvgId?: string | null
   tvgShift?: number | null
+  backupUrls?: string[]
 }
 
 export interface ResolvedLiveContextChannel {
@@ -55,6 +56,7 @@ export interface ResolvedLiveContextChannel {
   referer?: string | null
   tvgId?: string | null
   tvgShift?: number | null
+  backupUrls?: string[]
 }
 
 export interface ResolvedLiveContext {
