@@ -37,6 +37,7 @@ import {
   channelMatchesCategory,
   channelPassesCategoryFilter,
   nativeChannelId,
+  nativeLiveChannelRows,
   resolveNativeChannel,
   liveContextIdsForPlaylist,
 } from "@/scripts/lib/merged-live.ts"
@@ -4654,8 +4655,7 @@ async function launchNativeLiveSession(initialChannel) {
   const initialCandidates = candidatesFor(initialChannel.playlistId)
 
   const channelInputs = []
-  for (const channel of all) {
-    if (channel.isHeader) continue
+  for (const channel of nativeLiveChannelRows(filtered, initialChannel, channelKey)) {
     const key = channelKey(channel)
     let streamUrl = ""
     const isDirectUrlChannel = hasDirectUrl(key)

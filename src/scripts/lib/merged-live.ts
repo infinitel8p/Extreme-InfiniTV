@@ -44,6 +44,22 @@ export function liveContextIdsForPlaylist(rows: LiveRowLike[], playlistId: strin
   return ids
 }
 
+export function nativeLiveChannelRows<T extends LiveRowLike>(
+  filteredRows: T[],
+  initialRow: T,
+  keyOf: (row: T) => string,
+): T[] {
+  const initialKey = keyOf(initialRow)
+  const rows: T[] = []
+  let hasInitial = false
+  for (const row of filteredRows) {
+    if (row.isHeader) continue
+    if (keyOf(row) === initialKey) hasInitial = true
+    rows.push(row)
+  }
+  return hasInitial ? rows : [initialRow, ...rows]
+}
+
 export function nativeChannelId(row: LiveRowLike & { playlistId: string }, merged: boolean): string {
   return merged ? rowKey(row) : String(row.id)
 }

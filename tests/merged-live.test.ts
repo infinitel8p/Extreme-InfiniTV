@@ -5,6 +5,7 @@ import {
   channelPassesCategoryFilter,
   liveContextIdsForPlaylist,
   nativeChannelId,
+  nativeLiveChannelRows,
   resolveNativeChannel,
 } from "@/scripts/lib/merged-live.ts"
 
@@ -58,6 +59,34 @@ describe("liveContextIdsForPlaylist", () => {
   it("scopes to one playlist and drops headers", () => {
     expect(liveContextIdsForPlaylist(rows, "b")).toEqual(["1", "2"])
     expect(liveContextIdsForPlaylist(rows, "a")).toEqual(["1"])
+  })
+})
+
+describe("nativeLiveChannelRows", () => {
+  const keyOf = (row: { id: number | string; playlistId?: string }) => `${row.playlistId}:${row.id}`
+  const one = { id: 1, playlistId: "a" }
+  const two = { id: 2, playlistId: "a" }
+  const three = { id: 3, playlistId: "a" }
+
+  it("keeps filtered order when the initial channel is present", () => {
+    expect(nativeLiveChannelRows([three, one, two], one, keyOf)).toEqual([three, one, two])
+  })
+  it("prepends the initial channel when absent", () => {
+    expect(nativeLiveChannelRows([two, three], one, keyOf)).toEqual([one, two, three])
+  })
+  it("drops header rows", () => {
+    const header = { id: 9, playlistId: "a", isHeader: true }
+    expect(nativeLiveChannelRows([header, one, two], one, keyOf)).toEqual([one, two])
+  })
+  it("returns only the initial channel for an empty list", () => {
+    expect(nativeLiveChannelRows([], one, keyOf)).toEqual([one])
+  })
+  it("does not duplicate the initial channel", () => {
+    expect(nativeLiveChannelRows([one, two], one, keyOf)).toHaveLength(2)
+  })
+  it("keeps same-id rows from different playlists distinct", () => {
+    const otherOne = { id: 1, playlistId: "b" }
+    expect(nativeLiveChannelRows([otherOne, two], one, keyOf)).toEqual([one, otherOne, two])
   })
 })
 
