@@ -7,6 +7,10 @@ import {
   dedupeByFile,
   subtitleResultLabel,
   normalizeSearchResponse,
+  decideRelogin,
+  isSessionExpired,
+  reloginFailureAction,
+  RELOGIN_COOLDOWN_MS,
   type OpenSubtitlesResult,
 } from "../src/scripts/lib/opensubtitles-params"
 
@@ -203,5 +207,40 @@ describe("normalizeSearchResponse", () => {
 
   it("tolerates garbage", () => {
     expect(normalizeSearchResponse(null)).toEqual({ results: [], page: 1, totalPages: 1 })
+  })
+})
+
+describe("relogin decisions", () => {
+  const base = { hasCredentials: true, reloggedInThisRequest: false, lastFailureAt: null, now: 1_000_000 }
+
+  it("detects expired sessions", () => {
+    expect(isSessionExpired(null, 10)).toBe(false)
+    expect(isSessionExpired({ expiresAt: 5 }, 10)).toBe(true)
+    expect(isSessionExpired({ expiresAt: 50 }, 10)).toBe(false)
+    expect(isSessionExpired({}, 10)).toBe(false)
+  })
+
+  it("relogins when credentials are saved", () => {
+    expect(decideRelogin(base)).toBe("relogin")
+  })
+
+  it("stays anonymous without credentials", () => {
+    expect(decideRelogin({ ...base, hasCredentials: false })).toBe("anonymous")
+  })
+
+  it("never relogins twice in one request", () => {
+    expect(decideRelogin({ ...base, reloggedInThisRequest: true })).toBe("already-retried")
+  })
+
+  it("respects the cooldown after a failure", () => {
+    expect(decideRelogin({ ...base, lastFailureAt: base.now - 1000 })).toBe("cooldown")
+    expect(decideRelogin({ ...base, lastFailureAt: base.now - RELOGIN_COOLDOWN_MS })).toBe("relogin")
+  })
+
+  it("clears credentials only for refused logins", () => {
+    expect(reloginFailureAction("unauthorized")).toBe("clear-credentials")
+    for (const code of ["network", "throttled", "unknown", "bad-key", "quota"]) {
+      expect(reloginFailureAction(code)).toBe("keep-credentials")
+    }
   })
 })

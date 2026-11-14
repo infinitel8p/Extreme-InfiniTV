@@ -5,13 +5,17 @@ import {
   getOpenSubtitlesSession,
   setOpenSubtitlesSession,
 } from "@/scripts/lib/app-settings.js"
+import { readSecret, writeSecret } from "@/scripts/lib/creds.js"
 import { log } from "@/scripts/lib/log.ts"
 import { t } from "@/scripts/lib/i18n.js"
 import { toastWarn } from "@/scripts/lib/toast.js"
 import {
   buildSubtitleSearchParams,
   canonicalQueryString,
+  decideRelogin,
+  isSessionExpired,
   normalizeSearchResponse,
+  reloginFailureAction,
   type OpenSubtitlesResult,
   type SubtitleSearchContext,
 } from "@/scripts/lib/opensubtitles-params.ts"
@@ -22,6 +26,7 @@ const TEXT_CACHE_ENTRY_ID = "opensubs"
 const TEXT_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000
 const FALLBACK_SESSION_MS = 23 * 60 * 60 * 1000
 const LINK_REUSE_MS = 2.5 * 60 * 60 * 1000
+const CREDENTIALS_KEY = "xt_opensubs_cred"
 const API_HOST_PATTERN = /(^|\.)opensubtitles\.(com|org)$/i
 
 export type OpenSubtitlesErrorCode =
@@ -68,6 +73,12 @@ export type OpenSubtitlesUserInfo = {
   vip: boolean
 }
 
+type SavedCredentials = { username: string; password: string }
+
+type ApiOutcome = { status: number; body: Record<string, unknown> }
+
+type RequestState = { reloggedIn: boolean }
+
 type SearchPage = { results: OpenSubtitlesResult[]; page: number; totalPages: number }
 
 type TextResult = { text: string; remaining: number | null; fileName: string | null; link: string | null }
@@ -76,6 +87,9 @@ const searchCache = new Map<string, { at: number; value: SearchPage }>()
 const linkByFileId = new Map<number, { link: string; at: number }>()
 const inflightText = new Map<number, Promise<TextResult>>()
 let sessionRejectionToasted = false
+let savedCredentials: SavedCredentials | null | undefined
+let reloginInflight: Promise<OpenSubtitlesSession | null> | null = null
+let lastReloginFailureAt: number | null = null
 
 function freshLink(fileId: number): string | null {
   const entry = linkByFileId.get(fileId)
@@ -121,14 +135,103 @@ function appUserAgent(): string {
   return `Extreme InfiniTV v${appVersion()}`
 }
 
-function activeSession(): OpenSubtitlesSession | null {
-  const session = getOpenSubtitlesSession() as OpenSubtitlesSession | null
-  if (!session) return null
-  if (session.expiresAt && session.expiresAt <= Date.now()) {
-    clearOpenSubtitlesSession()
+async function loadSavedCredentials(): Promise<SavedCredentials | null> {
+  if (savedCredentials !== undefined) return savedCredentials
+  let parsed: SavedCredentials | null = null
+  try {
+    const raw = await readSecret(CREDENTIALS_KEY)
+    const value = raw ? JSON.parse(raw) : null
+    if (value && typeof value.username === "string" && typeof value.password === "string" && value.password) {
+      parsed = { username: value.username, password: value.password }
+    }
+  } catch {
+    parsed = null
+  }
+  savedCredentials = parsed
+  return parsed
+}
+
+async function storeCredentials(credentials: SavedCredentials | null): Promise<void> {
+  savedCredentials = credentials
+  await writeSecret(CREDENTIALS_KEY, credentials ? JSON.stringify(credentials) : "")
+}
+
+async function runRelogin(): Promise<OpenSubtitlesSession | null> {
+  const credentials = await loadSavedCredentials()
+  if (!credentials) return null
+  try {
+    const session = await requestLogin(credentials.username, credentials.password)
+    lastReloginFailureAt = null
+    setOpenSubtitlesSession(session)
+    return session
+  } catch (reloginError) {
+    const code = reloginError instanceof OpenSubtitlesError ? reloginError.code : "unknown"
+    log.warn("[xt:opensubs] silent re-login failed:", code)
+    if (reloginFailureAction(code) === "clear-credentials") {
+      await storeCredentials(null)
+      rejectSession()
+    } else {
+      lastReloginFailureAt = Date.now()
+    }
     return null
   }
-  return session
+}
+
+function silentRelogin(): Promise<OpenSubtitlesSession | null> {
+  if (!reloginInflight) {
+    reloginInflight = runRelogin().finally(() => {
+      reloginInflight = null
+    })
+  }
+  return reloginInflight
+}
+
+async function tryRelogin(state: RequestState): Promise<OpenSubtitlesSession | null> {
+  const credentials = await loadSavedCredentials()
+  const decision = decideRelogin({
+    hasCredentials: Boolean(credentials),
+    reloggedInThisRequest: state.reloggedIn,
+    lastFailureAt: lastReloginFailureAt,
+    now: Date.now(),
+  })
+  if (decision !== "relogin") return null
+  state.reloggedIn = true
+  return silentRelogin()
+}
+
+async function acquireSession(state: RequestState): Promise<OpenSubtitlesSession | null> {
+  const stored = getOpenSubtitlesSession() as OpenSubtitlesSession | null
+  if (stored && !isSessionExpired(stored, Date.now())) return stored
+  if (await loadSavedCredentials()) return tryRelogin(state)
+  if (stored) clearOpenSubtitlesSession()
+  return null
+}
+
+async function recoverRejectedSession(state: RequestState): Promise<OpenSubtitlesSession | null> {
+  if (!(await loadSavedCredentials())) {
+    rejectSession()
+    return null
+  }
+  return tryRelogin(state)
+}
+
+function isTokenRejected(outcome: ApiOutcome): boolean {
+  return outcome.status === 401 || isInvalidTokenBody(outcome.status, outcome.body)
+}
+
+async function requestWithSession(
+  send: (session: OpenSubtitlesSession | null) => Promise<ApiOutcome>
+): Promise<ApiOutcome> {
+  const state: RequestState = { reloggedIn: false }
+  const session = await acquireSession(state)
+  const outcome = await send(session)
+  if (!session || !isTokenRejected(outcome)) return outcome
+  log.info("[xt:opensubs] session rejected")
+  return send(await recoverRejectedSession(state))
+}
+
+export function ensureOpenSubtitlesSession(): Promise<OpenSubtitlesSession | null> {
+  return acquireSession({ reloggedIn: false })
 }
 
 export function resolveApiBase(baseUrl: string | null | undefined): string {
@@ -223,16 +326,9 @@ export async function searchSubtitles(
   const cached = searchCache.get(queryString)
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) return cached.value
 
-  const run = async (session: OpenSubtitlesSession | null) =>
+  const outcome = await requestWithSession((session) =>
     apiRequest(`/subtitles?${queryString}`, { signal: options.signal, session })
-
-  const session = activeSession()
-  let outcome = await run(session)
-  if (session && (outcome.status === 401 || isInvalidTokenBody(outcome.status, outcome.body))) {
-    log.info("[xt:opensubs] session rejected, retrying anonymously")
-    rejectSession()
-    outcome = await run(null)
-  }
+  )
   if (outcome.status !== 200) throw errorFromResponse(outcome.status, outcome.body)
 
   const value = normalizeSearchResponse(outcome.body)
@@ -248,17 +344,15 @@ async function requestDownloadLink(
   fileId: number,
   signal: AbortSignal | undefined
 ): Promise<{ link: string; remaining: number | null; fileName: string | null }> {
-  const session = activeSession()
-  const outcome = await apiRequest("/download", {
-    method: "POST",
-    body: { file_id: fileId, sub_format: "srt" },
-    signal,
-    session,
-  })
-  if (outcome.status !== 200) {
-    if (session && isInvalidTokenBody(outcome.status, outcome.body)) rejectSession()
-    throw errorFromResponse(outcome.status, outcome.body)
-  }
+  const outcome = await requestWithSession((session) =>
+    apiRequest("/download", {
+      method: "POST",
+      body: { file_id: fileId, sub_format: "srt" },
+      signal,
+      session,
+    })
+  )
+  if (outcome.status !== 200) throw errorFromResponse(outcome.status, outcome.body)
   const link = typeof outcome.body.link === "string" ? outcome.body.link : ""
   if (!link || !isSafeDownloadLink(link)) {
     throw new OpenSubtitlesError("unknown", { message: "invalid download link" })
@@ -332,15 +426,15 @@ function jwtExpiryMs(token: string): number | null {
   }
 }
 
-export async function loginOpenSubtitles(
+async function requestLogin(
   username: string,
   password: string,
-  options: { signal?: AbortSignal } = {}
+  signal?: AbortSignal
 ): Promise<OpenSubtitlesSession> {
   const outcome = await apiRequest("/login", {
     method: "POST",
     body: { username, password },
-    signal: options.signal,
+    signal,
     session: null,
   })
   if (outcome.status !== 200) throw errorFromResponse(outcome.status, outcome.body)
@@ -356,6 +450,17 @@ export async function loginOpenSubtitles(
     vip: user.vip === true,
     expiresAt: jwtExpiryMs(token) ?? Date.now() + FALLBACK_SESSION_MS,
   }
+  return session
+}
+
+export async function loginOpenSubtitles(
+  username: string,
+  password: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<OpenSubtitlesSession> {
+  const session = await requestLogin(username, password, options.signal)
+  lastReloginFailureAt = null
+  await storeCredentials({ username, password })
   setOpenSubtitlesSession(session)
   return session
 }
@@ -369,19 +474,19 @@ export async function logoutOpenSubtitles(): Promise<void> {
       log.warn("[xt:opensubs] logout request failed:", logoutError)
     }
   }
+  await storeCredentials(null)
   clearOpenSubtitlesSession()
 }
 
 export async function fetchOpenSubtitlesUserInfo(
   options: { signal?: AbortSignal } = {}
 ): Promise<OpenSubtitlesUserInfo> {
-  const session = activeSession()
-  if (!session) throw new OpenSubtitlesError("unauthorized")
-  const outcome = await apiRequest("/infos/user", { signal: options.signal, session })
-  if (outcome.status !== 200) {
-    if (isInvalidTokenBody(outcome.status, outcome.body)) rejectSession()
-    throw errorFromResponse(outcome.status, outcome.body)
-  }
+  const outcome = await requestWithSession((session) =>
+    session
+      ? apiRequest("/infos/user", { signal: options.signal, session })
+      : Promise.resolve({ status: 401, body: {} })
+  )
+  if (outcome.status !== 200) throw errorFromResponse(outcome.status, outcome.body)
   const data = (outcome.body.data ?? {}) as Record<string, unknown>
   return {
     allowedDownloads: typeof data.allowed_downloads === "number" ? data.allowed_downloads : null,

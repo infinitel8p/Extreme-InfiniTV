@@ -320,6 +320,44 @@ async function writeRaw(data) {
   migrationPromise = Promise.resolve(data)
 }
 
+export async function readSecret(key) {
+  const store = await getStore()
+  if (store) {
+    try {
+      const value = await store.get(key)
+      if (typeof value === "string" && value) return value
+    } catch (e) {
+      log.error("[xt:creds] plugin-store secret read failed:", e)
+    }
+  }
+  try {
+    return localStorage.getItem(key) || ""
+  } catch {
+    return ""
+  }
+}
+
+export async function writeSecret(key, value) {
+  const store = await getStore()
+  let storedInStore = false
+  if (store) {
+    try {
+      if (value) await store.set(key, value)
+      else await store.delete(key)
+      await store.save()
+      storedInStore = true
+    } catch (e) {
+      log.error("[xt:creds] plugin-store secret write failed:", e)
+    }
+  }
+  try {
+    if (value && !storedInStore) localStorage.setItem(key, value)
+    else localStorage.removeItem(key)
+  } catch (e) {
+    log.error("[xt:creds] localStorage secret write failed:", e)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Migration from the legacy flat keys
 // ---------------------------------------------------------------------------

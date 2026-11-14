@@ -208,3 +208,29 @@ export function normalizeSearchResponse(json: unknown): {
   }
   return { results, page, totalPages }
 }
+
+export const RELOGIN_COOLDOWN_MS = 5 * 60 * 1000
+
+export type ReloginDecision = "relogin" | "anonymous" | "already-retried" | "cooldown"
+
+export function isSessionExpired(session: { expiresAt?: number } | null, now: number): boolean {
+  return Boolean(session && session.expiresAt && session.expiresAt <= now)
+}
+
+export function decideRelogin(input: {
+  hasCredentials: boolean
+  reloggedInThisRequest: boolean
+  lastFailureAt: number | null
+  now: number
+  cooldownMs?: number
+}): ReloginDecision {
+  if (!input.hasCredentials) return "anonymous"
+  if (input.reloggedInThisRequest) return "already-retried"
+  const cooldownMs = input.cooldownMs ?? RELOGIN_COOLDOWN_MS
+  if (input.lastFailureAt !== null && input.now - input.lastFailureAt < cooldownMs) return "cooldown"
+  return "relogin"
+}
+
+export function reloginFailureAction(code: string): "clear-credentials" | "keep-credentials" {
+  return code === "unauthorized" ? "clear-credentials" : "keep-credentials"
+}

@@ -2751,6 +2751,7 @@ const navStructure: NavSection[] = [
       loginOpenSubtitles,
       logoutOpenSubtitles,
       fetchOpenSubtitlesUserInfo,
+      ensureOpenSubtitlesSession,
       OpenSubtitlesError,
     } from "@/scripts/lib/opensubtitles.ts"
     import { SUBTITLE_LANGUAGES, subtitleLanguageName } from "@/scripts/lib/subtitle-languages.ts"
@@ -5539,7 +5540,7 @@ const navStructure: NavSection[] = [
     })
 
     async function syncSubsAccount() {
-      const session = getOpenSubtitlesSession()
+      const session = getOpenSubtitlesSession() || (await ensureOpenSubtitlesSession())
       subsSignInForm?.classList.toggle("hidden", Boolean(session))
       subsSignedInEl?.classList.toggle("hidden", !session)
       subsSignedInEl?.classList.toggle("flex", Boolean(session))
